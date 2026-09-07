@@ -382,12 +382,7 @@ export function ScheduleEditorPage() {
             <div className="space-y-6">
               <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h2 className="font-semibold text-text">Activities</h2>
-                    <p className="mt-0.5 text-xs text-text-muted">
-                      Use <strong>Early Start (ES)</strong> para magsabay ang activities (parallel).
-                    </p>
-                  </div>
+                  <h2 className="font-semibold text-text">Activities</h2>
                   <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
@@ -658,28 +653,6 @@ export function ScheduleEditorPage() {
                     })}
                   </tbody>
                 </table>
-                <p className="mt-3 rounded-lg border border-primary/20 bg-primary-light/40 px-3 py-2 text-xs text-text-muted">
-                  <strong className="text-text">Early Start (ES):</strong> blank = normal formula
-                  from predecessors. Type a day to set/delay start —{' '}
-                  <strong className="text-text">0</strong> = project start when Independent.
-                  With a predecessor, ES cannot be earlier than the formula (typed value can only
-                  make it later). Day <strong className="text-text">0</strong> is the first day;
-                  several activities may share the same ES when they run in parallel.
-                  <br />
-                  <strong className="text-text">Type / TO:</strong> choose here.
-                  Select <em>Independent</em> if this activity has <strong className="text-text">no predecessor</strong>.
-                  Or pick <strong className="text-text">FS / SS / FF / SF</strong> and the predecessor under{' '}
-                  <strong className="text-text">TO</strong> (who must come before this activity).
-                  This updates the Dependencies list below. Extra predecessors can still be added there.
-                  <strong className="text-text"> Lag</strong> is delay in days after the relationship
-                  date; a negative value is a lead.
-                  <br />
-                  <strong className="text-text">Until end:</strong> check when the activity should run from
-                  its start (after the selected predecessor) continuously until{' '}
-                  <strong className="text-text">project completion</strong>. Duration is calculated as
-                  project end − ES. On the PDM diagram it appears as a branch:{' '}
-                  <em>Predecessor → Activity → End</em> (layout only — does not change critical-path math).
-                </p>
               </div>
 
               <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
