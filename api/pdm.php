@@ -22,7 +22,7 @@ if ($method === 'GET') {
 
     $pdo = db();
     $acts = $pdo->prepare(
-        'SELECT id, activity_number AS number, activity_name AS name, duration, es_override
+        'SELECT id, activity_number AS number, activity_name AS name, duration, es_override, extend_to_end
          FROM pdm_activities WHERE project_id = ?'
     );
     $acts->execute([$projectId]);
@@ -34,6 +34,7 @@ if ($method === 'GET') {
             'name' => $row['name'],
             'duration' => (int)$row['duration'],
             'esOverride' => $row['es_override'] !== null ? (int)$row['es_override'] : null,
+            'extendToEnd' => !empty($row['extend_to_end']),
         ];
     }
 

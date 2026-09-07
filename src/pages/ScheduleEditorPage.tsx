@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, memo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useSelectedProject } from '../context/SelectedProjectContext';
@@ -8,10 +8,12 @@ import { useUndoRedo, useUndoRedoKeyboard } from '../hooks/useUndoRedo';
 import { getSchedule, saveSchedule, clearSchedule, loadReferenceSchedule, type ProjectSchedule } from '../lib/scheduleApi';
 import { listProjects } from '../lib/projectsApi';
 import { applyPdmDerivatives, deriveBarChartFromPdm } from '../lib/scheduleSync';
+import { activityIncomingLink, setActivityPredecessor, suggestFsDependency } from '../lib/pdm';
 import { REFERENCE_PDM_TITLE, HAS_REFERENCE_PDM } from '../data/roadPdmSample';
 import type { DependencyType, PdmActivity, PdmDependency } from '../types';
 
 const DEP_TYPES: DependencyType[] = ['FS', 'SS', 'FF', 'SF'];
+const TYPE_OPTIONS: Array<DependencyType | 'Independent'> = ['Independent', 'FS', 'SS', 'FF', 'SF'];
 
 function newActivity(i: number): PdmActivity {
   const letter = String.fromCharCode(65 + (i % 26));
@@ -70,6 +72,18 @@ const DependencyRow = memo(function DependencyRow({
           ))}
         </select>
       </td>
+      <td className="py-2 pr-2">
+        <input
+          type="number"
+          value={dep.lag ?? 0}
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            onPatch(dep.id, { lag: Number.isFinite(n) ? n : 0 });
+          }}
+          className="w-16 rounded border border-border px-2 py-1"
+          title="Lag in days. Use a negative number for lead (example: FS with 3-day lead = -3)."
+        />
+      </td>
       <td className="py-2 text-right">
         <button type="button" onClick={() => onRemove(dep.id)} className="text-xs text-red-600">
           Remove
@@ -96,13 +110,19 @@ export function ScheduleEditorPage() {
   } = useUndoRedo<ProjectSchedule | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [tab, setTab] = useState<'pdm' | 'bar'>('pdm');
+  const autoSaveReady = useRef(false);
+  const saveSeq = useRef(0);
+  const savingRef = useRef(false);
 
   const patchSchedule = useCallback(
     (updater: (schedule: ProjectSchedule) => ProjectSchedule) => {
       setData((d) => (d ? updater(d) : d));
+      setDirty(true);
+      setSuccess('');
     },
     [setData],
   );
@@ -121,12 +141,18 @@ export function ScheduleEditorPage() {
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
+    setDirty(false);
+    autoSaveReady.current = false;
     try {
       replaceData(applyPdmDerivatives(await getSchedule(Number(projectId))));
     } catch {
       setError('Could not load schedule from database.');
     } finally {
       setLoading(false);
+      // Allow auto-save only after load settles (next tick).
+      requestAnimationFrame(() => {
+        autoSaveReady.current = true;
+      });
     }
   }, [projectId, replaceData]);
 
@@ -173,11 +199,36 @@ export function ScheduleEditorPage() {
     [patchSchedule],
   );
 
-  const handleSave = async () => {
-    if (!data) return;
+  const setIncomingLink = useCallback(
+    (activityId: string, type: DependencyType | 'Independent', predecessorId: string | null) => {
+      patchSchedule((d) => ({
+        ...d,
+        dependencies: setActivityPredecessor(
+          d.activities,
+          d.dependencies,
+          activityId,
+          type,
+          predecessorId,
+        ),
+      }));
+    },
+    [patchSchedule],
+  );
+
+  const handleSave = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!data || savingRef.current) return;
+    if (derived?.pdmError) {
+      setError(derived.pdmError);
+      return;
+    }
+
+    const seq = ++saveSeq.current;
+    savingRef.current = true;
     setSaving(true);
-    setError('');
-    setSuccess('');
+    if (!opts?.silent) {
+      setError('');
+      setSuccess('');
+    }
     try {
       const saved = applyPdmDerivatives(
         await saveSchedule({
@@ -188,17 +239,42 @@ export function ScheduleEditorPage() {
           barChartTimeNow: data.barChartTimeNow,
         }),
       );
+      if (seq !== saveSeq.current) return;
+      setDirty(false);
+      autoSaveReady.current = false;
       replaceData(saved);
+      requestAnimationFrame(() => {
+        autoSaveReady.current = true;
+      });
       setSuccess(
-        'Schedule saved. PDM, bar chart, and S-curve are synced. Critical path: ' +
-          (saved.criticalPath.join(' → ') || '—'),
+        opts?.silent
+          ? 'Auto-saved. PDM, bar chart, and S-curve synced.'
+          : 'Schedule saved. PDM, bar chart, and S-curve are synced. Critical path: ' +
+              (saved.criticalPath.join(' → ') || '—'),
       );
+      setError('');
     } catch (err) {
+      if (seq !== saveSeq.current) return;
       setError(err instanceof Error ? err.message : 'Save failed');
     } finally {
-      setSaving(false);
+      if (seq === saveSeq.current) {
+        savingRef.current = false;
+        setSaving(false);
+      }
     }
-  };
+  }, [data, derived?.pdmError, projectId, replaceData]);
+
+  // Auto-save ~1.2s after the last edit while preparing the schedule.
+  useEffect(() => {
+    if (!canEdit || !data || !dirty || loading || !autoSaveReady.current) return;
+    if (derived?.pdmError) return;
+
+    const timer = window.setTimeout(() => {
+      void handleSave({ silent: true });
+    }, 1200);
+
+    return () => window.clearTimeout(timer);
+  }, [canEdit, data, dirty, loading, derived?.pdmError, handleSave]);
 
   const updateActivity = (id: string, patch: Partial<PdmActivity>) => {
     patchSchedule((d) => ({
@@ -251,8 +327,8 @@ export function ScheduleEditorPage() {
           <h1 className="mt-3 text-2xl font-bold text-text">Prepare Construction Schedule</h1>
           <p className="mt-2 max-w-2xl text-sm text-text-muted">
             Enter PDM activities and dependencies. Use Early Start (ES) when activities must start
-            on the same day and run in parallel. When you save, the system builds the bar chart and
-            S-curve from the same schedule.
+            on the same day and run in parallel. Changes <strong>auto-save</strong> after you pause
+            editing; you can still click Save for an immediate sync to bar chart and S-curve.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -261,10 +337,10 @@ export function ScheduleEditorPage() {
           <button
             type="button"
             disabled={saving || !data}
-            onClick={handleSave}
+            onClick={() => void handleSave()}
             className="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
           >
-            {saving ? 'Saving…' : 'Save schedule'}
+            {saving ? 'Saving…' : dirty ? 'Save schedule*' : 'Save schedule'}
           </button>
         </div>
       </div>
@@ -336,8 +412,11 @@ export function ScheduleEditorPage() {
                         return;
                       }
                       void (async () => {
+                        savingRef.current = true;
                         setSaving(true);
                         setError('');
+                        setDirty(false);
+                        autoSaveReady.current = false;
                         try {
                           replaceData(
                             applyPdmDerivatives(await loadReferenceSchedule(Number(projectId))),
@@ -350,7 +429,11 @@ export function ScheduleEditorPage() {
                               : 'Could not load reference schedule.',
                           );
                         } finally {
+                          savingRef.current = false;
                           setSaving(false);
+                          requestAnimationFrame(() => {
+                            autoSaveReady.current = true;
+                          });
                         }
                       })();
                     }}
@@ -375,15 +458,22 @@ export function ScheduleEditorPage() {
                         return;
                       }
                       void (async () => {
+                        savingRef.current = true;
                         setSaving(true);
                         setError('');
+                        setDirty(false);
+                        autoSaveReady.current = false;
                         try {
                           replaceData(applyPdmDerivatives(await clearSchedule(Number(projectId))));
                           setSuccess('Schedule cleared. Ready for a new reference PDM.');
                         } catch {
                           setError('Could not clear schedule.');
                         } finally {
+                          savingRef.current = false;
                           setSaving(false);
+                          requestAnimationFrame(() => {
+                            autoSaveReady.current = true;
+                          });
                         }
                       })();
                     }}
@@ -400,16 +490,32 @@ export function ScheduleEditorPage() {
                       <th className="py-2 pr-2">Name</th>
                       <th className="py-2 pr-2">Duration</th>
                       <th
+                        className="py-2 pr-2"
+                        title="Activity continues from its Early Start until project completion. Duration is calculated automatically."
+                      >
+                        Until end
+                      </th>
+                      <th
                         className="py-2 pr-2 text-primary"
                         title="Optional Early Start day (0 = first day). Leave blank for formula. Set 0 on multiple activities to start in parallel."
                       >
                         Early Start (ES)
                       </th>
+                      <th className="py-2 pr-2">ES</th>
+                      <th className="py-2 pr-2">Type</th>
+                      <th className="py-2 pr-2">TO</th>
                       <th className="py-2" />
                     </tr>
                   </thead>
                   <tbody>
-                    {data.activities.map((a) => (
+                    {data.activities.map((a) => {
+                      const link = activityIncomingLink(a.id, data.activities, data.dependencies);
+                      const scheduled = scheduledById.get(a.id);
+                      const computedEs = scheduled?.es ?? a.es ?? 0;
+                      const displayDuration = a.extendToEnd
+                        ? (scheduled?.duration ?? a.duration)
+                        : a.duration;
+                      return (
                       <tr key={a.id} className="border-b border-border/50">
                         <td className="py-2 pr-2">
                           <input
@@ -429,15 +535,34 @@ export function ScheduleEditorPage() {
                           <input
                             type="text"
                             inputMode="numeric"
-                            value={a.duration}
+                            value={displayDuration}
+                            disabled={!!a.extendToEnd}
                             onChange={(e) => {
                               const raw = e.target.value.replace(/[^\d]/g, '');
                               updateActivity(a.id, {
                                 duration: raw === '' ? 0 : Number(raw),
                               });
                             }}
-                            className="w-16 rounded border border-border px-2 py-1"
+                            title={
+                              a.extendToEnd
+                                ? 'Duration is auto-calculated: project end − Early Start'
+                                : 'Activity duration in days'
+                            }
+                            className="w-16 rounded border border-border px-2 py-1 disabled:bg-surface-muted disabled:text-text-muted"
                           />
+                        </td>
+                        <td className="py-2 pr-2">
+                          <label className="inline-flex items-center gap-1.5 text-xs text-text">
+                            <input
+                              type="checkbox"
+                              checked={!!a.extendToEnd}
+                              onChange={(e) =>
+                                updateActivity(a.id, { extendToEnd: e.target.checked })
+                              }
+                              title="Continue until project completion (Predecessor → this activity → End)"
+                            />
+                            Yes
+                          </label>
                         </td>
                         <td className="py-2 pr-2">
                           <div className="flex items-center gap-1.5">
@@ -456,9 +581,60 @@ export function ScheduleEditorPage() {
                               className="w-16 rounded border border-primary/40 bg-primary-light/30 px-2 py-1"
                             />
                             <span className="whitespace-nowrap text-[10px] text-text-muted">
-                              → ES {scheduledById.get(a.id)?.es ?? a.es ?? 0}
+                              → ES {computedEs}
                             </span>
                           </div>
+                        </td>
+                        <td className="py-2 pr-2 text-text-muted">{computedEs}</td>
+                        <td className="py-2 pr-2">
+                          <select
+                            value={link.type}
+                            onChange={(e) => {
+                              const nextType = e.target.value as DependencyType | 'Independent';
+                              if (nextType === 'Independent') {
+                                setIncomingLink(a.id, 'Independent', null);
+                                return;
+                              }
+                              const predId =
+                                link.fromId ??
+                                data.activities.find((x) => x.id !== a.id)?.id ??
+                                null;
+                              setIncomingLink(a.id, nextType, predId);
+                            }}
+                            className="rounded border border-border px-2 py-1"
+                            title="Independent = no predecessor. Or pick FS / SS / FF / SF."
+                          >
+                            {TYPE_OPTIONS.map((t) => (
+                              <option key={t} value={t}>
+                                {t}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="py-2 pr-2">
+                          <select
+                            value={link.type === 'Independent' ? '' : (link.fromId ?? '')}
+                            onChange={(e) => {
+                              const predId = e.target.value;
+                              if (!predId) {
+                                setIncomingLink(a.id, 'Independent', null);
+                                return;
+                              }
+                              const nextType = link.type === 'Independent' ? 'FS' : link.type;
+                              setIncomingLink(a.id, nextType, predId);
+                            }}
+                            className="rounded border border-border px-2 py-1"
+                            title="Select Independent, or the predecessor activity (who finishes/starts before this one)."
+                          >
+                            <option value="">Independent</option>
+                            {data.activities
+                              .filter((x) => x.id !== a.id)
+                              .map((x) => (
+                                <option key={x.id} value={x.id}>
+                                  {x.number} — {x.name}
+                                </option>
+                              ))}
+                          </select>
                         </td>
                         <td className="py-2 text-right">
                           <button
@@ -478,14 +654,31 @@ export function ScheduleEditorPage() {
                           </button>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
                 <p className="mt-3 rounded-lg border border-primary/20 bg-primary-light/40 px-3 py-2 text-xs text-text-muted">
                   <strong className="text-text">Early Start (ES):</strong> blank = normal formula
-                  (retain). Para magsabay ang activities (hal. Reinforcing at Buhos), ilagay ang
-                  parehong ES — <strong className="text-text">0</strong> = lahat magsisimula sa Day
-                  0, parallel sa bar chart.
+                  from predecessors. Type a day to set/delay start —{' '}
+                  <strong className="text-text">0</strong> = project start when Independent.
+                  With a predecessor, ES cannot be earlier than the formula (typed value can only
+                  make it later). Day <strong className="text-text">0</strong> is the first day;
+                  several activities may share the same ES when they run in parallel.
+                  <br />
+                  <strong className="text-text">Type / TO:</strong> choose here.
+                  Select <em>Independent</em> if this activity has <strong className="text-text">no predecessor</strong>.
+                  Or pick <strong className="text-text">FS / SS / FF / SF</strong> and the predecessor under{' '}
+                  <strong className="text-text">TO</strong> (who must come before this activity).
+                  This updates the Dependencies list below. Extra predecessors can still be added there.
+                  <strong className="text-text"> Lag</strong> is delay in days after the relationship
+                  date; a negative value is a lead.
+                  <br />
+                  <strong className="text-text">Until end:</strong> check when the activity should run from
+                  its start (after the selected predecessor) continuously until{' '}
+                  <strong className="text-text">project completion</strong>. Duration is calculated as
+                  project end − ES. On the PDM diagram it appears as a branch:{' '}
+                  <em>Predecessor → Activity → End</em> (layout only — does not change critical-path math).
                 </p>
               </div>
 
@@ -496,22 +689,28 @@ export function ScheduleEditorPage() {
                     type="button"
                     onClick={() => {
                       const acts = data.activities;
-                      if (acts.length < 2) return;
-                      const fromId = acts[0].id;
-                      const toId = acts[1].id;
-                      const duplicate = data.dependencies.some(
-                        (d) => d.fromId === fromId && d.toId === toId && d.type === 'FS',
-                      );
-                      if (duplicate) return;
+                      if (acts.length < 2) {
+                        setError('Add at least two activities before creating dependencies.');
+                        return;
+                      }
+                      const next = suggestFsDependency(acts, data.dependencies);
+                      if (!next) {
+                        setError(
+                          'Every activity pair already has a dependency. Change a row below or remove one first.',
+                        );
+                        return;
+                      }
+                      setError('');
                       patchSchedule((d) => ({
                         ...d,
                         dependencies: [
                           ...d.dependencies,
                           {
                             id: `new-d-${Date.now()}`,
-                            fromId,
-                            toId,
+                            fromId: next.fromId,
+                            toId: next.toId,
                             type: 'FS' as const,
+                            lag: 0,
                           },
                         ],
                       }));
@@ -527,6 +726,7 @@ export function ScheduleEditorPage() {
                       <th className="py-2">From</th>
                       <th className="py-2">To</th>
                       <th className="py-2">Type</th>
+                      <th className="py-2">Lag</th>
                       <th />
                     </tr>
                   </thead>
@@ -543,7 +743,8 @@ export function ScheduleEditorPage() {
                   </tbody>
                 </table>
                 <p className="mt-3 text-sm text-text-muted">
-                  Critical path: <strong>{derived?.criticalPath.join(' → ') || '—'}</strong> · Project duration:{' '}
+                  Lag is in days (0 if none). Negative lag = lead. Critical path:{' '}
+                  <strong>{derived?.criticalPath.join(' → ') || '—'}</strong> · Project duration:{' '}
                   <strong>{derived?.projectDuration ?? 0} days</strong>
                   {derived?.pdmError ? (
                     <span className="ml-2 text-red-600">({derived.pdmError})</span>
@@ -573,7 +774,7 @@ export function ScheduleEditorPage() {
                   Time-now (day)
                   <input
                     type="number"
-                    min={1}
+                    min={0}
                     value={data.barChartTimeNow}
                     onChange={(e) =>
                       patchSchedule((d) => ({ ...d, barChartTimeNow: Number(e.target.value) }))

@@ -9,7 +9,12 @@ use Peo\DatabaseSetup;
 use Peo\PdmSchedule;
 use Peo\ScheduleSync;
 
-$pdo = db();
+try {
+    $pdo = db();
+} catch (Throwable $e) {
+    jsonError('Database connection failed: ' . $e->getMessage(), 500);
+}
+
 try {
     DatabaseSetup::ensureScheduleTables($pdo);
     DatabaseSetup::ensureUsersAndProjects($pdo);
@@ -34,7 +39,7 @@ function normalizeEsOverride(mixed $value): ?int
 function loadSchedule(PDO $pdo, int $projectId): array
 {
     $acts = $pdo->prepare(
-        'SELECT id, activity_number AS number, activity_name AS name, duration, es_override, pos_x, pos_y
+        'SELECT id, activity_number AS number, activity_name AS name, duration, es_override, extend_to_end, pos_x, pos_y
          FROM pdm_activities WHERE project_id = ? ORDER BY id'
     );
     $acts->execute([$projectId]);
@@ -46,6 +51,7 @@ function loadSchedule(PDO $pdo, int $projectId): array
             'name' => $row['name'],
             'duration' => (int)$row['duration'],
             'esOverride' => normalizeEsOverride($row['es_override']),
+            'extendToEnd' => !empty($row['extend_to_end']),
             'posX' => (int)$row['pos_x'],
             'posY' => (int)$row['pos_y'],
         ];
@@ -94,6 +100,7 @@ function loadSchedule(PDO $pdo, int $projectId): array
         'name' => $a['name'],
         'duration' => $a['duration'],
         'esOverride' => $a['esOverride'] ?? null,
+        'extendToEnd' => !empty($a['extendToEnd']),
     ], $activities);
 
     $pdm = $activities ? PdmSchedule::calculate($pdmInput, $dependencies) : [
@@ -117,6 +124,8 @@ function loadSchedule(PDO $pdo, int $projectId): array
             $a['ef'] = $s['ef'] ?? 0;
             $a['ls'] = $s['ls'] ?? 0;
             $a['lf'] = $s['lf'] ?? 0;
+            $a['duration'] = (int)($s['duration'] ?? $a['duration']);
+            $a['extendToEnd'] = !empty($s['extendToEnd']) || !empty($a['extendToEnd']);
             $a['isCritical'] = !empty($s['isCritical']);
         }
     }
@@ -227,8 +236,8 @@ if ($method === 'POST' && $action === 'save') {
 
         $idMap = [];
         $actStmt = $pdo->prepare(
-            'INSERT INTO pdm_activities (project_id, activity_number, activity_name, duration, es_override, pos_x, pos_y)
-             VALUES (?, ?, ?, ?, ?, ?, ?)'
+            'INSERT INTO pdm_activities (project_id, activity_number, activity_name, duration, es_override, extend_to_end, pos_x, pos_y)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
         );
         foreach ($activities as $i => $a) {
             $clientId = (string)($a['id'] ?? ('new-' . $i));
@@ -238,12 +247,14 @@ if ($method === 'POST' && $action === 'save') {
             } else {
                 $esOverride = max(0, (int)$esOverride);
             }
+            $extendToEnd = !empty($a['extendToEnd']) || !empty($a['extend_to_end']) ? 1 : 0;
             $actStmt->execute([
                 $projectId,
                 $a['number'] ?? chr(65 + $i),
                 $a['name'] ?? 'Activity',
                 max(1, (int)($a['duration'] ?? 1)),
                 $esOverride,
+                $extendToEnd,
                 (int)($a['posX'] ?? 120 + ($i % 3) * 160),
                 (int)($a['posY'] ?? 80 + intdiv($i, 3) * 140),
             ]);
@@ -271,7 +282,7 @@ if ($method === 'POST' && $action === 'save') {
 
         $pdmInput = [];
         $actRows = $pdo->prepare(
-            'SELECT id, activity_number AS number, activity_name AS name, duration, es_override
+            'SELECT id, activity_number AS number, activity_name AS name, duration, es_override, extend_to_end
              FROM pdm_activities WHERE project_id = ? ORDER BY id'
         );
         $actRows->execute([$projectId]);
@@ -282,6 +293,7 @@ if ($method === 'POST' && $action === 'save') {
                 'name' => $row['name'],
                 'duration' => (int)$row['duration'],
                 'esOverride' => normalizeEsOverride($row['es_override']),
+                'extendToEnd' => !empty($row['extend_to_end']),
             ];
         }
 

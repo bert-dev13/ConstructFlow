@@ -1,4 +1,5 @@
 import type { PdmActivity } from '../types';
+import { PDM_START_NODE_H, PDM_START_NODE_W, PDM_END_NODE_H, PDM_END_NODE_W } from '../lib/pdmLayout';
 
 export const PDM_NODE_W = 128;
 export const PDM_NODE_H = 96;
@@ -21,14 +22,18 @@ export function PdmNode({ activity, x, y, onMainCriticalPath = false }: PdmNodeP
 
   return (
     <g transform={`translate(${x - w / 2}, ${y - h / 2})`}>
-      <title>{displayName}</title>
+      <title>
+        {displayName}
+        {activity.extendToEnd ? ' (until project end)' : ''}
+      </title>
       <rect
         width={w}
         height={h}
         rx={4}
-        fill={onMainCriticalPath ? '#fef2f2' : '#fff'}
-        stroke={onMainCriticalPath ? '#dc2626' : '#4a6353'}
+        fill={onMainCriticalPath ? '#fef2f2' : activity.extendToEnd ? '#f8faf8' : '#fff'}
+        stroke={onMainCriticalPath ? '#dc2626' : activity.extendToEnd ? '#6b7c72' : '#4a6353'}
         strokeWidth={onMainCriticalPath ? 2.75 : 1.5}
+        strokeDasharray={activity.extendToEnd && !onMainCriticalPath ? '4 3' : undefined}
       />
 
       {/* Top — ES / No. / EF */}
@@ -85,6 +90,63 @@ export function PdmNode({ activity, x, y, onMainCriticalPath = false }: PdmNodeP
       </text>
       <text x={(w * 5) / 6} y={h - 6} textAnchor="middle" className="fill-text text-[10px] font-semibold">
         {activity.lf ?? '—'}
+      </text>
+    </g>
+  );
+}
+
+interface PdmStartNodeProps {
+  x: number;
+  y: number;
+}
+
+/** Project day 0 — first column before parallel start activities. */
+export function PdmStartNode({ x, y }: PdmStartNodeProps) {
+  const w = PDM_START_NODE_W;
+  const h = PDM_START_NODE_H;
+  return (
+    <g transform={`translate(${x - w / 2}, ${y - h / 2})`}>
+      <rect
+        width={w}
+        height={h}
+        rx={4}
+        fill="#fff"
+        stroke="#2c2c2a"
+        strokeWidth={2}
+      />
+      <text
+        x={w / 2}
+        y={h / 2 + 4}
+        textAnchor="middle"
+        className="fill-text text-[11px] font-semibold lowercase"
+      >
+        start
+      </text>
+    </g>
+  );
+}
+
+/** Project finish — mirror of start (terminal activities → bus → end box). */
+export function PdmEndNode({ x, y }: PdmStartNodeProps) {
+  const w = PDM_END_NODE_W;
+  const h = PDM_END_NODE_H;
+  return (
+    <g transform={`translate(${x - w / 2}, ${y - h / 2})`}>
+      <rect
+        width={w}
+        height={h}
+        rx={4}
+        fill="#fff"
+        stroke="#2c2c2a"
+        strokeWidth={2}
+      />
+      <text
+        x={w / 2}
+        y={h / 2 + 4}
+        textAnchor="middle"
+        className="fill-text text-[11px] font-semibold lowercase"
+      >
+        end
       </text>
     </g>
   );

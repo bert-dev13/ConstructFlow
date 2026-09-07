@@ -83,6 +83,11 @@ export interface PdmActivity {
   duration: number;
   /** Optional 0-based Early Start day override (0 = first day). Null = use formula. */
   esOverride?: number | null;
+  /**
+   * When true, duration is auto-set so EF = project completion (from the main schedule).
+   * Start still follows the selected predecessor. Visual branch only — does not drive project end.
+   */
+  extendToEnd?: boolean;
   es?: number;
   ef?: number;
   ls?: number;
@@ -97,6 +102,7 @@ export interface PdmDependency {
   fromId: string;
   toId: string;
   type: DependencyType;
+  /** Days. Positive = lag; negative = lead. Default 0. */
   lag?: number;
 }
 
@@ -118,6 +124,7 @@ export interface SCurvePoint {
   originalPlan: number | null;
   currentPlan: number | null;
   actual: number | null;
+  variance?: number | null;
 }
 
 export interface ProgressReport {

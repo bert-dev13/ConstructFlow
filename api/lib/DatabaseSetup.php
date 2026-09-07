@@ -152,6 +152,13 @@ class DatabaseSetup
             // Column already exists on upgraded databases
         }
         try {
+            $pdo->exec(
+                'ALTER TABLE pdm_activities ADD COLUMN extend_to_end TINYINT(1) NOT NULL DEFAULT 0 AFTER es_override'
+            );
+        } catch (\Throwable) {
+            // Column already exists
+        }
+        try {
             $pdo->exec('ALTER TABLE pdm_activities MODIFY activity_number VARCHAR(40) NOT NULL');
         } catch (\Throwable) {
             // Ignore if the column is already wide enough
@@ -203,6 +210,7 @@ class DatabaseSetup
     {
         self::ensureAppSettings($pdo);
         self::migrateEsOverrideToZeroBased($pdo);
+        self::migrateRootEsOverrideOneToZero($pdo);
 
         if (!RoadPdmSample::hasReference()) {
             self::wipeAllSchedulesIfPresent($pdo);
@@ -246,6 +254,31 @@ class DatabaseSetup
         );
         $pdo->prepare(
             "INSERT INTO app_settings (setting_key, setting_value) VALUES ('es_override_zero_v1', '1')
+             ON DUPLICATE KEY UPDATE setting_value = '1'"
+        )->execute();
+    }
+
+    /** Root activities with es_override = 1 meant legacy "first day" — store as 0. */
+    public static function migrateRootEsOverrideOneToZero(PDO $pdo): void
+    {
+        self::ensureAppSettings($pdo);
+        $done = $pdo->query(
+            "SELECT setting_value FROM app_settings WHERE setting_key = 'es_override_root_one_v1'"
+        )->fetchColumn();
+        if ($done === '1') {
+            return;
+        }
+
+        $pdo->exec(
+            'UPDATE pdm_activities a
+             SET a.es_override = 0
+             WHERE a.es_override = 1
+               AND NOT EXISTS (
+                 SELECT 1 FROM pdm_dependencies d WHERE d.to_activity_id = a.id
+               )'
+        );
+        $pdo->prepare(
+            "INSERT INTO app_settings (setting_key, setting_value) VALUES ('es_override_root_one_v1', '1')
              ON DUPLICATE KEY UPDATE setting_value = '1'"
         )->execute();
     }
@@ -572,6 +605,21 @@ class DatabaseSetup
               INDEX idx_project_date (project_id, point_date)
             )
         ");
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS s_curve_snapshots (
+              id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+              project_id INT UNSIGNED NOT NULL,
+              captured_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              trigger_type VARCHAR(32) NOT NULL,
+              trigger_label VARCHAR(120) NULL,
+              schedule_status VARCHAR(24) NULL,
+              slippage_pct DECIMAL(6,2) NULL,
+              planned_pct DECIMAL(5,2) NULL,
+              actual_pct DECIMAL(5,2) NULL,
+              points_json JSON NOT NULL,
+              INDEX idx_project_captured (project_id, captured_at)
+            )
+        ");
     }
 
     public static function seedSCurveIfEmpty(PDO $pdo): void
@@ -581,16 +629,16 @@ class DatabaseSetup
             return;
         }
         $seed = [
-            ['2026-01-15', 0, 0, 0],
-            ['2026-02-01', 5, 5, 4],
-            ['2026-03-01', 15, 14, 12],
-            ['2026-04-01', 28, 26, 22],
-            ['2026-05-01', 42, 38, 31],
-            ['2026-06-01', 55, 50, 41],
-            ['2026-07-01', 68, 62, 52],
-            ['2026-08-01', 80, 74, 61],
-            ['2026-09-01', 90, 86, 72],
-            ['2026-10-01', 100, 100, 85],
+            ['2026-01-15', 0, 0, null],
+            ['2026-02-01', 5, 5, null],
+            ['2026-03-01', 15, 14, null],
+            ['2026-04-01', 28, 26, null],
+            ['2026-05-01', 42, 38, null],
+            ['2026-06-01', 55, 50, null],
+            ['2026-07-01', 68, 62, null],
+            ['2026-08-01', 80, 74, null],
+            ['2026-09-01', 90, 86, null],
+            ['2026-10-01', 100, 100, null],
         ];
         $stmt = $pdo->prepare(
             'INSERT INTO s_curve_points (project_id, point_date, original_plan_pct, current_plan_pct, actual_pct)

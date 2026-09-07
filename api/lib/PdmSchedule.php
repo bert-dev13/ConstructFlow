@@ -3,6 +3,12 @@ declare(strict_types=1);
 
 namespace Peo;
 
+/**
+ * PDM forward/backward pass.
+ * Day 0 baseline; first activity ES = 0; EF = ES + Duration.
+ * FS/SS/FF/SF with lag (lead = negative lag). Multiple predecessors: latest required date.
+ * Critical when total float (LS − ES / LF − EF) is 0.
+ */
 class PdmSchedule
 {
     /** @param array<int, array<string, mixed>> $activities */
@@ -55,60 +61,102 @@ class PdmSchedule
 
         foreach ($topo as $id) {
             $incoming = $preds[$id] ?? [];
-            $es = 0;
-            foreach ($incoming as $dep) {
-                $pred = $map[(string)$dep['fromId']];
-                $lag = (int)($dep['lag'] ?? 0);
-                $type = strtoupper((string)($dep['type'] ?? 'FS'));
-                $es = max($es, match ($type) {
-                    'FS' => (int)$pred['ef'] + $lag,
-                    'SS' => (int)$pred['es'] + $lag,
-                    'FF' => (int)$pred['ef'] + $lag - (int)$map[$id]['duration'],
-                    'SF' => (int)$pred['es'] + $lag - (int)$map[$id]['duration'],
-                    default => 0,
-                });
+            $extends = !empty($map[$id]['extendToEnd']) || !empty($map[$id]['extend_to_end']);
+            $duration = $extends ? 1 : max(1, (int)$map[$id]['duration']);
+            if ($incoming === []) {
+                $es = 0;
+            } else {
+                $es = null;
+                foreach ($incoming as $dep) {
+                    $pred = $map[(string)$dep['fromId']];
+                    $required = self::requiredSuccessorEs(
+                        (string)($dep['type'] ?? 'FS'),
+                        (int)($pred['es'] ?? 0),
+                        (int)($pred['ef'] ?? 0),
+                        $duration,
+                        (int)($dep['lag'] ?? 0),
+                    );
+                    $es = $es === null ? $required : max($es, $required);
+                }
+                $es = (int)$es;
             }
 
-            // Optional 0-based Early Start override (0 = first day).
-            $override = $map[$id]['esOverride'] ?? $map[$id]['es_override'] ?? null;
+            // Early Start (ES) override:
+            // - No predecessor: use the typed day (0 = project start).
+            // - Has predecessor: cannot start earlier than the formula; typed day may delay start.
+            $override = self::normalizeRootEsOverride(
+                $map[$id]['esOverride'] ?? $map[$id]['es_override'] ?? null,
+                $incoming !== [],
+            );
             if ($override !== null && $override !== '') {
                 $day = (int)$override;
                 if ($day >= 0) {
-                    $es = $day;
+                    $es = $incoming === [] ? $day : max($es, $day);
                     $map[$id]['esOverride'] = $day;
                 }
             }
 
             $map[$id]['es'] = $es;
-            $map[$id]['ef'] = $es + (int)$map[$id]['duration'];
+            $map[$id]['duration'] = $duration;
+            $map[$id]['ef'] = $es + $duration;
+            $map[$id]['extendToEnd'] = $extends;
         }
 
+        $coreEnds = [];
+        foreach ($map as $a) {
+            if (empty($a['extendToEnd'])) {
+                $coreEnds[] = (int)$a['ef'];
+            }
+        }
+        $projectEnd = $coreEnds !== []
+            ? (int)max($coreEnds)
+            : (int)max(array_column($map, 'ef') ?: [0]);
+
+        foreach ($map as $id => &$row) {
+            if (empty($row['extendToEnd'])) {
+                continue;
+            }
+            $es = (int)$row['es'];
+            $row['duration'] = max(1, $projectEnd - $es);
+            $row['ef'] = $es + $row['duration'];
+        }
+        unset($row);
+
         $efValues = array_column($map, 'ef');
-        $projectEnd = $efValues !== [] ? (int)max($efValues) : 0;
+        $projectEnd = $efValues !== [] ? (int)max($efValues) : $projectEnd;
 
         foreach (array_reverse($topo) as $id) {
             $outgoing = $succs[$id] ?? [];
-            $lf = $projectEnd;
-            foreach ($outgoing as $dep) {
-                $succ = $map[(string)$dep['toId']];
-                $lag = (int)($dep['lag'] ?? 0);
-                $type = strtoupper((string)($dep['type'] ?? 'FS'));
-                $lf = min($lf, match ($type) {
-                    'FS', 'SS' => (int)($succ['ls'] ?? $projectEnd) - $lag,
-                    'FF' => (int)($succ['lf'] ?? $projectEnd) - $lag,
-                    'SF' => (int)($succ['lf'] ?? $projectEnd) - $lag + (int)$map[$id]['duration'],
-                    default => $projectEnd,
-                });
+            $duration = (int)$map[$id]['duration'];
+            if ($outgoing === []) {
+                $map[$id]['lf'] = $projectEnd;
+                $map[$id]['ls'] = $projectEnd - $duration;
+            } else {
+                $ls = null;
+                foreach ($outgoing as $dep) {
+                    $succ = $map[(string)$dep['toId']];
+                    $required = self::requiredPredecessorLs(
+                        (string)($dep['type'] ?? 'FS'),
+                        (int)($succ['ls'] ?? $projectEnd),
+                        (int)($succ['lf'] ?? $projectEnd),
+                        $duration,
+                        (int)($dep['lag'] ?? 0),
+                    );
+                    $ls = $ls === null ? $required : min($ls, $required);
+                }
+                $map[$id]['ls'] = (int)$ls;
+                $map[$id]['lf'] = (int)$ls + $duration;
             }
-            $map[$id]['lf'] = $lf;
-            $map[$id]['ls'] = $lf - (int)$map[$id]['duration'];
             // Critical when total float is zero: (LF − EF) = 0 and (LS − ES) = 0.
             $es = (int)$map[$id]['es'];
             $ef = (int)$map[$id]['ef'];
-            $ls = (int)$map[$id]['ls'];
+            $lsVal = (int)$map[$id]['ls'];
             $lfVal = (int)$map[$id]['lf'];
-            $map[$id]['isCritical'] = ($lfVal - $ef) === 0 && ($ls - $es) === 0;
+            $extends = !empty($map[$id]['extendToEnd']);
+            $map[$id]['isCritical'] = !$extends && ($lfVal - $ef) === 0 && ($lsVal - $es) === 0;
         }
+
+        self::normalizeScheduleOriginToZero($map);
 
         $critical = array_values(array_filter($map, fn($a) => !empty($a['isCritical'])));
         usort($critical, static fn($a, $b) => ((int)($a['es'] ?? 0)) <=> ((int)($b['es'] ?? 0)));
@@ -170,5 +218,69 @@ class PdmSchedule
         }
 
         return array_map(static fn(string $id): string => (string)($map[$id]['number'] ?? ''), $best);
+    }
+
+    /** @param array<string, array<string, mixed>> $map */
+    private static function normalizeScheduleOriginToZero(array &$map): void
+    {
+        if ($map === []) {
+            return;
+        }
+        $minEs = min(array_map(static fn(array $a): int => (int)($a['es'] ?? 0), $map));
+        if ($minEs <= 0) {
+            return;
+        }
+        foreach ($map as &$a) {
+            $a['es'] = (int)($a['es'] ?? 0) - $minEs;
+            $a['ef'] = (int)($a['ef'] ?? 0) - $minEs;
+            $a['ls'] = (int)($a['ls'] ?? 0) - $minEs;
+            $a['lf'] = (int)($a['lf'] ?? 0) - $minEs;
+        }
+        unset($a);
+    }
+
+    private static function normalizeRootEsOverride(mixed $value, bool $hasPredecessors = false): mixed
+    {
+        if ($value === null || $value === '') {
+            return $value;
+        }
+        $day = (int)$value;
+        // Legacy 1-based "day 1 = first day" — only for root activities.
+        if (!$hasPredecessors && $day === 1) {
+            return 0;
+        }
+        return $value;
+    }
+
+    /** Required successor ES from one predecessor relationship (lead = negative lag). */
+    private static function requiredSuccessorEs(
+        string $type,
+        int $predEs,
+        int $predEf,
+        int $successorDuration,
+        int $lag,
+    ): int {
+        return match (strtoupper($type)) {
+            'SS' => $predEs + $lag,
+            'FF' => $predEf + $lag - $successorDuration,
+            'SF' => $predEs + $lag - $successorDuration,
+            default => $predEf + $lag,
+        };
+    }
+
+    /** Required predecessor LS from one successor relationship (lead = negative lag). */
+    private static function requiredPredecessorLs(
+        string $type,
+        int $succLs,
+        int $succLf,
+        int $predecessorDuration,
+        int $lag,
+    ): int {
+        return match (strtoupper($type)) {
+            'SS' => $succLs - $lag,
+            'FF' => $succLf - $lag - $predecessorDuration,
+            'SF' => $succLf - $lag,
+            default => $succLs - $lag - $predecessorDuration,
+        };
     }
 }
