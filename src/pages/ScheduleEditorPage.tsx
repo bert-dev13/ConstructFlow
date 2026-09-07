@@ -325,11 +325,6 @@ export function ScheduleEditorPage() {
             Contractor
           </span>
           <h1 className="mt-3 text-2xl font-bold text-text">Prepare Construction Schedule</h1>
-          <p className="mt-2 max-w-2xl text-sm text-text-muted">
-            Enter PDM activities and dependencies. Use Early Start (ES) when activities must start
-            on the same day and run in parallel. Changes <strong>auto-save</strong> after you pause
-            editing; you can still click Save for an immediate sync to bar chart and S-curve.
-          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <ProjectSelect value={projectId} onChange={setProjectId} className="min-w-[200px]" />
