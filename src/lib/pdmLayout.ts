@@ -18,6 +18,29 @@ export const PDM_END_HALF_W = PDM_START_HALF_W;
 export const PDM_END_HALF_H = PDM_START_HALF_H;
 export const PDM_BUS_STUB = 14;
 
+/**
+ * Elbow from predecessor → successor.
+ * Same row: straight. Successor to the right: run along the predecessor row,
+ * then turn up/down beside the successor (do not cut vertically through other nodes).
+ * Successor left/below: short stub, then vertical near the predecessor.
+ */
+export function dependencyEdge(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  nodeHalfW: number = PDM_ACTIVITY_HALF_W,
+): { d: string } {
+  const x1 = from.x + nodeHalfW;
+  const y1 = from.y;
+  const x2 = to.x - nodeHalfW;
+  const y2 = to.y;
+  if (Math.abs(y1 - y2) < 8 && x2 > x1) {
+    return { d: `M ${x1} ${y1} L ${x2} ${y2}` };
+  }
+  const stub = 18;
+  const midX = x2 > x1 + stub ? x2 - stub : x1 + stub;
+  return { d: `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}` };
+}
+
 /** Column x — index 0 is first ES column after the Start node. */
 export function pdmActivityColumnX(depth: number): number {
   return PDM_ORIGIN_X + PDM_COL_W + depth * PDM_COL_W;

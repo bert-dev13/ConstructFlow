@@ -6,26 +6,9 @@ import { ProjectSelect } from '../components/ProjectSelect';
 import { DocumentsBackLink } from '../components/DocumentsBackLink';
 import { getSchedule } from '../lib/scheduleApi';
 import { DEPENDENCY_LABELS, activityIncomingLink, formatDependencyLag, getCriticalPath, isIndependentActivity } from '../lib/pdm';
-import { diagramBounds, endActivityBranchPath, layoutPaperNetwork, layoutProjectEndNode, layoutProjectStartNode, PDM_BUS_STUB, PDM_END_HALF_W, PDM_START_HALF_W } from '../lib/pdmLayout';
+import { dependencyEdge, diagramBounds, endActivityBranchPath, layoutPaperNetwork, layoutProjectEndNode, layoutProjectStartNode, PDM_BUS_STUB, PDM_END_HALF_W, PDM_START_HALF_W } from '../lib/pdmLayout';
 import { PdmNode, PdmStartNode, PdmEndNode, PDM_NODE_HALF_H, PDM_NODE_HALF_W } from '../components/PdmNode';
 import type { PdmActivity, PdmDependency } from '../types';
-
-function dependencyEdge(
-  from: { x: number; y: number },
-  to: { x: number; y: number },
-): { d: string } {
-  const x1 = from.x + PDM_NODE_HALF_W;
-  const y1 = from.y;
-  const x2 = to.x - PDM_NODE_HALF_W;
-  const y2 = to.y;
-  if (Math.abs(y1 - y2) < 8 && x2 > x1) {
-    return { d: `M ${x1} ${y1} L ${x2} ${y2}` };
-  }
-  // Clear elbow: leave predecessor, then vertical, then into successor (avoids looking like a mid-edge branch).
-  const stub = Math.min(28, Math.max(14, (x2 - x1) * 0.25));
-  const midX = x2 > x1 ? x1 + stub : x1 + 18;
-  return { d: `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}` };
-}
 
 export function PdmPage() {
   const { user } = useAuth();
@@ -279,7 +262,7 @@ export function PdmPage() {
                 const isCritical =
                   mainChainIds.has(dep.fromId) && mainChainIds.has(dep.toId);
                 const stroke = isCritical ? '#dc2626' : '#9ca89f';
-                const edge = dependencyEdge(from, to);
+                const edge = dependencyEdge(from, to, PDM_NODE_HALF_W);
                 const lagText = formatDependencyLag(dep.lag);
                 return (
                   <g key={dep.id}>
