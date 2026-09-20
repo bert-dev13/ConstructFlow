@@ -33,7 +33,8 @@ export function useUndoRedo<T>(initial: T) {
         pastRef.current = [...pastRef.current, clone(prev)].slice(-MAX_HISTORY);
         futureRef.current = [];
         syncMeta();
-        return clone(next);
+        // Updater already returns a new object — avoid a second deep clone on every keystroke.
+        return next;
       });
     },
     [syncMeta],

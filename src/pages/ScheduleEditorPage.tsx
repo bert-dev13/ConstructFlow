@@ -8,7 +8,7 @@ import { useUndoRedo, useUndoRedoKeyboard } from '../hooks/useUndoRedo';
 import { getSchedule, saveSchedule, clearSchedule, loadReferenceSchedule, type ProjectSchedule } from '../lib/scheduleApi';
 import { listProjects } from '../lib/projectsApi';
 import { applyPdmDerivatives, deriveBarChartFromPdm } from '../lib/scheduleSync';
-import { activityIncomingLink, setActivityPredecessor, suggestFsDependency } from '../lib/pdm';
+import { activityIncomingLinksMap, setActivityPredecessor, suggestFsDependency } from '../lib/pdm';
 import { REFERENCE_PDM_TITLE, HAS_REFERENCE_PDM } from '../data/roadPdmSample';
 import type { DependencyType, PdmActivity, PdmDependency } from '../types';
 
@@ -130,13 +130,27 @@ export function ScheduleEditorPage() {
   const derived = useMemo(() => {
     if (!data) return null;
     return deriveBarChartFromPdm(data.activities, data.dependencies, data.barChartTasks);
-  }, [data]);
+  }, [data?.activities, data?.dependencies, data?.barChartTasks]);
 
   const scheduledById = useMemo(() => {
     const map = new Map<string, PdmActivity>();
     derived?.activities.forEach((a) => map.set(a.id, a));
     return map;
   }, [derived]);
+
+  const incomingByActivity = useMemo(() => {
+    if (!data) return new Map();
+    return activityIncomingLinksMap(
+      data.activities,
+      data.dependencies,
+      derived?.activities,
+    );
+  }, [data?.activities, data?.dependencies, derived?.activities]);
+
+  const activityOptions = useMemo(() => {
+    if (!data) return [] as PdmActivity[];
+    return data.activities;
+  }, [data?.activities]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -264,14 +278,14 @@ export function ScheduleEditorPage() {
     }
   }, [data, derived?.pdmError, projectId, replaceData]);
 
-  // Auto-save ~1.2s after the last edit while preparing the schedule.
+  // Auto-save ~2s after the last edit so dropdown changes stay responsive.
   useEffect(() => {
     if (!canEdit || !data || !dirty || loading || !autoSaveReady.current) return;
     if (derived?.pdmError) return;
 
     const timer = window.setTimeout(() => {
       void handleSave({ silent: true });
-    }, 1200);
+    }, 2000);
 
     return () => window.clearTimeout(timer);
   }, [canEdit, data, dirty, loading, derived?.pdmError, handleSave]);
@@ -499,7 +513,10 @@ export function ScheduleEditorPage() {
                   </thead>
                   <tbody>
                     {data.activities.map((a) => {
-                      const link = activityIncomingLink(a.id, data.activities, data.dependencies);
+                      const link = incomingByActivity.get(a.id) ?? {
+                        type: 'Independent' as const,
+                        to: 'Independent',
+                      };
                       const scheduled = scheduledById.get(a.id);
                       const computedEs = scheduled?.es ?? a.es ?? 0;
                       const displayDuration = a.extendToEnd
@@ -703,7 +720,7 @@ export function ScheduleEditorPage() {
                       <DependencyRow
                         key={d.id}
                         dep={d}
-                        activities={data.activities}
+                        activities={activityOptions}
                         onPatch={updateDependency}
                         onRemove={removeDependency}
                       />

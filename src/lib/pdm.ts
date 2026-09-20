@@ -287,46 +287,87 @@ export function activityIncomingLink(
   activityId: string,
   activities: PdmActivity[],
   dependencies: PdmDependency[],
+  scheduledActivities?: PdmActivity[],
 ): ActivityIncomingLink {
-  const incoming = dependencies.filter((d) => d.toId === activityId);
-  if (incoming.length === 0) {
-    return { type: 'Independent', to: 'Independent' };
-  }
-
-  const scheduled = calculatePdmSchedule(activities, dependencies);
-  const act = scheduled.find((a) => a.id === activityId);
-  const byId = new Map(scheduled.map((a) => [a.id, a]));
-  const numberById = new Map(activities.map((a) => [a.id, a.number]));
-
-  let driving: PdmDependency | null = null;
-  let bestConstraint = -Infinity;
-
-  for (const dep of incoming) {
-    const pred = byId.get(dep.fromId);
-    if (!pred) continue;
-    const constraint = requiredSuccessorEs(
-      dep.type,
-      pred.es ?? 0,
-      pred.ef ?? 0,
-      act?.duration ?? 1,
-      lagOf(dep),
-    );
-    if (constraint > bestConstraint) {
-      bestConstraint = constraint;
-      driving = dep;
+  return (
+    activityIncomingLinksMap(activities, dependencies, scheduledActivities).get(activityId) ?? {
+      type: 'Independent',
+      to: 'Independent',
     }
+  );
+}
+
+/**
+ * Build Type/TO for every activity in one pass.
+ * Runs the forward/backward schedule at most once (only when some activity has multiple predecessors).
+ */
+export function activityIncomingLinksMap(
+  activities: PdmActivity[],
+  dependencies: PdmDependency[],
+  scheduledActivities?: PdmActivity[],
+): Map<string, ActivityIncomingLink> {
+  const incomingByTo = new Map<string, PdmDependency[]>();
+  for (const dep of dependencies) {
+    if (!incomingByTo.has(dep.toId)) incomingByTo.set(dep.toId, []);
+    incomingByTo.get(dep.toId)!.push(dep);
   }
 
-  if (!driving) {
-    return { type: 'Independent', to: 'Independent' };
-  }
+  const numberById = new Map(activities.map((a) => [a.id, a.number]));
+  const needsSchedule = [...incomingByTo.values()].some((list) => list.length > 1);
+  const scheduled =
+    needsSchedule || scheduledActivities
+      ? (scheduledActivities ?? calculatePdmSchedule(activities, dependencies))
+      : null;
+  const byId = scheduled ? new Map(scheduled.map((a) => [a.id, a])) : null;
 
-  return {
-    type: driving.type,
-    to: numberById.get(driving.fromId) ?? '—',
-    fromId: driving.fromId,
-    lag: lagOf(driving),
-  };
+  const map = new Map<string, ActivityIncomingLink>();
+  for (const act of activities) {
+    const incoming = incomingByTo.get(act.id) ?? [];
+    if (incoming.length === 0) {
+      map.set(act.id, { type: 'Independent', to: 'Independent' });
+      continue;
+    }
+    if (incoming.length === 1) {
+      const driving = incoming[0];
+      map.set(act.id, {
+        type: driving.type,
+        to: numberById.get(driving.fromId) ?? '—',
+        fromId: driving.fromId,
+        lag: lagOf(driving),
+      });
+      continue;
+    }
+
+    const scheduledAct = byId?.get(act.id);
+    let driving: PdmDependency | null = null;
+    let bestConstraint = -Infinity;
+    for (const dep of incoming) {
+      const pred = byId?.get(dep.fromId);
+      if (!pred) continue;
+      const constraint = requiredSuccessorEs(
+        dep.type,
+        pred.es ?? 0,
+        pred.ef ?? 0,
+        scheduledAct?.duration ?? act.duration ?? 1,
+        lagOf(dep),
+      );
+      if (constraint > bestConstraint) {
+        bestConstraint = constraint;
+        driving = dep;
+      }
+    }
+    if (!driving) {
+      map.set(act.id, { type: 'Independent', to: 'Independent' });
+      continue;
+    }
+    map.set(act.id, {
+      type: driving.type,
+      to: numberById.get(driving.fromId) ?? '—',
+      fromId: driving.fromId,
+      lag: lagOf(driving),
+    });
+  }
+  return map;
 }
 
 /**
