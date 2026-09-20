@@ -11,10 +11,19 @@ interface ProjectSelectProps {
   onChange: (value: string) => void;
   disabled?: boolean;
   className?: string;
+  /** Shown when the current id is not in the loaded list. */
+  fallbackLabel?: string;
 }
 
-export function ProjectSelect({ value, onChange, disabled, className }: ProjectSelectProps) {
+export function ProjectSelect({
+  value,
+  onChange,
+  disabled,
+  className,
+  fallbackLabel,
+}: ProjectSelectProps) {
   const [projects, setProjects] = useState<ProjectRow[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
@@ -23,7 +32,8 @@ export function ProjectSelect({ value, onChange, disabled, className }: ProjectS
   useEffect(() => {
     listProjects()
       .then((res) => setProjects(res.projects.length ? res.projects : FALLBACK_PROJECTS))
-      .catch(() => setProjects(FALLBACK_PROJECTS));
+      .catch(() => setProjects(FALLBACK_PROJECTS))
+      .finally(() => setLoaded(true));
   }, []);
 
   useEffect(() => {
@@ -71,7 +81,13 @@ export function ProjectSelect({ value, onChange, disabled, className }: ProjectS
         onClick={() => setOpen((o) => !o)}
         className="flex w-full items-center justify-between gap-2 rounded-lg border border-border bg-white px-3.5 py-2.5 text-left text-sm text-text shadow-sm transition focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed disabled:bg-surface-muted disabled:opacity-70"
       >
-        <span className="truncate">{selected ? selected.name : 'Select project'}</span>
+        <span className="truncate">
+          {selected
+            ? selected.name
+            : !loaded
+              ? 'Loading projects…'
+              : fallbackLabel?.trim() || 'Select project'}
+        </span>
         <span className="shrink-0 text-xs text-text-muted">▾</span>
       </button>
 
