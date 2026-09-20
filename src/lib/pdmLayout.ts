@@ -18,16 +18,58 @@ export const PDM_END_HALF_W = PDM_START_HALF_W;
 export const PDM_END_HALF_H = PDM_START_HALF_H;
 export const PDM_BUS_STUB = 14;
 
+const PDM_NODE_HALF_H_DEFAULT = 48;
+
+function samePoint(a: { x: number; y: number }, b: { x: number; y: number }): boolean {
+  return Math.abs(a.x - b.x) < 1 && Math.abs(a.y - b.y) < 1;
+}
+
+/** Orthogonal segment vs node boxes (padding keeps lines off the border). */
+function orthoHitsNode(
+  xA: number,
+  yA: number,
+  xB: number,
+  yB: number,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  obstacles: { x: number; y: number }[],
+  nodeHalfW: number,
+  nodeHalfH: number,
+): boolean {
+  const minX = Math.min(xA, xB);
+  const maxX = Math.max(xA, xB);
+  const minY = Math.min(yA, yB);
+  const maxY = Math.max(yA, yB);
+  const pad = 6;
+  for (const n of obstacles) {
+    if (samePoint(n, from) || samePoint(n, to)) continue;
+    const nx1 = n.x - nodeHalfW - pad;
+    const nx2 = n.x + nodeHalfW + pad;
+    const ny1 = n.y - nodeHalfH - pad;
+    const ny2 = n.y + nodeHalfH + pad;
+    if (maxX < nx1 || minX > nx2 || maxY < ny1 || minY > ny2) continue;
+    return true;
+  }
+  return false;
+}
+
+function elbow(x1: number, y1: number, midX: number, x2: number, y2: number): string {
+  return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
+}
+
 /**
  * Elbow from predecessor → successor.
- * Same row: straight. Successor to the right: run along the predecessor row,
- * then turn up/down beside the successor (do not cut vertically through other nodes).
- * Successor left/below: short stub, then vertical near the predecessor.
+ * Same row: straight.
+ * Successor to the right, or a near-predecessor vertical would run along another
+ * node's row: stay on the predecessor row, then turn up/down beside the successor.
+ * Example: 6 → 10 must not join 5 → 10.
  */
 export function dependencyEdge(
   from: { x: number; y: number },
   to: { x: number; y: number },
   nodeHalfW: number = PDM_ACTIVITY_HALF_W,
+  obstacles: { x: number; y: number }[] = [],
+  nodeHalfH: number = PDM_NODE_HALF_H_DEFAULT,
 ): { d: string } {
   const x1 = from.x + nodeHalfW;
   const y1 = from.y;
@@ -36,9 +78,34 @@ export function dependencyEdge(
   if (Math.abs(y1 - y2) < 8 && x2 > x1) {
     return { d: `M ${x1} ${y1} L ${x2} ${y2}` };
   }
+
   const stub = 18;
-  const midX = x2 > x1 + stub ? x2 - stub : x1 + stub;
-  return { d: `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}` };
+  const farMidX = x2 > x1 ? Math.max(x1 + stub, x2 - stub) : x1 + stub;
+  const nearMidX = x1 + stub;
+
+  const sourceRowHits = orthoHitsNode(
+    x1, y1, farMidX, y1, from, to, obstacles, nodeHalfW, nodeHalfH,
+  ) || orthoHitsNode(
+    farMidX, y1, farMidX, y2, from, to, obstacles, nodeHalfW, nodeHalfH,
+  );
+  const targetRowHits = orthoHitsNode(
+    nearMidX, y2, x2, y2, from, to, obstacles, nodeHalfW, nodeHalfH,
+  ) || orthoHitsNode(
+    nearMidX, y1, nearMidX, y2, from, to, obstacles, nodeHalfW, nodeHalfH,
+  );
+
+  const successorToRight = to.x > from.x + 4;
+  if (successorToRight || targetRowHits) {
+    if (!sourceRowHits) {
+      return { d: elbow(x1, y1, farMidX, x2, y2) };
+    }
+    const clearY = y1 + (y2 > y1 ? nodeHalfH + 16 : -(nodeHalfH + 16));
+    return {
+      d: `M ${x1} ${y1} L ${x1 + stub} ${y1} L ${x1 + stub} ${clearY} L ${farMidX} ${clearY} L ${farMidX} ${y2} L ${x2} ${y2}`,
+    };
+  }
+
+  return { d: elbow(x1, y1, nearMidX, x2, y2) };
 }
 
 /** Column x — index 0 is first ES column after the Start node. */
