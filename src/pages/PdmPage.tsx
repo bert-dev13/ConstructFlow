@@ -262,13 +262,7 @@ export function PdmPage() {
                 const isCritical =
                   mainChainIds.has(dep.fromId) && mainChainIds.has(dep.toId);
                 const stroke = isCritical ? '#dc2626' : '#9ca89f';
-                const edge = dependencyEdge(
-                  from,
-                  to,
-                  PDM_NODE_HALF_W,
-                  Object.values(positions),
-                  PDM_NODE_HALF_H,
-                );
+                const edge = dependencyEdge(from, to, PDM_NODE_HALF_W);
                 const lagText = formatDependencyLag(dep.lag);
                 return (
                   <g key={dep.id}>

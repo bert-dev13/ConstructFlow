@@ -18,114 +18,27 @@ export const PDM_END_HALF_W = PDM_START_HALF_W;
 export const PDM_END_HALF_H = PDM_START_HALF_H;
 export const PDM_BUS_STUB = 14;
 
-const PDM_NODE_HALF_H_DEFAULT = 48;
-
-function samePoint(a: { x: number; y: number }, b: { x: number; y: number }): boolean {
-  return Math.abs(a.x - b.x) < 1 && Math.abs(a.y - b.y) < 1;
-}
-
-/** Orthogonal segment vs node boxes (padding keeps lines off the border). */
-function orthoHitsNode(
-  xA: number,
-  yA: number,
-  xB: number,
-  yB: number,
-  from: { x: number; y: number },
-  to: { x: number; y: number },
-  obstacles: { x: number; y: number }[],
-  nodeHalfW: number,
-  nodeHalfH: number,
-): boolean {
-  const minX = Math.min(xA, xB);
-  const maxX = Math.max(xA, xB);
-  const minY = Math.min(yA, yB);
-  const maxY = Math.max(yA, yB);
-  const pad = 20;
-  for (const n of obstacles) {
-    if (samePoint(n, from) || samePoint(n, to)) continue;
-    const nx1 = n.x - nodeHalfW - pad;
-    const nx2 = n.x + nodeHalfW + pad;
-    const ny1 = n.y - nodeHalfH - pad;
-    const ny2 = n.y + nodeHalfH + pad;
-    if (maxX < nx1 || minX > nx2 || maxY < ny1 || minY > ny2) continue;
-    return true;
-  }
-  return false;
-}
-
-function pathHits(
-  pts: Array<[number, number]>,
-  from: { x: number; y: number },
-  to: { x: number; y: number },
-  obstacles: { x: number; y: number }[],
-  nodeHalfW: number,
-  nodeHalfH: number,
-): boolean {
-  for (let i = 0; i < pts.length - 1; i++) {
-    if (
-      orthoHitsNode(
-        pts[i][0],
-        pts[i][1],
-        pts[i + 1][0],
-        pts[i + 1][1],
-        from,
-        to,
-        obstacles,
-        nodeHalfW,
-        nodeHalfH,
-      )
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function dFrom(pts: Array<[number, number]>): string {
-  return pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p[0]} ${p[1]}`).join(' ');
-}
-
 /**
- * Orthogonal links that do not pass through other activities.
- * Prefer: along the predecessor row through empty space, then turn into the successor
- * (6 → 10, 7 → 8). Never climb a stacked column (4 above 10).
+ * Elbow from predecessor → successor.
+ * Same row: straight. Successor to the right: run along the predecessor row,
+ * then turn up/down beside the successor (do not cut vertically through other nodes).
+ * Successor left/below: short stub, then vertical near the predecessor.
  */
 export function dependencyEdge(
   from: { x: number; y: number },
   to: { x: number; y: number },
   nodeHalfW: number = PDM_ACTIVITY_HALF_W,
-  obstacles: { x: number; y: number }[] = [],
-  nodeHalfH: number = PDM_NODE_HALF_H_DEFAULT,
 ): { d: string } {
   const x1 = from.x + nodeHalfW;
   const y1 = from.y;
   const x2 = to.x - nodeHalfW;
   const y2 = to.y;
-  const stub = 18;
-  const gapX = x2 > x1 ? (x1 + x2) / 2 : x1 + stub;
-  const aroundX = Math.max(from.x, to.x) + nodeHalfW + stub;
-  const rightIn = to.x + nodeHalfW;
-
-  const routes: Array<Array<[number, number]>> = [];
   if (Math.abs(y1 - y2) < 8 && x2 > x1) {
-    routes.push([[x1, y1], [x2, y2]]);
-    routes.push([
-      [x1, y1],
-      [x1, y1 + nodeHalfH + 16],
-      [x2, y1 + nodeHalfH + 16],
-      [x2, y2],
-    ]);
-  } else if (to.x > from.x) {
-    routes.push([[x1, y1], [gapX, y1], [gapX, y2], [x2, y2]]);
-    routes.push([[x1, y1], [x2 - stub, y1], [x2 - stub, y2], [x2, y2]]);
-    routes.push([[x1, y1], [aroundX, y1], [aroundX, y2], [rightIn, y2]]);
-  } else {
-    routes.push([[x1, y1], [x1 + stub, y1], [x1 + stub, y2], [x2, y2]]);
-    routes.push([[x1, y1], [aroundX, y1], [aroundX, y2], [rightIn, y2]]);
+    return { d: `M ${x1} ${y1} L ${x2} ${y2}` };
   }
-
-  const clear = routes.find((pts) => !pathHits(pts, from, to, obstacles, nodeHalfW, nodeHalfH));
-  return { d: dFrom(clear ?? routes[0]) };
+  const stub = 18;
+  const midX = x2 > x1 + stub ? x2 - stub : x1 + stub;
+  return { d: `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}` };
 }
 
 /** Column x — index 0 is first ES column after the Start node. */
