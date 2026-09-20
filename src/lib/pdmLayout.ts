@@ -40,7 +40,7 @@ function orthoHitsNode(
   const maxX = Math.max(xA, xB);
   const minY = Math.min(yA, yB);
   const maxY = Math.max(yA, yB);
-  const pad = 6;
+  const pad = 20;
   for (const n of obstacles) {
     if (samePoint(n, from) || samePoint(n, to)) continue;
     const nx1 = n.x - nodeHalfW - pad;
@@ -53,16 +53,42 @@ function orthoHitsNode(
   return false;
 }
 
-function elbow(x1: number, y1: number, midX: number, x2: number, y2: number): string {
-  return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
+function pathHits(
+  pts: Array<[number, number]>,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  obstacles: { x: number; y: number }[],
+  nodeHalfW: number,
+  nodeHalfH: number,
+): boolean {
+  for (let i = 0; i < pts.length - 1; i++) {
+    if (
+      orthoHitsNode(
+        pts[i][0],
+        pts[i][1],
+        pts[i + 1][0],
+        pts[i + 1][1],
+        from,
+        to,
+        obstacles,
+        nodeHalfW,
+        nodeHalfH,
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function dFrom(pts: Array<[number, number]>): string {
+  return pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p[0]} ${p[1]}`).join(' ');
 }
 
 /**
- * Elbow from predecessor → successor.
- * Same row: straight.
- * Successor to the right, or a near-predecessor vertical would run along another
- * node's row: stay on the predecessor row, then turn up/down beside the successor.
- * Example: 6 → 10 must not join 5 → 10.
+ * Orthogonal links that do not pass through other activities.
+ * Prefer: along the predecessor row through empty space, then turn into the successor
+ * (6 → 10, 7 → 8). Never climb a stacked column (4 above 10).
  */
 export function dependencyEdge(
   from: { x: number; y: number },
@@ -75,58 +101,31 @@ export function dependencyEdge(
   const y1 = from.y;
   const x2 = to.x - nodeHalfW;
   const y2 = to.y;
-  if (Math.abs(y1 - y2) < 8 && x2 > x1) {
-    return { d: `M ${x1} ${y1} L ${x2} ${y2}` };
-  }
-
   const stub = 18;
-  const columnMates = obstacles.filter(
-    (n) => !samePoint(n, from) && !samePoint(n, to) && Math.abs(n.x - to.x) < 8,
-  );
-  const fromBelow = y1 > y2 + 8;
-  const fromAbove = y2 > y1 + 8;
-  if (columnMates.length > 0 && (fromBelow || fromAbove)) {
-    const between = columnMates.some((n) =>
-      fromBelow ? n.y < y1 && n.y > y2 : n.y > y1 && n.y < y2,
-    );
-    if (between) {
-      // e.g. 6 → 4 with 10 stacked under 4: go around the column, do not climb 4's left edge.
-      const bypassX = to.x + nodeHalfW + stub;
-      const inX = to.x + nodeHalfW;
-      return { d: `M ${x1} ${y1} L ${bypassX} ${y1} L ${bypassX} ${y2} L ${inX} ${y2}` };
-    }
-    // e.g. 6 → 10 with 4 stacked above 10: enter 10 from below, not the 4/10 left spine.
-    const attachX = to.x;
-    const attachY = fromBelow ? to.y + nodeHalfH : to.y - nodeHalfH;
-    return { d: `M ${x1} ${y1} L ${attachX} ${y1} L ${attachX} ${attachY}` };
+  const gapX = x2 > x1 ? (x1 + x2) / 2 : x1 + stub;
+  const aroundX = Math.max(from.x, to.x) + nodeHalfW + stub;
+  const rightIn = to.x + nodeHalfW;
+
+  const routes: Array<Array<[number, number]>> = [];
+  if (Math.abs(y1 - y2) < 8 && x2 > x1) {
+    routes.push([[x1, y1], [x2, y2]]);
+    routes.push([
+      [x1, y1],
+      [x1, y1 + nodeHalfH + 16],
+      [x2, y1 + nodeHalfH + 16],
+      [x2, y2],
+    ]);
+  } else if (to.x > from.x) {
+    routes.push([[x1, y1], [gapX, y1], [gapX, y2], [x2, y2]]);
+    routes.push([[x1, y1], [x2 - stub, y1], [x2 - stub, y2], [x2, y2]]);
+    routes.push([[x1, y1], [aroundX, y1], [aroundX, y2], [rightIn, y2]]);
+  } else {
+    routes.push([[x1, y1], [x1 + stub, y1], [x1 + stub, y2], [x2, y2]]);
+    routes.push([[x1, y1], [aroundX, y1], [aroundX, y2], [rightIn, y2]]);
   }
 
-  const farMidX = x2 > x1 ? Math.max(x1 + stub, x2 - stub) : x1 + stub;
-  const nearMidX = x1 + stub;
-
-  const sourceRowHits = orthoHitsNode(
-    x1, y1, farMidX, y1, from, to, obstacles, nodeHalfW, nodeHalfH,
-  ) || orthoHitsNode(
-    farMidX, y1, farMidX, y2, from, to, obstacles, nodeHalfW, nodeHalfH,
-  );
-  const targetRowHits = orthoHitsNode(
-    nearMidX, y2, x2, y2, from, to, obstacles, nodeHalfW, nodeHalfH,
-  ) || orthoHitsNode(
-    nearMidX, y1, nearMidX, y2, from, to, obstacles, nodeHalfW, nodeHalfH,
-  );
-
-  const successorToRight = to.x > from.x + 4;
-  if (successorToRight || targetRowHits) {
-    if (!sourceRowHits) {
-      return { d: elbow(x1, y1, farMidX, x2, y2) };
-    }
-    const clearY = y1 + (y2 > y1 ? nodeHalfH + 16 : -(nodeHalfH + 16));
-    return {
-      d: `M ${x1} ${y1} L ${x1 + stub} ${y1} L ${x1 + stub} ${clearY} L ${farMidX} ${clearY} L ${farMidX} ${y2} L ${x2} ${y2}`,
-    };
-  }
-
-  return { d: elbow(x1, y1, nearMidX, x2, y2) };
+  const clear = routes.find((pts) => !pathHits(pts, from, to, obstacles, nodeHalfW, nodeHalfH));
+  return { d: dFrom(clear ?? routes[0]) };
 }
 
 /** Column x — index 0 is first ES column after the Start node. */
