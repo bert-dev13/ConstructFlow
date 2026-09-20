@@ -35,7 +35,7 @@ td.right { text-align: right; }
 
 {{swa_letterhead}}
 
-<h3>STATEMENT OF WORK ACCOMPLISHED</h3>
+<h3>STATEMENT OF WORK ACCOMPLISHMENT</h3>
 <div class="meta">
   As of <u>{{report_date}}</u><br>
   <strong>{{project_name}}</strong><br>
@@ -47,16 +47,18 @@ td.right { text-align: right; }
     <tr>
       <th rowspan="2">ITEM NO.</th>
       <th rowspan="2">DESCRIPTION OF WORK</th>
-      <th rowspan="2">UNIT</th>
-      <th rowspan="2">UNIT PRICE</th>
       <th rowspan="2">PROGRAMMED QUANTITY</th>
+      <th rowspan="2">UNIT PRICE</th>
+      <th rowspan="2">UNIT</th>
       <th rowspan="2">CONTRACT AMOUNT</th>
       <th rowspan="2">WEIGHT %</th>
+      {{revised_header_group}}
       <th colspan="3">ACCOMPLISHMENT</th>
       <th rowspan="2">WEIGHT %</th>
       <th rowspan="2">REMARKS/STATUS</th>
     </tr>
     <tr>
+      {{revised_subheader}}
       <th>PREVIOUS</th>
       <th>THIS PERIOD</th>
       <th>TO DATE</th>
@@ -68,6 +70,7 @@ td.right { text-align: right; }
       <td colspan="5">TOTAL</td>
       <td class="right">{{total_contract_amount}}</td>
       <td class="right">{{total_weight_pct}}</td>
+      {{revised_total_cells}}
       <td colspan="3"></td>
       <td class="right">{{total_accomplishment_weight}}</td>
       <td></td>
@@ -79,8 +82,8 @@ td.right { text-align: right; }
   <tr><td class="label">% THIS ACCOMPLISHMENT</td><td class="val">{{pct_this_accomplishment}}%</td></tr>
   <tr><td class="label">TOTAL PROJECT COST</td><td class="val">P {{total_project_cost}}</td></tr>
   <tr><td class="label">TOTAL THIS ACCOMPLISHMENT</td><td class="val">P {{total_this_accomplishment}}</td></tr>
-  <tr><td class="label">LESS ADVANCE PAYMENT</td><td class="val">P {{advance_payment}}</td></tr>
-  <tr><td class="label">TOTAL THIS VOUCHER</td><td class="val">P {{total_voucher}}</td></tr>
+  <tr><td class="label">LESS: {{less_reason}}</td><td class="val">P {{less_amount}}</td></tr>
+  <tr><td class="label">TOTAL VOUCHER</td><td class="val">P {{total_voucher}}</td></tr>
 </table>
 
 <div class="signatures">

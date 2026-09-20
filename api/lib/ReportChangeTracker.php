@@ -45,7 +45,7 @@ class ReportChangeTracker
                 if ($b === null || $a === null) {
                     continue;
                 }
-                foreach (['itemNo', 'description', 'unit', 'unitPrice', 'programmedQty'] as $f) {
+                foreach (['itemNo', 'description', 'unit', 'unitPrice', 'programmedQty', 'revisedQty', 'previous', 'thisPeriod'] as $f) {
                     $old = isset($b[$f]) ? trim((string)$b[$f]) : '';
                     $new = isset($a[$f]) ? trim((string)$a[$f]) : '';
                     if ($old !== $new) {

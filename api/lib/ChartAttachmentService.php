@@ -80,13 +80,15 @@ HTML;
     {
         $pdm = ScheduleSync::loadPdmResult($pdo, $projectId);
         $scheduled = $pdm['activities'] ?? [];
-        $duration = max(1, (int)($pdm['projectDuration'] ?? 0));
-        $startDate = ScheduleSync::projectStartDate($pdo, $projectId);
+        $pdmDuration = max(1, (int)($pdm['projectDuration'] ?? 0));
+        $timeline = ScheduleSync::projectTimeline($pdo, $projectId, $pdmDuration);
+        $startDate = $timeline['start_date'];
+        $endDate = $timeline['end_date'];
         $reportActuals = ScheduleSync::actualPointsFromReports($pdo, $projectId);
         $preserved = ScheduleSync::loadPreservedActuals($pdo, $projectId);
         $actuals = $reportActuals + $preserved;
         $rows = $scheduled !== []
-            ? ScheduleSync::sCurveFromPdm($scheduled, $startDate, $duration, $actuals)
+            ? ScheduleSync::sCurveFromPdm($scheduled, $startDate, $pdmDuration, $actuals, $endDate)
             : [];
         $body = '<table><thead><tr><th>Date</th><th>Target Plan %</th><th>Actual %</th><th>Label</th></tr></thead><tbody>';
         if (!$rows) {

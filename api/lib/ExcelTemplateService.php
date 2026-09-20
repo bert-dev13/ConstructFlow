@@ -46,15 +46,23 @@ class ExcelTemplateService
         $spreadsheet = IOFactory::load($template);
 
         if ($reportType === 'SWA' && $lineItems) {
-            $calc = WorkItemCalculator::compute($lineItems, (float)($data['advance_payment'] ?? 0));
+            $less = SwaStewaLinkage::lessAmount($data);
+            $calc = WorkItemCalculator::compute(
+                $lineItems,
+                $less,
+                SwaStewaLinkage::showRevisedQuantity($data),
+            );
             $data = array_merge($data, $this->flattenTotals($calc['totals']));
+            $data['less_reason'] = SwaStewaLinkage::lessReason($data);
+            $data['less_amount'] = WorkItemCalculator::formatMoney($less);
+            $data['advance_payment'] = $data['less_amount'];
             $this->fillSwaItemRows($spreadsheet, $calc['items']);
         }
 
         if ($reportType === 'STEWA') {
             $actual = (float)($data['percent_actual'] ?? 0);
             $planned = (float)($data['percent_planned'] ?? 0);
-            $data['slippage'] = round($planned - $actual, 2);
+            $data['slippage'] = SwaStewaLinkage::stewaSlippage($actual, $planned);
         }
 
         $this->replacePlaceholders($spreadsheet, $data);
@@ -161,6 +169,9 @@ class ExcelTemplateService
             'programmed_qty' => $item['programmedQty'] ?? $item['programmed_qty'] ?? '',
             'contract_amount' => WorkItemCalculator::formatMoney((float)($item['contractAmount'] ?? 0)),
             'weight_pct' => number_format((float)($item['weightPct'] ?? 0), 2),
+            'revised_qty' => $item['revisedQty'] ?? $item['revised_qty'] ?? '',
+            'revised_amount' => WorkItemCalculator::formatMoney((float)($item['revisedAmount'] ?? 0)),
+            'revised_weight_pct' => number_format((float)($item['revisedWeightPct'] ?? 0), 2),
             'previous' => $item['previous'] ?? '',
             'this_period' => $item['thisPeriod'] ?? $item['this_period'] ?? '',
             'to_date' => $item['toDate'] ?? $item['to_date'] ?? '',

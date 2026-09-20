@@ -16,6 +16,7 @@ use Peo\QrCodeService;
 use Peo\ReportChangeTracker;
 use Peo\ReportTemplateRenderer;
 use Peo\ScheduleSync;
+use Peo\SwaStewaLinkage;
 use Peo\WorkItemCalculator;
 
 set_exception_handler(static function (Throwable $e): void {
@@ -165,14 +166,21 @@ function getReport(PDO $pdo, string $idOrNumber): ?array
     return $row ?: null;
 }
 
-function syncScurveFromReports(PDO $pdo, int $projectId): void
+function syncScurveFromReports(PDO $pdo, int $projectId, ?string $reportLabel = null): void
 {
     try {
         $pdm = ScheduleSync::loadPdmResult($pdo, $projectId);
         if (($pdm['activities'] ?? []) === []) {
             return;
         }
-        ScheduleSync::syncDerivedViews($pdo, $projectId, $pdm);
+        ScheduleSync::syncDerivedViews(
+            $pdo,
+            $projectId,
+            $pdm,
+            [],
+            'report_progress',
+            $reportLabel ?? 'Progress report approved',
+        );
     } catch (\Throwable) {
         // Non-fatal
     }
@@ -269,7 +277,7 @@ function generateOfficialPdf(array $report): array
         default => $renderer->renderSwa(
             $data,
             $report['line_items'] ?? [],
-            (float)($report['report_data']['advance_payment'] ?? 0),
+            SwaStewaLinkage::lessAmount($report['report_data'] ?? []),
             $qrUri,
         ),
     };
@@ -323,6 +331,30 @@ if ($method === 'GET') {
     if ($action === 'templates' || isset($_GET['templates'])) {
         Auth::requireRoles(['engineer_4']);
         jsonResponse(['templates' => getTemplateStatus()]);
+    }
+
+    if ($action === 'stewa_from_swa') {
+        Auth::requireAuth();
+        $projectId = (int)($_GET['project_id'] ?? 0);
+        $dateRaw = (string)($_GET['report_date'] ?? '');
+        if (!$projectId || $dateRaw === '') {
+            jsonError('project_id and report_date required');
+        }
+        $date = ScheduleSync::parseReportDate($dateRaw);
+        if ($date === null) {
+            jsonError('Invalid report_date');
+        }
+        $fromSwa = SwaStewaLinkage::stewaPercentsFromSwa($pdo, $projectId, $date);
+        $actual = $fromSwa['percent_actual'];
+        $planned = $fromSwa['percent_planned'];
+        jsonResponse([
+            'percent_actual' => $actual,
+            'percent_planned' => $planned,
+            'swa_report_number' => $fromSwa['swa_report_number'],
+            'slippage' => ($actual !== null && $planned !== null)
+                ? SwaStewaLinkage::stewaSlippage($actual, $planned)
+                : null,
+        ]);
     }
 
     if ($action === 'revisions' && isset($_GET['report_id'])) {
@@ -567,13 +599,10 @@ if ($method === 'POST') {
         }
 
         if ($type === 'SWA' && $lineItems) {
-            $calc = WorkItemCalculator::compute($lineItems, (float)($reportData['advance_payment'] ?? 0));
-            $reportData['computed_totals'] = $calc['totals'];
+            $reportData = SwaStewaLinkage::enrichSwaReportData($pdo, $projectId, $reportData, $lineItems);
         }
         if ($type === 'STEWA') {
-            $actual = (float)($reportData['percent_actual'] ?? 0);
-            $planned = (float)($reportData['percent_planned'] ?? 0);
-            $reportData['slippage'] = round($planned - $actual, 2);
+            $reportData = SwaStewaLinkage::applyStewaFromSwa($pdo, $projectId, $reportData);
         }
 
         if ($reportId) {
@@ -606,10 +635,6 @@ if ($method === 'POST') {
             )->execute([json_encode($reportData), json_encode($lineItems), json_encode($contractorChanges), $reportId]);
             audit($pdo, $reportId, $createdBy, 'updated', ['changed_fields' => count($contractorChanges)]);
             $report = getReport($pdo, (string)$reportId);
-
-            if (in_array($type, ['SWA', 'STEWA'], true)) {
-                syncScurveFromReports($pdo, $projectId);
-            }
         } else {
             $reportNumber = nextReportNumber($pdo, $type, $reportData['report_date'] ?? null);
             $public = publicUrl($reportNumber);
@@ -663,7 +688,7 @@ if ($method === 'POST') {
                 default => $renderer->renderSwa(
                     $data,
                     $lineItems,
-                    (float)($reportData['advance_payment'] ?? 0),
+                    SwaStewaLinkage::lessAmount($reportData),
                     $qrUri,
                     false,
                 ),
@@ -734,9 +759,6 @@ if ($method === 'POST') {
         $pdo->prepare("UPDATE swa_stewa_reports SET status='pending_review', updated_at=NOW() WHERE id=?")
             ->execute([$reportId]);
         audit($pdo, $reportId, Auth::actorId(), 'submitted');
-        if (in_array($report['report_type'], ['SWA', 'STEWA'], true)) {
-            syncScurveFromReports($pdo, (int)$report['project_id']);
-        }
         $report = getReport($pdo, (string)$reportId);
         try {
             $preview = generateOfficialPdf($report);
@@ -885,8 +907,12 @@ if ($method === 'POST') {
         $pdo->prepare("UPDATE swa_stewa_reports SET status='generated', pdf_file=?, qr_code=?, report_data=?, generated_at=NOW() WHERE id=?")
             ->execute([$pdfRel, $report['public_url'], json_encode($reportData), $reportId]);
         audit($pdo, $reportId, $actorId, 'pdf_generated', $files);
-        if (in_array($report['report_type'], ['SWA', 'STEWA'], true)) {
-            syncScurveFromReports($pdo, (int)$report['project_id']);
+        if (in_array($report['report_type'], ['SWA', 'STEWA', 'IAR'], true)) {
+            syncScurveFromReports(
+                $pdo,
+                (int)$report['project_id'],
+                (string)$report['report_type'] . ' · ' . (string)$report['report_number'],
+            );
         }
         try {
             mailFinalApprovedPackage($pdo, $reportId, $pdfRel, $extraAttachments);

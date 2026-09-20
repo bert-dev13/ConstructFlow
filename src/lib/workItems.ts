@@ -5,6 +5,8 @@ export interface WorkItem {
   unit: string;
   unitPrice: number;
   programmedQty: number;
+  /** Optional revised quantity — used when showRevisedQuantity is on. */
+  revisedQty?: number;
   previous: number;
   thisPeriod: number;
   remarks: string;
@@ -13,6 +15,8 @@ export interface WorkItem {
 export interface WorkItemComputed extends WorkItem {
   contractAmount: number;
   weightPct: number;
+  revisedAmount: number;
+  revisedWeightPct: number;
   toDate: number;
   accomplishmentWeightPct: number;
   status: string;
@@ -21,37 +25,69 @@ export interface WorkItemComputed extends WorkItem {
 export interface SwaTotals {
   totalContractAmount: number;
   totalWeightPct: number;
+  totalRevisedAmount: number;
+  totalRevisedWeightPct: number;
   totalToDateWeightPct: number;
   pctThisAccomplishment: number;
   totalThisAccomplishment: number;
   totalVoucher: number;
 }
 
+export function workItemRemarksStatus(accomplishmentWeightPct: number, plannedWeightPct: number): string {
+  if (accomplishmentWeightPct <= 0) return 'Not yet started.';
+  if (plannedWeightPct > 0 && Math.abs(accomplishmentWeightPct - plannedWeightPct) < 0.005) {
+    return 'COMPLETED.';
+  }
+  return 'ON-GOING.';
+}
+
 export function computeWorkItems(
   items: WorkItem[],
-  advancePayment = 0,
+  lessAmount = 0,
+  showRevised = false,
 ): { items: WorkItemComputed[]; totals: SwaTotals } {
   const totalContract = items.reduce(
     (sum, i) => sum + i.unitPrice * i.programmedQty,
     0,
   );
 
+  const totalRevised = showRevised
+    ? items.reduce((sum, i) => {
+        const rq = i.revisedQty ?? 0;
+        return sum + (rq > 0 ? i.unitPrice * rq : i.unitPrice * i.programmedQty);
+      }, 0)
+    : 0;
+
   const computed: WorkItemComputed[] = items.map((item) => {
     const contractAmount = item.unitPrice * item.programmedQty;
     const weightPct = totalContract > 0 ? (contractAmount / totalContract) * 100 : 0;
+    const revisedQty = item.revisedQty ?? 0;
+    const useRevised = showRevised && revisedQty > 0;
+    const revisedAmount = useRevised
+      ? item.unitPrice * revisedQty
+      : showRevised
+        ? contractAmount
+        : 0;
+    const revisedWeightPct =
+      showRevised && totalRevised > 0 ? (revisedAmount / totalRevised) * 100 : 0;
+
     const toDate = item.previous + item.thisPeriod;
+    const baseQty = useRevised ? revisedQty : item.programmedQty;
+    const plannedWeight = useRevised ? revisedWeightPct : weightPct;
     const accomplishmentWeightPct =
-      item.programmedQty > 0 ? (toDate / item.programmedQty) * weightPct : 0;
-    const pctComplete = item.programmedQty > 0 ? (toDate / item.programmedQty) * 100 : 0;
-    const status = pctComplete >= 100 ? 'COMPLETED' : pctComplete > 0 ? 'ON GOING' : '';
+      baseQty > 0 ? (toDate / baseQty) * plannedWeight : 0;
+    const status = workItemRemarksStatus(accomplishmentWeightPct, plannedWeight);
 
     return {
       ...item,
+      revisedQty: item.revisedQty ?? 0,
       contractAmount,
       weightPct,
+      revisedAmount,
+      revisedWeightPct,
       toDate,
       accomplishmentWeightPct,
-      status: item.remarks || status,
+      status,
     };
   });
 
@@ -68,16 +104,18 @@ export function computeWorkItems(
     totals: {
       totalContractAmount: totalContract,
       totalWeightPct: computed.reduce((s, i) => s + i.weightPct, 0),
+      totalRevisedAmount: computed.reduce((s, i) => s + i.revisedAmount, 0),
+      totalRevisedWeightPct: computed.reduce((s, i) => s + i.revisedWeightPct, 0),
       totalToDateWeightPct,
       pctThisAccomplishment,
       totalThisAccomplishment,
-      totalVoucher: totalThisAccomplishment - advancePayment,
+      totalVoucher: totalThisAccomplishment - lessAmount,
     },
   };
 }
 
 export function computeStewaSlippage(actual: number, planned: number): number {
-  return Math.round((planned - actual) * 100) / 100;
+  return Math.round((actual - planned) * 100) / 100;
 }
 
 export function formatMoney(n: number): string {
@@ -96,6 +134,7 @@ export function newWorkItem(): WorkItem {
     unit: '',
     unitPrice: 0,
     programmedQty: 0,
+    revisedQty: 0,
     previous: 0,
     thisPeriod: 0,
     remarks: '',

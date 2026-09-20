@@ -7,6 +7,7 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
 use Peo\Auth;
 use Peo\DatabaseSetup;
 use Peo\ProjectInfo;
+use Peo\ScheduleSync;
 
 $pdo = db();
 DatabaseSetup::ensureUsersAndProjects($pdo);
@@ -150,6 +151,30 @@ if ($method === 'PUT' || $method === 'PATCH') {
     ]);
 
     ProjectInfo::auditProjectUpdate($pdo, $id, Auth::actorId(), $before, $payload);
+
+    $datesChanged =
+        (string)($before['start_date'] ?? '') !== (string)($payload['start_date'] ?? '')
+        || (string)($before['planned_end_date'] ?? '') !== (string)($payload['planned_end_date'] ?? '');
+    if ($datesChanged) {
+        try {
+            DatabaseSetup::ensureScheduleTables($pdo);
+            DatabaseSetup::ensureSCurveTable($pdo);
+            $pdm = ScheduleSync::loadPdmResult($pdo, $id);
+            if (($pdm['activities'] ?? []) !== []) {
+                ScheduleSync::syncDerivedViews(
+                    $pdo,
+                    $id,
+                    $pdm,
+                    [],
+                    'project_dates',
+                    'Project start/end dates updated',
+                );
+            }
+        } catch (Throwable) {
+            // Project save already succeeded; S-curve refresh is best-effort.
+        }
+    }
+
     $project = ProjectInfo::fetch($pdo, $id);
     jsonResponse(['project' => formatProjectRow($project ?: [])]);
 }

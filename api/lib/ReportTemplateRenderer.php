@@ -325,19 +325,26 @@ class ReportTemplateRenderer
         return $html;
     }
 
-    public function renderSwa(array $data, array $lineItems, float $advancePayment, string $qrDataUri, bool $forPdf = true): string
+    public function renderSwa(array $data, array $lineItems, float $lessAmount, string $qrDataUri, bool $forPdf = true): string
     {
-        $calc = WorkItemCalculator::compute($lineItems, $advancePayment);
+        $showRevised = SwaStewaLinkage::showRevisedQuantity($data);
+        $calc = WorkItemCalculator::compute($lineItems, $lessAmount, $showRevised);
         $rows = '';
         foreach ($calc['items'] as $row) {
             $rows .= '<tr>';
             $rows .= '<td>' . htmlspecialchars($row['itemNo'] ?? '') . '</td>';
             $rows .= '<td class="left">' . htmlspecialchars($row['description'] ?? '') . '</td>';
-            $rows .= '<td>' . htmlspecialchars($row['unit'] ?? '') . '</td>';
-            $rows .= '<td class="right">' . WorkItemCalculator::formatMoney((float)$row['unitPrice']) . '</td>';
             $rows .= '<td class="right">' . number_format((float)$row['programmedQty'], 2) . '</td>';
+            $rows .= '<td class="right">' . WorkItemCalculator::formatMoney((float)$row['unitPrice']) . '</td>';
+            $rows .= '<td>' . htmlspecialchars($row['unit'] ?? '') . '</td>';
             $rows .= '<td class="right">' . WorkItemCalculator::formatMoney((float)$row['contractAmount']) . '</td>';
             $rows .= '<td class="right">' . number_format((float)$row['weightPct'], 2) . '</td>';
+            if ($showRevised) {
+                $rq = (float)($row['revisedQty'] ?? 0);
+                $rows .= '<td class="right">' . ($rq > 0 ? number_format($rq, 2) : '') . '</td>';
+                $rows .= '<td class="right">' . WorkItemCalculator::formatMoney((float)($row['revisedAmount'] ?? 0)) . '</td>';
+                $rows .= '<td class="right">' . number_format((float)($row['revisedWeightPct'] ?? 0), 2) . '</td>';
+            }
             $rows .= '<td class="right">' . ($row['previous'] ? number_format((float)$row['previous'], 2) : '') . '</td>';
             $rows .= '<td class="right">' . number_format((float)$row['thisPeriod'], 2) . '</td>';
             $rows .= '<td class="right">' . number_format((float)$row['toDate'], 2) . '</td>';
@@ -354,6 +361,14 @@ class ReportTemplateRenderer
             'location' => htmlspecialchars($data['location'] ?? ''),
             'contractor' => htmlspecialchars($data['contractor'] ?? ''),
             'report_number' => htmlspecialchars($data['report_number'] ?? ''),
+            'revised_header_group' => $showRevised ? '<th colspan="3">REVISED</th>' : '',
+            'revised_subheader' => $showRevised
+                ? '<th>QUANTITY</th><th>AMOUNT</th><th>WEIGHT %</th>'
+                : '',
+            'revised_total_cells' => $showRevised
+                ? '<td></td><td class="right">' . WorkItemCalculator::formatMoney((float)$t['totalRevisedAmount'])
+                    . '</td><td class="right">' . number_format((float)$t['totalRevisedWeightPct'], 2) . '</td>'
+                : '',
             'line_items_rows' => $rows,
             'total_contract_amount' => WorkItemCalculator::formatMoney($t['totalContractAmount']),
             'total_weight_pct' => number_format($t['totalWeightPct'], 2),
@@ -361,7 +376,9 @@ class ReportTemplateRenderer
             'pct_this_accomplishment' => number_format($t['pctThisAccomplishment'], 2),
             'total_project_cost' => WorkItemCalculator::formatMoney($t['totalContractAmount']),
             'total_this_accomplishment' => WorkItemCalculator::formatMoney($t['totalThisAccomplishment']),
-            'advance_payment' => WorkItemCalculator::formatMoney($advancePayment),
+            'less_reason' => htmlspecialchars(\Peo\SwaStewaLinkage::lessReason($data)),
+            'less_amount' => WorkItemCalculator::formatMoney($lessAmount),
+            'advance_payment' => WorkItemCalculator::formatMoney($lessAmount),
             'total_voucher' => WorkItemCalculator::formatMoney($t['totalVoucher']),
             'prepared_by_name' => htmlspecialchars($data['prepared_by_name'] ?? ''),
             'prepared_by_title' => htmlspecialchars($data['prepared_by_title'] ?? 'Engineer I'),

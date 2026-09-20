@@ -32,7 +32,7 @@ export function ReportProgressFeed({
         <div>
           <h3 className="font-semibold text-text">Progress from reports</h3>
           <p className="mt-1 text-sm text-text-muted">
-            Actual progress on this chart comes from submitted SWA, STEWA, and IAR reports.
+            Actual progress on this chart comes from approved SWA, STEWA, and IAR reports.
           </p>
         </div>
         {latestPercent != null && (

@@ -63,6 +63,20 @@ export function getReport(idOrNumber: string) {
   ) as Promise<{ report: SwaStewaReport; valid?: boolean; verified?: boolean; pdf_url?: string }>;
 }
 
+export function getStewaFromSwa(projectId: number, reportDate: string) {
+  const params = new URLSearchParams({
+    action: 'stewa_from_swa',
+    project_id: String(projectId),
+    report_date: reportDate,
+  });
+  return request(`${API}?${params}`) as Promise<{
+    percent_actual: number | null;
+    percent_planned: number | null;
+    swa_report_number: string | null;
+    slippage: number | null;
+  }>;
+}
+
 export function saveReport(payload: {
   id?: number;
   report_type: 'SWA' | 'STEWA' | 'IAR';
