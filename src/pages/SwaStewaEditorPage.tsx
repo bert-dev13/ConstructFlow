@@ -177,9 +177,6 @@ export function SwaStewaEditorPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [showSubmittedModal, setShowSubmittedModal] = useState(false);
-  const [generateSCurve, setGenerateSCurve] = useState(false);
-  const [generatePdm, setGeneratePdm] = useState(false);
-  const [generateBarChart, setGenerateBarChart] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -607,11 +604,7 @@ export function SwaStewaEditorPage() {
     setError('');
     try {
       const actorId = user?.id && user.id > 0 ? user.id : 1;
-      const gen =
-        user?.role === 'engineer_2'
-          ? { s_curve: generateSCurve, pdm: generatePdm, bar_chart: generateBarChart }
-          : undefined;
-      const res = await approveReport(reportId, actorId, user?.role, gen);
+      const res = await approveReport(reportId, actorId, user?.role);
       setStatus(res.status);
       if (res.status === 'generated' && res.pdf_url) {
         window.open(res.pdf_url, '_blank');
@@ -1090,47 +1083,6 @@ export function SwaStewaEditorPage() {
           )}
           {canApproveNow && (
             <>
-              {user?.role === 'engineer_2' && reportType === 'IAR' && (
-                <div className="mr-auto w-full max-w-sm rounded-xl border border-border bg-surface-muted/60 p-3 text-sm">
-                  <label className="flex items-center gap-2 font-medium">
-                    <input
-                      type="checkbox"
-                      checked={generateSCurve && generatePdm && generateBarChart}
-                      onChange={(e) => {
-                        const v = e.target.checked;
-                        setGenerateSCurve(v);
-                        setGeneratePdm(v);
-                        setGenerateBarChart(v);
-                      }}
-                    />
-                    Select All
-                  </label>
-                  <label className="mt-1.5 flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={generateSCurve}
-                      onChange={(e) => setGenerateSCurve(e.target.checked)}
-                    />
-                    Generate S-Curve
-                  </label>
-                  <label className="mt-1 flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={generatePdm}
-                      onChange={(e) => setGeneratePdm(e.target.checked)}
-                    />
-                    Generate PDM
-                  </label>
-                  <label className="mt-1 flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={generateBarChart}
-                      onChange={(e) => setGenerateBarChart(e.target.checked)}
-                    />
-                    Generate Bar Chart
-                  </label>
-                </div>
-              )}
               <Button type="button" variant="primary" disabled={loading} onClick={handleApprove}>
                 Approve
               </Button>

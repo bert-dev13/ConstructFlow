@@ -47,28 +47,8 @@ export function WorkflowPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [query, setQuery] = useState('');
-  const [generateOpts, setGenerateOpts] = useState<
-    Record<number, { s_curve: boolean; pdm: boolean; bar_chart: boolean }>
-  >({});
 
   const isEngineer1 = user?.role === 'engineer_1';
-
-  const getGenerate = (id: number) =>
-    generateOpts[id] ?? { s_curve: false, pdm: false, bar_chart: false };
-
-  const setGenerateFlag = (
-    id: number,
-    key: 's_curve' | 'pdm' | 'bar_chart' | 'all',
-    value: boolean,
-  ) => {
-    setGenerateOpts((prev) => {
-      const cur = prev[id] ?? { s_curve: false, pdm: false, bar_chart: false };
-      if (key === 'all') {
-        return { ...prev, [id]: { s_curve: value, pdm: value, bar_chart: value } };
-      }
-      return { ...prev, [id]: { ...cur, [key]: value } };
-    });
-  };
 
   const creatableTypes = isEngineer1
     ? REPORT_TYPES.filter((rt) => canUserCreateReportType(user?.role, rt.type))
@@ -134,8 +114,7 @@ export function WorkflowPage() {
     setError('');
     setSuccess('');
     try {
-      const gen = user?.role === 'engineer_2' ? getGenerate(reportId) : undefined;
-      const result = await approveReport(reportId, actorId, user?.role, gen);
+      const result = await approveReport(reportId, actorId, user?.role);
       if (result.status === 'with_engineer_3') {
         setSuccess('Report approved. Forwarded to Engineer III.');
       } else if (result.status === 'with_engineer_4') {
@@ -294,56 +273,15 @@ export function WorkflowPage() {
                   </p>
                   <p className="mt-1 font-mono text-xs text-text-muted">{rpt.report_number}</p>
                   {user.role === 'engineer_2' && (
-                    <>
-                      <textarea
-                        value={comments[rpt.id] ?? ''}
-                        onChange={(e) =>
-                          setComments((c) => ({ ...c, [rpt.id]: e.target.value }))
-                        }
-                        placeholder="Revision comments for Engineer I..."
-                        className="mt-3 w-full rounded-lg border border-border bg-surface p-2 text-sm"
-                        rows={2}
-                      />
-                      <div className="mt-3 rounded-xl border border-border bg-surface/70 p-3">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">
-                          Attach to final email (optional)
-                        </p>
-                        <p className="mt-1 text-xs text-text-muted">
-                          IAR is always included after Engineer III and IV accept. Check charts to
-                          generate for this same week.
-                        </p>
-                        <label className="mt-3 flex items-center gap-2 text-sm font-medium text-text">
-                          <input
-                            type="checkbox"
-                            checked={
-                              getGenerate(rpt.id).s_curve &&
-                              getGenerate(rpt.id).pdm &&
-                              getGenerate(rpt.id).bar_chart
-                            }
-                            onChange={(e) => setGenerateFlag(rpt.id, 'all', e.target.checked)}
-                          />
-                          Select All
-                        </label>
-                        <div className="mt-2 space-y-1.5 pl-1">
-                          {(
-                            [
-                              ['s_curve', 'Generate S-Curve'],
-                              ['pdm', 'Generate PDM'],
-                              ['bar_chart', 'Generate Bar Chart'],
-                            ] as const
-                          ).map(([key, label]) => (
-                            <label key={key} className="flex items-center gap-2 text-sm text-text">
-                              <input
-                                type="checkbox"
-                                checked={getGenerate(rpt.id)[key]}
-                                onChange={(e) => setGenerateFlag(rpt.id, key, e.target.checked)}
-                              />
-                              {label}
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                    </>
+                    <textarea
+                      value={comments[rpt.id] ?? ''}
+                      onChange={(e) =>
+                        setComments((c) => ({ ...c, [rpt.id]: e.target.value }))
+                      }
+                      placeholder="Revision comments for Engineer I..."
+                      className="mt-3 w-full rounded-lg border border-border bg-surface p-2 text-sm"
+                      rows={2}
+                    />
                   )}
                   <div className="mt-3 flex flex-wrap gap-2">
                     <Link

@@ -6,7 +6,6 @@ require_once __DIR__ . '/mail.php';
 require_once dirname(__DIR__) . '/vendor/autoload.php';
 
 use Peo\Auth;
-use Peo\ChartAttachmentService;
 use Peo\DatabaseSetup;
 use Peo\ExcelTemplateService;
 use Peo\IarExcelService;
@@ -831,11 +830,10 @@ if ($method === 'POST') {
             if ($report['status'] !== 'pending_review') {
                 jsonError('Report is not pending Engineer II review');
             }
-            $gen = $body['generate'] ?? [];
             $patch = [
-                'generate_s_curve' => !empty($gen['s_curve']),
-                'generate_pdm' => !empty($gen['pdm']),
-                'generate_bar_chart' => !empty($gen['bar_chart']),
+                'generate_s_curve' => false,
+                'generate_pdm' => false,
+                'generate_bar_chart' => false,
             ];
             $eng2Name = trim((string)($user['full_name'] ?? $user['name'] ?? ''));
             if ($eng2Name !== '' && $report['report_type'] === 'IAR') {
@@ -871,7 +869,7 @@ if ($method === 'POST') {
             jsonResponse(['status' => 'with_engineer_4', 'message' => 'Forwarded to Engineer IV for final approval']);
         }
 
-        // Engineer IV acceptance only — final PDF + email to all with IAR (+ optional charts)
+        // Engineer IV acceptance only — final PDF + email with the report file only
         if ($actorRole !== 'engineer_4') {
             jsonError('Only Engineer IV can finalize reports');
         }
@@ -891,18 +889,14 @@ if ($method === 'POST') {
             $reportData['excel_file'] = $files['xlsx'];
         }
 
-        $chartFlags = [
-            's_curve' => !empty($reportData['generate_s_curve']),
-            'pdm' => !empty($reportData['generate_pdm']),
-            'bar_chart' => !empty($reportData['generate_bar_chart']),
-        ];
+        // Final Gmail package: report PDF only (no S-Curve / PDM / Bar Chart attachments).
+        unset(
+            $reportData['generate_s_curve'],
+            $reportData['generate_pdm'],
+            $reportData['generate_bar_chart'],
+            $reportData['generated_attachments'],
+        );
         $extraAttachments = [];
-        try {
-            $extraAttachments = ChartAttachmentService::generateSelected($pdo, $report, $chartFlags);
-            $reportData['generated_attachments'] = $extraAttachments;
-        } catch (Throwable $e) {
-            audit($pdo, $reportId, $actorId, 'chart_generate_failed', ['error' => $e->getMessage()]);
-        }
 
         $pdo->prepare("UPDATE swa_stewa_reports SET status='generated', pdf_file=?, qr_code=?, report_data=?, generated_at=NOW() WHERE id=?")
             ->execute([$pdfRel, $report['public_url'], json_encode($reportData), $reportId]);

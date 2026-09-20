@@ -231,10 +231,9 @@ function mailSwaForwardToEngineer3(PDO $pdo, int $reportId, ?string $pdfRelPath)
 }
 
 /**
- * Final Eng IV acceptance → email Eng1–4 + Contractors with IAR PDF
- * and optional S-Curve / PDM / Bar Chart PDFs selected by Eng II.
+ * Final Eng IV acceptance → email Eng1–4 + Contractors with the report PDF only.
  *
- * @param list<array{label:string,path:string}> $extraAttachments
+ * @param list<array{label:string,path:string}> $extraAttachments Unused; kept for call-site compatibility.
  */
 function mailFinalApprovedPackage(PDO $pdo, int $reportId, string $iarPdfRel, array $extraAttachments = []): void
 {
@@ -243,25 +242,17 @@ function mailFinalApprovedPackage(PDO $pdo, int $reportId, string $iarPdfRel, ar
         return;
     }
 
-    $extras = [];
-    $labels = ['IAR'];
-    foreach ($extraAttachments as $att) {
-        if (!empty($att['path'])) {
-            $extras[] = $att['path'];
-            $labels[] = (string)($att['label'] ?? basename($att['path']));
-        }
-    }
-
+    $type = (string)($report['report_type'] ?? 'Report');
     $html = swaReportSummary($report);
-    $html .= '<h2>IAR Fully Approved</h2>';
-    $html .= '<p>Engineer II, Engineer III, and Engineer IV have accepted this IAR for the reporting week.</p>';
-    $html .= '<p>Attachments: <strong>' . htmlspecialchars(implode(', ', $labels)) . '</strong></p>';
+    $html .= '<h2>' . htmlspecialchars($type) . ' Fully Approved</h2>';
+    $html .= '<p>Engineer II, Engineer III, and Engineer IV have accepted this report for the reporting week.</p>';
+    $html .= '<p>Attachment: <strong>' . htmlspecialchars($type) . ' PDF</strong></p>';
     $html .= '<p><a href="' . swaVerifyLink($report) . '">View verified report online</a></p>';
 
-    $subject = 'PEO Monitoring — Approved IAR ' . ($report['report_number'] ?? '');
+    $subject = 'PEO Monitoring — Approved ' . $type . ' ' . ($report['report_number'] ?? '');
     $recipients = emailsForRoles($pdo, ['engineer_1', 'engineer_2', 'engineer_3', 'engineer_4', 'contractor']);
     foreach ($recipients as $to) {
-        queueSwaEmail($pdo, $reportId, $to, $subject, $html, $iarPdfRel, null, null, $extras);
+        queueSwaEmail($pdo, $reportId, $to, $subject, $html, $iarPdfRel, null, null, []);
     }
 }
 
