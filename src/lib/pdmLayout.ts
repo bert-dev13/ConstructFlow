@@ -80,6 +80,27 @@ export function dependencyEdge(
   }
 
   const stub = 18;
+  const columnMates = obstacles.filter(
+    (n) => !samePoint(n, from) && !samePoint(n, to) && Math.abs(n.x - to.x) < 8,
+  );
+  const fromBelow = y1 > y2 + 8;
+  const fromAbove = y2 > y1 + 8;
+  if (columnMates.length > 0 && (fromBelow || fromAbove)) {
+    const between = columnMates.some((n) =>
+      fromBelow ? n.y < y1 && n.y > y2 : n.y > y1 && n.y < y2,
+    );
+    if (between) {
+      // e.g. 6 → 4 with 10 stacked under 4: go around the column, do not climb 4's left edge.
+      const bypassX = to.x + nodeHalfW + stub;
+      const inX = to.x + nodeHalfW;
+      return { d: `M ${x1} ${y1} L ${bypassX} ${y1} L ${bypassX} ${y2} L ${inX} ${y2}` };
+    }
+    // e.g. 6 → 10 with 4 stacked above 10: enter 10 from below, not the 4/10 left spine.
+    const attachX = to.x;
+    const attachY = fromBelow ? to.y + nodeHalfH : to.y - nodeHalfH;
+    return { d: `M ${x1} ${y1} L ${attachX} ${y1} L ${attachX} ${attachY}` };
+  }
+
   const farMidX = x2 > x1 ? Math.max(x1 + stub, x2 - stub) : x1 + stub;
   const nearMidX = x1 + stub;
 
