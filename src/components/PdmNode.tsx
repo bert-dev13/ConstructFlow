@@ -1,3 +1,5 @@
+'use client';
+
 import type { PdmActivity } from '../types';
 import { PDM_START_NODE_H, PDM_START_NODE_W, PDM_END_NODE_H, PDM_END_NODE_W } from '../lib/pdmLayout';
 

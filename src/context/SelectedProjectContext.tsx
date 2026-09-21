@@ -1,9 +1,12 @@
+'use client';
+
 import {
   createContext,
   useCallback,
   useContext,
   useMemo,
   useState,
+  useEffect,
   type ReactNode,
 } from 'react';
 
@@ -17,9 +20,12 @@ interface SelectedProjectValue {
 const SelectedProjectContext = createContext<SelectedProjectValue | null>(null);
 
 export function SelectedProjectProvider({ children }: { children: ReactNode }) {
-  const [projectId, setProjectIdState] = useState<string>(() => {
-    return localStorage.getItem(STORAGE_KEY) || '1';
-  });
+  const [projectId, setProjectIdState] = useState<string>('demo-capitol-annex');
+
+  useEffect(() => {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) setProjectIdState(stored);
+  }, []);
 
   const setProjectId = useCallback((id: string) => {
     if (!id) return;

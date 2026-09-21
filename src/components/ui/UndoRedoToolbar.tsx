@@ -1,3 +1,5 @@
+'use client';
+
 type Props = {
   canUndo: boolean;
   canRedo: boolean;

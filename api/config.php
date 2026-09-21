@@ -26,7 +26,7 @@ function env(string $key, string $default = ''): string
     return ($value === false || $value === '') ? $default : (string)$value;
 }
 
-// Cloud MySQL uses MYSQL*; local XAMPP defaults kept for easy local runs.
+// MySQL connection (MYSQL* env overrides, otherwise local XAMPP defaults).
 define('DB_HOST', env('MYSQLHOST', env('DB_HOST', 'localhost')));
 define('DB_PORT', env('MYSQLPORT', env('DB_PORT', '3306')));
 define('DB_NAME', env('MYSQLDATABASE', env('DB_NAME', 'peo_monitoring')));
@@ -34,14 +34,8 @@ define('DB_USER', env('MYSQLUSER', env('DB_USER', 'root')));
 define('DB_PASS', env('MYSQLPASSWORD', env('DB_PASS', '')));
 
 // Public app URL (no trailing slash).
-$defaultAppUrl = 'http://localhost/site';
-if (env('RENDER_EXTERNAL_URL') !== '') {
-    $defaultAppUrl = env('RENDER_EXTERNAL_URL');
-} elseif (env('RAILWAY_PUBLIC_DOMAIN') !== '') {
-    $defaultAppUrl = 'https://' . env('RAILWAY_PUBLIC_DOMAIN');
-}
-define('APP_URL', rtrim(env('APP_URL', $defaultAppUrl), '/'));
-define('APP_BASE_PATH', env('APP_BASE_PATH', str_ends_with(APP_URL, '/site') ? '/site/' : '/'));
+define('APP_URL', rtrim(env('APP_URL', 'http://localhost/ConstructFlow'), '/'));
+define('APP_BASE_PATH', env('APP_BASE_PATH', str_ends_with(APP_URL, '/ConstructFlow') ? '/ConstructFlow/' : '/'));
 define('MAIL_FROM', env('MAIL_FROM', 'peo-monitoring@cagayan.gov.ph'));
 
 if (session_status() === PHP_SESSION_NONE) {

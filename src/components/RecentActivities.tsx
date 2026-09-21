@@ -1,7 +1,10 @@
+'use client';
+
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from '../lib/nextRouter';
 import { listReports, type SwaStewaReport } from '../lib/swaStewaApi';
 import { getRecentlyViewedReportIds } from '../lib/recentViewed';
+import { NavIcon } from './NavIcon';
 
 const APPROVED = new Set(['approved', 'generated']);
 
@@ -47,12 +50,19 @@ export function RecentActivities() {
       id="recent-activities"
       className="scroll-mt-6 rounded-2xl border border-border bg-card p-6 shadow-sm"
     >
-      <h3 className="text-lg font-semibold text-text">Recent Activities</h3>
-      <p className="mt-1 text-sm text-text-muted">
-        {recentlyViewed.length > 0
-          ? 'Reports you recently viewed'
-          : 'Latest approved reports'}
-      </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-lg font-semibold text-text">Recent Activities</h3>
+          <p className="mt-1 text-sm text-text-muted">
+            {recentlyViewed.length > 0
+              ? 'Reports you recently viewed'
+              : 'Latest approved reports'}
+          </p>
+        </div>
+        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary-light text-primary">
+          <NavIcon name="reports" className="h-5 w-5" />
+        </span>
+      </div>
 
       {loading ? (
         <p className="mt-4 text-sm text-text-muted">Loading…</p>

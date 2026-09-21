@@ -1,5 +1,5 @@
 {
-  "name": "peo/monitoring-system",
+  "name": "constructflow/app",
   "require": {
     "php": ">=8.0",
     "dompdf/dompdf": "^3.0",

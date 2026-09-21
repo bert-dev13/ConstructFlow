@@ -1,3 +1,5 @@
+'use client';
+
 export interface ReportProgressEntry {
   reportNumber: string;
   reportType: string;
@@ -12,6 +14,8 @@ interface ReportProgressFeedProps {
   latestPercent?: number | null;
   latestDate?: string | null;
   emptyMessage?: string;
+  /** Omit outer card chrome when embedded in another panel. */
+  bare?: boolean;
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -25,14 +29,15 @@ export function ReportProgressFeed({
   latestPercent,
   latestDate,
   emptyMessage = 'No SWA, STEWA, or IAR reports with progress data yet.',
+  bare = false,
 }: ReportProgressFeedProps) {
   return (
-    <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
+    <div className={bare ? '' : 'rounded-2xl border border-border bg-card p-5 shadow-sm'}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="font-semibold text-text">Progress from reports</h3>
           <p className="mt-1 text-sm text-text-muted">
-            Actual progress on this chart comes from approved SWA, STEWA, and IAR reports.
+            Actual progress comes from approved SWA, STEWA, and IAR reports.
           </p>
         </div>
         {latestPercent != null && (

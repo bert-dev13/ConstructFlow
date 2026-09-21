@@ -1,5 +1,10 @@
 export interface WorkItem {
   id: string;
+  payItemId?: string;
+  payItemVersion?: number;
+  snapshotItemNo?: string;
+  snapshotDescription?: string;
+  snapshotUnit?: string;
   itemNo: string;
   description: string;
   unit: string;
@@ -129,6 +134,11 @@ export function formatPct(n: number): string {
 export function newWorkItem(): WorkItem {
   return {
     id: crypto.randomUUID(),
+    payItemId: '',
+    payItemVersion: undefined,
+    snapshotItemNo: '',
+    snapshotDescription: '',
+    snapshotUnit: '',
     itemNo: '',
     description: '',
     unit: '',

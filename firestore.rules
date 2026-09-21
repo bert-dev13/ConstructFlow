@@ -1,0 +1,106 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function role() {
+      return signedIn() ? userDoc().role : null;
+    }
+
+    function isRole(r) {
+      return signedIn() && role() == r;
+    }
+
+    function isEngineer() {
+      return role() in ['engineer_1', 'engineer_2', 'engineer_3', 'engineer_4'];
+    }
+
+    function isStaff() {
+      return isEngineer() || role() == 'contractor';
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.auth.uid == uid;
+      allow update: if signedIn() && (request.auth.uid == uid || isRole('engineer_4'));
+    }
+
+    match /projects/{projectId} {
+      allow read: if isStaff();
+      allow create, update: if isRole('engineer_1');
+      allow delete: if isRole('engineer_1') || isRole('engineer_4');
+
+      match /boqItems/{boqItemId} {
+        allow read: if isStaff();
+        allow create, update, delete: if isRole('engineer_1');
+      }
+
+      match /auditLog/{entryId} {
+        allow read: if isStaff();
+        allow write: if isRole('engineer_1');
+      }
+
+      match /contractHistory/{entryId} {
+        allow read: if isStaff();
+        allow write: if isRole('engineer_1');
+      }
+    }
+
+    match /payItems/{payItemId} {
+      allow read: if isStaff();
+      allow create, update: if isRole('engineer_1');
+      allow delete: if false;
+    }
+
+    match /schedules/{projectId} {
+      allow read: if isStaff();
+      allow write: if isRole('contractor') || isRole('engineer_1');
+    }
+
+    match /sCurves/{projectId} {
+      allow read: if isStaff();
+      allow write: if isStaff();
+
+      match /snapshots/{snapId} {
+        allow read: if isStaff();
+        allow write: if isStaff();
+      }
+    }
+
+    match /reports/{reportId} {
+      allow read: if isStaff()
+        || resource.data.status in ['approved', 'generated'];
+      allow create: if isStaff();
+      allow update: if isStaff();
+      allow delete: if isRole('engineer_4');
+
+      match /audit/{entryId} {
+        allow read, write: if isStaff();
+      }
+
+      match /revisions/{revId} {
+        allow read, write: if isStaff();
+      }
+    }
+
+    match /reportTemplates/{type} {
+      allow read: if isStaff();
+      allow write: if isRole('engineer_4');
+    }
+
+    match /emailQueue/{id} {
+      allow read: if isEngineer();
+      allow write: if isStaff();
+    }
+
+    match /counters/{id} {
+      allow read, write: if isStaff();
+    }
+  }
+}

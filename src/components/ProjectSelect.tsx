@@ -1,9 +1,12 @@
+'use client';
+
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { listProjects, type ProjectRow } from '../lib/projectsApi';
+import { NavIcon } from './NavIcon';
 
 const FALLBACK_PROJECTS: ProjectRow[] = [
-  { id: 1, name: 'Provincial Capitol Annex', location: null, status: 'active' },
-  { id: 2, name: 'North Zone Pipe Replacement', location: null, status: 'active' },
+  { id: 'demo-capitol-annex', name: 'Provincial Capitol Annex', location: null, status: 'active' },
+  { id: 'demo-remebella-road', name: 'Remebella Road Improvement', location: null, status: 'active' },
 ];
 
 interface ProjectSelectProps {
@@ -88,7 +91,7 @@ export function ProjectSelect({
               ? 'Loading projects…'
               : fallbackLabel?.trim() || 'Select project'}
         </span>
-        <span className="shrink-0 text-xs text-text-muted">▾</span>
+        <NavIcon name="chevron-down" className="h-4 w-4 shrink-0 text-text-muted" />
       </button>
 
       {open && !disabled && (

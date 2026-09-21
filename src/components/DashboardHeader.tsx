@@ -1,7 +1,9 @@
-import { Link } from 'react-router-dom';
+'use client';
+
+import { Link } from '../lib/nextRouter';
 import type { Role } from '../types';
 import { ROLE_LABELS } from '../types';
-import { AGENCY_NAME, OFFICE_NAME } from '../lib/branding';
+import { AGENCY_NAME, OFFICE_NAME, SYSTEM_NAME } from '../lib/branding';
 import { CURRENT_PERIOD } from '../data/mockData';
 
 const isReviewer = (role: Role) =>
@@ -24,21 +26,21 @@ const CONFIG: Record<
   },
   engineer_2: {
     title: ROLE_LABELS.engineer_2,
-    description: null,
-    primaryAction: 'Recent Activities',
-    primaryLink: '#recent-activities',
+    description: 'Review submitted reports, monitor approval work, and access finalized project documents.',
+    primaryAction: 'Open approval queue',
+    primaryLink: '/workflow',
   },
   engineer_3: {
     title: ROLE_LABELS.engineer_3,
-    description: null,
-    primaryAction: 'Recent Activities',
-    primaryLink: '#recent-activities',
+    description: 'Review assigned reports and keep project approvals moving through the workflow.',
+    primaryAction: 'Open approval queue',
+    primaryLink: '/workflow',
   },
   engineer_4: {
     title: ROLE_LABELS.engineer_4,
-    description: null,
-    primaryAction: 'Recent Activities',
-    primaryLink: '#recent-activities',
+    description: 'Finalize approved reports, manage documents, and maintain the reporting archive.',
+    primaryAction: 'Open approval queue',
+    primaryLink: '/workflow',
   },
   contractor: {
     title: 'Contractor Dashboard',
@@ -63,16 +65,16 @@ export function DashboardHeader({ role, period }: DashboardHeaderProps) {
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-widest text-text-muted">
-              {OFFICE_NAME} · {AGENCY_NAME}
+              {SYSTEM_NAME} · {OFFICE_NAME}
             </p>
             <p className="text-xs text-text-muted">
-              Cagayan Provincial Capitol — Email-based Progress Monitoring
+              {AGENCY_NAME} — Email-based Progress Monitoring
             </p>
           </div>
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-2 rounded-full border border-border bg-surface-muted px-3 py-1.5 text-xs text-text-muted">
               <span className="h-1.5 w-1.5 rounded-full bg-primary" />
-              Provincial Engineer&apos;s Office
+              {SYSTEM_NAME}
             </span>
             <span className="rounded-lg border border-border bg-surface-muted px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-text-muted">
               Signed in

@@ -1,5 +1,9 @@
+'use client';
+
 const STYLES: Record<string, string> = {
   draft: 'bg-surface-muted text-text-muted border-border',
+  pending_contractor: 'bg-orange-50 text-orange-800 border-orange-200',
+  contractor_confirmed: 'bg-cyan-50 text-cyan-800 border-cyan-200',
   pending_review: 'bg-amber-50 text-amber-800 border-amber-200',
   with_engineer_3: 'bg-sky-50 text-sky-800 border-sky-200',
   with_engineer_4: 'bg-indigo-50 text-indigo-800 border-indigo-200',
@@ -10,12 +14,14 @@ const STYLES: Record<string, string> = {
 
 const LABELS: Record<string, string> = {
   draft: 'Draft',
-  pending_review: 'Pending',
-  with_engineer_3: 'Pending',
-  with_engineer_4: 'Pending',
+  pending_contractor: 'With contractor',
+  contractor_confirmed: 'Contractor confirmed',
+  pending_review: 'With Engineer II',
+  with_engineer_3: 'With Engineer III',
+  with_engineer_4: 'With Engineer IV',
   approved: 'Approved',
   generated: 'PDF Generated',
-  rejected: 'Revision Requested',
+  rejected: 'Revision requested',
 };
 
 export function StatusBadge({ status }: { status: string }) {

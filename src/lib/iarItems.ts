@@ -1,5 +1,10 @@
 export interface IarAccomplishmentItem {
   id: string;
+  payItemId?: string;
+  payItemVersion?: number;
+  snapshotItemNo?: string;
+  snapshotDescription?: string;
+  snapshotUnit?: string;
   itemNo: string;
   description: string;
   location: string;
@@ -16,6 +21,11 @@ export interface IarManpowerRow {
 
 export interface IarVariationItem {
   id: string;
+  payItemId?: string;
+  payItemVersion?: number;
+  snapshotItemNo?: string;
+  snapshotDescription?: string;
+  snapshotUnit?: string;
   itemNo: string;
   description: string;
   quantity: number | '';
@@ -28,6 +38,11 @@ export interface IarVariationItem {
 export function newIarItem(): IarAccomplishmentItem {
   return {
     id: `iar-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    payItemId: '',
+    payItemVersion: undefined,
+    snapshotItemNo: '',
+    snapshotDescription: '',
+    snapshotUnit: '',
     itemNo: '',
     description: '',
     location: '',
@@ -48,6 +63,11 @@ export function newManpowerRow(): IarManpowerRow {
 export function newVariationItem(): IarVariationItem {
   return {
     id: `vo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    payItemId: '',
+    payItemVersion: undefined,
+    snapshotItemNo: '',
+    snapshotDescription: '',
+    snapshotUnit: '',
     itemNo: '',
     description: '',
     quantity: '',

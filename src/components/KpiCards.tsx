@@ -1,4 +1,7 @@
+'use client';
+
 import type { DashboardKpi } from '../lib/dashboardApi';
+import { NavIcon, type NavIconName } from './NavIcon';
 
 type KpiKey = 'visibleProjects' | 'pendingApprovals' | 'delayedProjects' | 'inputWarnings';
 
@@ -13,11 +16,11 @@ interface KpiCardsProps {
   cards?: KpiKey[];
 }
 
-const CARD_META: { key: KpiKey; title: string; dot: string }[] = [
-  { key: 'visibleProjects', title: 'Visible Projects', dot: 'bg-primary' },
-  { key: 'pendingApprovals', title: 'Pending Approvals', dot: 'bg-text-muted/40' },
-  { key: 'delayedProjects', title: 'Delayed Projects', dot: 'bg-warning' },
-  { key: 'inputWarnings', title: 'Input Warnings', dot: 'bg-warning' },
+const CARD_META: { key: KpiKey; title: string; dot: string; icon: NavIconName }[] = [
+  { key: 'visibleProjects', title: 'Visible Projects', dot: 'bg-primary', icon: 'projects' },
+  { key: 'pendingApprovals', title: 'Pending Approvals', dot: 'bg-text-muted/40', icon: 'approval' },
+  { key: 'delayedProjects', title: 'Delayed Projects', dot: 'bg-warning', icon: 'schedule' },
+  { key: 'inputWarnings', title: 'Input Warnings', dot: 'bg-warning', icon: 'cross' },
 ];
 
 export function KpiCards({ kpis, loading, cards }: KpiCardsProps) {
@@ -33,8 +36,12 @@ export function KpiCards({ kpis, loading, cards }: KpiCardsProps) {
             key={card.key}
             className="relative rounded-2xl border border-border bg-card p-5 shadow-sm"
           >
-            <span className={`absolute right-4 top-4 h-2 w-2 rounded-full ${card.dot}`} />
-            <p className="text-xs font-medium uppercase tracking-wide text-text-muted">{card.title}</p>
+            <div className="flex items-start justify-between gap-3">
+              <p className="text-xs font-medium uppercase tracking-wide text-text-muted">{card.title}</p>
+              <span className={`flex h-9 w-9 items-center justify-center rounded-xl bg-primary-light text-primary`}>
+                <NavIcon name={card.icon} className="h-5 w-5" />
+              </span>
+            </div>
             <p className="mt-2 text-3xl font-bold text-text">
               {loading ? '…' : (data?.value ?? '—')}
             </p>

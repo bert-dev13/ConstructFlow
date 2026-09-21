@@ -1,36 +1,39 @@
 {
-  "name": "site",
+  "name": "constructflow",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "build:xampp": "tsc -b && vite build",
-    "build:railway": "tsc -b && vite build",
+    "dev": "next dev",
+    "build": "next build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "start": "next start",
+    "seed:firebase": "tsx scripts/seed-firebase.ts",
+    "firebase:deploy:rules": "firebase deploy --only firestore:rules,storage"
   },
   "dependencies": {
+    "firebase": "^12.19.0",
+    "jspdf": "^4.2.1",
+    "next": "^16.0.1",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
-    "react-router-dom": "^7.17.0",
-    "recharts": "^3.8.1"
+    "recharts": "^3.8.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@tailwindcss/vite": "^4.3.0",
+    "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^24.12.3",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.1",
     "eslint": "^10.3.0",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "eslint-plugin-react-refresh": "^0.5.2",
+    "firebase-tools": "^15.30.2",
     "globals": "^17.6.0",
+    "postcss": "^8.5.3",
     "tailwindcss": "^4.3.0",
+    "tsx": "^4.23.15",
     "typescript": "~6.0.2",
-    "typescript-eslint": "^8.59.2",
-    "vite": "^8.0.12"
+    "typescript-eslint": "^8.59.2"
   }
 }

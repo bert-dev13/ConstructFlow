@@ -1,14 +1,19 @@
-import { apiFetch } from './http';
-import { apiUrl } from './paths';
+import {
+  createProjectFs,
+  getProjectFs,
+  listContractorsFs,
+  listProjectsFs,
+  updateProjectFs,
+} from './firebase/projects';
 
 export interface ProjectRow {
-  id: number;
+  id: string;
   name: string;
   location: string | null;
   status: string;
   start_date?: string | null;
   planned_end_date?: string | null;
-  contractor_id?: number | null;
+  contractor_id?: string | null;
   contractor_name?: string | null;
   contract_amount?: number | null;
   created_at?: string | null;
@@ -16,13 +21,13 @@ export interface ProjectRow {
 }
 
 export interface ContractorOption {
-  id: number;
+  id: string;
   full_name: string;
   email: string;
 }
 
 export interface ProjectAuditEntry {
-  id: number;
+  id: string;
   field_name: string;
   old_value: string | null;
   new_value: string | null;
@@ -31,7 +36,7 @@ export interface ProjectAuditEntry {
 }
 
 export interface ContractHistoryEntry {
-  id: number;
+  id: string;
   contract_amount: number;
   effective_date: string;
   vo_reference: string | null;
@@ -54,37 +59,30 @@ export interface ProjectInput {
   start_date?: string;
   planned_end_date?: string;
   status?: string;
-  contractor_id?: number | null;
+  contractor_id?: string | null;
   contract_amount?: number | null;
 }
 
-export function listProjects() {
-  return apiFetch<{ projects: ProjectRow[] }>(apiUrl('projects.php'));
+export async function listProjects() {
+  const projects = await listProjectsFs();
+  return { projects };
 }
 
-export function listContractors() {
-  return apiFetch<{ contractors: ContractorOption[] }>(apiUrl('projects.php?contractors=1'));
+export async function listContractors() {
+  const contractors = await listContractorsFs();
+  return { contractors };
 }
 
-export function getProject(id: number) {
-  return apiFetch<{
-    project: ProjectRow;
-    audit_log: ProjectAuditEntry[];
-    contract_history: ContractHistoryEntry[];
-    report_defaults: ProjectReportDefaults;
-  }>(apiUrl(`projects.php?id=${id}`));
+export async function getProject(id: string | number) {
+  return getProjectFs(id);
 }
 
-export function createProject(input: ProjectInput) {
-  return apiFetch<{ project: ProjectRow }>(apiUrl('projects.php'), {
-    method: 'POST',
-    body: JSON.stringify(input),
-  });
+export async function createProject(input: ProjectInput) {
+  const project = await createProjectFs(input);
+  return { project };
 }
 
-export function updateProject(id: number, input: ProjectInput) {
-  return apiFetch<{ project: ProjectRow }>(apiUrl('projects.php'), {
-    method: 'PUT',
-    body: JSON.stringify({ id, ...input }),
-  });
+export async function updateProject(id: string | number, input: ProjectInput) {
+  const project = await updateProjectFs(id, input);
+  return { project };
 }

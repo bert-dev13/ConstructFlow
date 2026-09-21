@@ -24,7 +24,7 @@ if ($method === 'GET') {
         if (!$report) jsonError('Report not found', 404);
         jsonResponse([
             'verified' => true,
-            'message' => 'This document is legitimately stored in the PEO Monitoring System.',
+            'message' => 'This document is legitimately stored in ConstructFlow.',
             'report' => $report,
         ]);
     }

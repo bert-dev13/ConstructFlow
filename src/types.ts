@@ -7,7 +7,7 @@ export type Role =
   | 'contractor';
 
 export interface User {
-  id: number;
+  id: string;
   email: string;
   role: Role;
   name: string;
@@ -29,31 +29,29 @@ export const ROLE_BADGES: Record<Role, string> = {
   contractor: 'CT',
 };
 
+export const VALID_ROLES: Role[] = [
+  'engineer_1',
+  'engineer_2',
+  'engineer_3',
+  'engineer_4',
+  'contractor',
+];
+
+export function isValidRole(value: unknown): value is Role {
+  return typeof value === 'string' && (VALID_ROLES as string[]).includes(value);
+}
+
+export const NO_ROLE_MESSAGE = 'Account role not assigned';
+
 export const DEMO_ACCOUNTS_BY_ROLE: Record<
   Role,
   { email: string; password: string; name: string }[]
 > = {
-  engineer_1: [
-    { email: 'constructflow.engineer1.1@gmail.com', password: 'demo123', name: 'Engr. Juan Dela Cruz' },
-    { email: 'constructflow.engineer1.2@gmail.com', password: 'demo123', name: 'Engr. Carlos Mendoza' },
-    { email: 'constructflow.engineer1.3@gmail.com', password: 'demo123', name: 'Engr. Sofia Ramirez' },
-  ],
-  engineer_2: [
-    { email: 'constructflow.engineer2.1@gmail.com', password: 'demo123', name: 'Engr. Maria Santos' },
-    { email: 'constructflow.engineer2.2@gmail.com', password: 'demo123', name: 'Engr. Luis Garcia' },
-    { email: 'constructflow.engineer2.3@gmail.com', password: 'demo123', name: 'Engr. Elena Cruz' },
-  ],
-  engineer_3: [
-    { email: 'constructflow.engineer3.1@gmail.com', password: 'demo123', name: 'Engr. Pedro Reyes' },
-  ],
-  engineer_4: [
-    { email: 'constructflow.engineer4.1@gmail.com', password: 'demo123', name: 'Engr. Ana Lopez' },
-  ],
-  contractor: [
-    { email: 'constructflow.contractor.1@gmail.com', password: 'demo123', name: 'ABC Construction Corp.' },
-    { email: 'constructflow.contractor.2@gmail.com', password: 'demo123', name: 'TS Construction' },
-    { email: 'constructflow.contractor.3@gmail.com', password: 'demo123', name: 'North Builders Inc.' },
-  ],
+  engineer_1: [{ email: 'engineer1@gmail.com', password: 'engineer123', name: 'Engineer I' }],
+  engineer_2: [{ email: 'engineer2@gmail.com', password: 'engineer123', name: 'Engineer II' }],
+  engineer_3: [{ email: 'engineer3@gmail.com', password: 'engineer123', name: 'Engineer III' }],
+  engineer_4: [{ email: 'engineer4@gmail.com', password: 'engineer123', name: 'Engineer IV' }],
+  contractor: [{ email: 'contractor@gmail.com', password: 'engineer123', name: 'Contractor' }],
 };
 
 /** First demo account per role (backward compatible). */

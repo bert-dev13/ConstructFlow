@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 /**
- * PDO options for MySQL / TiDB Cloud (TLS required on serverless).
+ * PDO options for MySQL (optional TLS via MYSQL_SSL=1).
  */
 function mysql_ssl_enabled(string $host, string $envFlag = ''): bool
 {

@@ -1,9 +1,9 @@
-# XAMPP / Apache — serve the built React app from /site/
-DirectoryIndex dist/index.html
+# XAMPP / Apache — serve the static Next.js export from /ConstructFlow/
+DirectoryIndex out/index.html
 
 <IfModule mod_rewrite.c>
   RewriteEngine On
-  RewriteBase /site/
+  RewriteBase /ConstructFlow/
 
   # PHP API, storage, and template files
   RewriteRule ^api/ - [L]
@@ -11,14 +11,19 @@ DirectoryIndex dist/index.html
   RewriteRule ^templates/ - [L]
 
   # Built static assets and logos
-  RewriteRule ^assets/(.*)$ dist/assets/$1 [L]
-  RewriteRule ^img/(.*)$ dist/img/$1 [L]
-  RewriteRule ^favicon\.svg$ dist/favicon.svg [L]
+  RewriteRule ^_next/(.*)$ out/_next/$1 [L]
+  RewriteRule ^img/(.*)$ out/img/$1 [L]
+  RewriteRule ^favicon\.svg$ out/favicon.svg [L]
 
-  # Existing files (dist, api, database, etc.)
+  # Static-export shells for database-backed dynamic routes.
+  RewriteRule ^reports/view/[^/]+/?$ out/reports/view/index.html [L]
+  RewriteRule ^swa-stewa/edit/[^/]+/?$ out/swa-stewa/edit/index.html [L]
+
+  # Existing files (out, api, database, etc.)
   RewriteCond %{REQUEST_FILENAME} -f
   RewriteRule ^ - [L]
 
-  # SPA client-side routes → dist/index.html
-  RewriteRule ^ dist/index.html [L]
+  # Next static routes → their generated index.html files.
+  RewriteRule ^$ out/index.html [L]
+  RewriteRule ^(.*)/?$ out/$1/index.html [L]
 </IfModule>

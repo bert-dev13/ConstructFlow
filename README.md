@@ -1,6 +1,6 @@
-# PEO Progress Monitoring System
+# ConstructFlow
 
-Automated workflow database system for **email-based progress monitoring** at the Cagayan Provincial Engineer&apos;s Office.
+Automated workflow database system for **email-based progress monitoring** at the Cagayan Provincial Engineer's Office.
 
 ## Contract features
 
@@ -14,33 +14,28 @@ Automated workflow database system for **email-based progress monitoring** at th
 | QR document verification | UI + API | `/verify?qr=...` |
 | Engineer I–IV + Contractor roles | Implemented | `/roles` |
 
-## Deploy (Railway)
-
-See **[DEPLOY-RAILWAY.md](./DEPLOY-RAILWAY.md)** for Docker + MySQL on Railway.
-
-Backup created before Railway changes: `C:\xamppp\htdocs\site-backup-railway-20260729-130735`
-
-## Quick start (frontend)
+## Quick start
 
 **XAMPP (Apache):**
 ```bash
 npm install
 npm run build
 ```
-Then open [http://localhost/site/](http://localhost/site/)
+The Next.js static export is written to `out/`. Apache serves it from
+[http://localhost/ConstructFlow/](http://localhost/ConstructFlow/) alongside the PHP API.
 
 **Development (hot reload):**
 ```bash
 npm run dev
 ```
-Open [http://localhost:5173/site/](http://localhost:5173/site/)
+Open [http://localhost:3000/ConstructFlow/](http://localhost:3000/ConstructFlow/)
 
 ## Database (XAMPP)
 
 1. Start Apache + MySQL in XAMPP
 2. In phpMyAdmin, click **`peo_monitoring`** in the left sidebar
 3. Import **`database/install.sql`** (one file — drops old tables and creates fresh)
-4. PHP API: `http://localhost/site/api/`
+4. PHP API: `http://localhost/ConstructFlow/api/`
 
 If you only need to add missing tables without wiping data, use `database/schema.sql` instead.
 
@@ -48,11 +43,11 @@ If you only need to add missing tables without wiping data, use `database/schema
 
 | Role | Email | Password |
 |------|-------|----------|
-| Engineer I | `engineer1@peo.local` | `demo123` |
-| Engineer II | `engineer2@peo.local` | `demo123` |
-| Engineer III | `engineer3@peo.local` | `demo123` |
-| Engineer IV | `engineer4@peo.local` | `demo123` |
-| Contractor | `contractor@build.local` | `demo123` |
+| Engineer I | `engineer1@gmail.com` | `engineer123` |
+| Engineer II | `engineer2@gmail.com` | `engineer123` |
+| Engineer III | `engineer3@gmail.com` | `engineer123` |
+| Engineer IV | `engineer4@gmail.com` | `engineer123` |
+| Contractor | `contractor@gmail.com` | `engineer123` |
 
 ## Approval workflow
 
@@ -71,6 +66,6 @@ If you only need to add missing tables without wiping data, use `database/schema
 
 ## Stack
 
-- **Frontend:** React, TypeScript, Vite, Tailwind CSS, Recharts
+- **Frontend:** Next.js App Router, React, TypeScript, Tailwind CSS, Recharts
 - **Backend:** PHP 8+, MySQL
-- **Deploy:** `npm run build` → serve `dist/` via Apache
+- **Serve:** `npm run build` → Apache serves the static `out/` export under `/ConstructFlow/`

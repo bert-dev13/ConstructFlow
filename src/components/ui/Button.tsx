@@ -1,5 +1,7 @@
+'use client';
+
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from '../../lib/nextRouter';
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
 

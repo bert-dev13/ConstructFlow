@@ -1,8 +1,0 @@
-node_modules
-dist
-.git
-.cursor
-.vscode
-*.log
-site-backup*
-**/agent-transcripts

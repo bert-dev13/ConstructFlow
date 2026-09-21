@@ -1,8 +1,11 @@
+'use client';
+
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from '../lib/nextRouter';
 import { ALERTS } from '../data/mockData';
 import type { Role } from '../types';
 import { listReports, type SwaStewaReport } from '../lib/swaStewaApi';
+import { NavIcon } from './NavIcon';
 
 const APPROVED_STATUSES = new Set(['approved', 'generated']);
 
@@ -90,8 +93,15 @@ export function ManagementAlerts({ role }: { role?: Role }) {
 
   return (
     <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-      <h3 className="text-lg font-semibold text-text">Management Alerts</h3>
-      <p className="mt-1 text-sm text-text-muted">Items needing attention</p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-lg font-semibold text-text">Management Alerts</h3>
+          <p className="mt-1 text-sm text-text-muted">Items needing attention</p>
+        </div>
+        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+          <NavIcon name="approval" className="h-5 w-5" />
+        </span>
+      </div>
 
       <ul className="mt-4 space-y-3">
         {ALERTS.map((alert) => (

@@ -1,20 +1,20 @@
-import type { Role, User } from '../types';
-import { apiFetch } from './http';
-import { apiUrl } from './paths';
+import type { User } from '../types';
+import { firebaseLogin, firebaseLogout, fetchUserProfile } from './firebase/auth';
+import { auth } from './firebase/config';
 
-const AUTH = apiUrl('auth.php');
-
-export function authMe() {
-  return apiFetch<{ user: User | null }>(`${AUTH}?action=me`);
+export async function authMe() {
+  const current = auth.currentUser;
+  if (!current) return { user: null as User | null };
+  const user = await fetchUserProfile(current.uid);
+  return { user };
 }
 
-export function authLogin(email: string, password: string, role: Role) {
-  return apiFetch<{ user: User }>(AUTH, {
-    method: 'POST',
-    body: JSON.stringify({ email, password, role }),
-  });
+export async function authLogin(email: string, password: string) {
+  const user = await firebaseLogin(email, password);
+  return { user };
 }
 
-export function authLogout() {
-  return apiFetch<{ ok: boolean }>(`${AUTH}?action=logout`, { method: 'POST', body: '{}' });
+export async function authLogout() {
+  await firebaseLogout();
+  return { ok: true };
 }

@@ -1,5 +1,7 @@
 import { calculatePdmSchedule, getCriticalPath } from './pdm';
 import type { BarChartTask, PdmActivity, PdmDependency } from '../types';
+import type { ReportProgressEntry } from '../components/ReportProgressFeed';
+import { swaStewaChronological } from './progressStatus';
 
 export function deriveBarChartFromPdm(
   activities: PdmActivity[],
@@ -80,5 +82,53 @@ export function applyPdmDerivatives<T extends {
     projectDuration: derived.projectDuration,
     criticalPath: derived.criticalPath,
     pdmError: derived.pdmError,
+  };
+}
+
+/**
+ * Map latest SWA/STEWA Actual Plan % onto bar-chart tasks (PHP ScheduleSync port).
+ * Clears actuals when there is no Actual Plan yet (Target Plan only).
+ */
+export function applyReportProgressToBarChart(
+  barChartTasks: BarChartTask[],
+  reportFeed: ReportProgressEntry[],
+  projectStartDate: string,
+  totalDays: number,
+): {
+  tasks: BarChartTask[];
+  timeNow: number;
+  latestPercent: number | null;
+  latestReportDate: string | null;
+} {
+  const chrono = swaStewaChronological(reportFeed);
+  const tasks = barChartTasks.map((t) => ({ ...t, actualEndDay: null as number | null }));
+
+  if (chrono.length < 2) {
+    return {
+      tasks,
+      timeNow: 0,
+      latestPercent: null,
+      latestReportDate: null,
+    };
+  }
+
+  const latest = chrono[chrono.length - 1];
+  const startTs = Date.parse(`${projectStartDate}T00:00:00Z`) || Date.now();
+  const latestTs = Date.parse(`${latest.date}T00:00:00Z`) || startTs;
+  const elapsed = Math.floor((latestTs - startTs) / 86400000) + 1;
+  const timeNow = Math.min(Math.max(1, elapsed), Math.max(1, totalDays));
+  const achievedDays = Math.round((latest.percent / 100) * Math.max(1, totalDays));
+
+  for (const task of tasks) {
+    if (task.endDay <= achievedDays) {
+      task.actualEndDay = task.endDay;
+    }
+  }
+
+  return {
+    tasks,
+    timeNow,
+    latestPercent: latest.percent,
+    latestReportDate: latest.date,
   };
 }

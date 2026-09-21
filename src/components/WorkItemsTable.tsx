@@ -1,5 +1,5 @@
-import { useId, useMemo, useState } from 'react';
-import { boqCatalogSize, lookupWorkItemByItemNo, searchBoqItemNumbers, workItemPatchFromBoq } from '../lib/boqLookup';
+'use client';
+
 import {
   computeWorkItems,
   formatMoney,
@@ -7,6 +7,9 @@ import {
   newWorkItem,
   type WorkItem,
 } from '../lib/workItems';
+import { PayItemSelect } from './PayItemSelect';
+import type { PayItem } from '../lib/payItemsApi';
+import type { ProjectBoqItem } from '../lib/projectBoqApi';
 
 interface WorkItemsTableProps {
   items: WorkItem[];
@@ -17,6 +20,7 @@ interface WorkItemsTableProps {
   onLessReasonChange?: (value: string) => void;
   onLessAmountChange?: (value: number) => void;
   onChange: (items: WorkItem[]) => void;
+  boqItems?: ProjectBoqItem[];
   readOnly?: boolean;
 }
 
@@ -29,51 +33,41 @@ export function WorkItemsTable({
   onLessReasonChange,
   onLessAmountChange,
   onChange,
+  boqItems = [],
   readOnly,
 }: WorkItemsTableProps) {
-  const itemNoListId = useId();
-  const [itemNoQuery, setItemNoQuery] = useState('');
   const { items: computed, totals } = computeWorkItems(items, lessAmount, showRevised);
-  const itemNoSuggestions = useMemo(
-    () => searchBoqItemNumbers(itemNoQuery),
-    [itemNoQuery],
-  );
 
   const update = (id: string, patch: Partial<WorkItem>) => {
     onChange(items.map((i) => (i.id === id ? { ...i, ...patch } : i)));
-  };
-
-  const applyItemNoLookup = (id: string, itemNo: string) => {
-    const current = items.find((i) => i.id === id);
-    if (!current) return;
-    const patch = workItemPatchFromBoq(itemNo, current);
-    if (patch) {
-      update(id, patch);
-      return;
-    }
-    if (itemNo !== current.itemNo) {
-      update(id, { itemNo });
-    }
-  };
-
-  const handleItemNoChange = (id: string, itemNo: string) => {
-    const current = items.find((i) => i.id === id);
-    if (!current) return;
-    const hit = lookupWorkItemByItemNo(itemNo);
-    if (hit && hit.itemNo.trim() === itemNo.trim()) {
-      const patch = workItemPatchFromBoq(itemNo, current);
-      if (patch) {
-        update(id, patch);
-        return;
-      }
-    }
-    update(id, { itemNo });
   };
 
   const addRow = () => onChange([...items, newWorkItem()]);
   const removeRow = (id: string) => onChange(items.filter((i) => i.id !== id));
 
   const leadingColSpan = 5; // item, desc, prog qty, unit price, unit
+
+  const selectPayItem = (id: string, item: PayItem | null) => {
+    if (!item) return;
+    const boqItem = boqItems.find((boq) => boq.payItemId === item.id && boq.active);
+    update(id, {
+      payItemId: item.id,
+      payItemVersion: item.version,
+      snapshotItemNo: item.itemNo,
+      snapshotDescription: item.description,
+      snapshotUnit: item.unit,
+      itemNo: item.itemNo,
+      description: item.description,
+      unit: item.unit,
+      ...(boqItem
+        ? {
+            programmedQty: boqItem.programmedQty,
+            revisedQty: boqItem.revisedQty ?? undefined,
+            unitPrice: boqItem.unitPrice,
+          }
+        : {}),
+    });
+  };
 
   return (
     <div className="overflow-x-auto">
@@ -150,43 +144,12 @@ export function WorkItemsTable({
           {computed.map((row) => (
             <tr key={row.id} className="border-b border-border/50">
               <td className="p-1">
-                {readOnly ? (
-                  row.itemNo
-                ) : (
-                  <>
-                    <input
-                      className="w-full rounded border border-border px-1 py-0.5"
-                      list={itemNoListId}
-                      value={row.itemNo}
-                      onFocus={() => setItemNoQuery(row.itemNo)}
-                      onChange={(e) => {
-                        setItemNoQuery(e.target.value);
-                        handleItemNoChange(row.id, e.target.value);
-                      }}
-                      onBlur={(e) => applyItemNoLookup(row.id, e.target.value)}
-                      placeholder="e.g. B.7 (1)"
-                      title="Type item number — description fills from DPWH catalog"
-                    />
-                    {itemNoSuggestions.length > 0 && (
-                      <datalist id={itemNoListId}>
-                        {itemNoSuggestions.map((n) => (
-                          <option key={n} value={n} />
-                        ))}
-                      </datalist>
-                    )}
-                  </>
+                {readOnly ? row.snapshotItemNo || row.itemNo : (
+                  <PayItemSelect value={row.payItemId ?? ''} onChange={(item) => selectPayItem(row.id, item)} fallbackLabel={row.itemNo || undefined} />
                 )}
               </td>
               <td className="p-1">
-                {readOnly ? (
-                  row.description
-                ) : (
-                  <input
-                    className="w-full rounded border border-border px-1 py-0.5"
-                    value={row.description}
-                    onChange={(e) => update(row.id, { description: e.target.value })}
-                  />
-                )}
+                {row.snapshotDescription || row.description}
               </td>
               <td className="p-1">
                 {readOnly ? (
@@ -219,15 +182,7 @@ export function WorkItemsTable({
                 )}
               </td>
               <td className="p-1">
-                {readOnly ? (
-                  row.unit
-                ) : (
-                  <input
-                    className="w-full rounded border border-border px-1 py-0.5"
-                    value={row.unit}
-                    onChange={(e) => update(row.id, { unit: e.target.value })}
-                  />
-                )}
+                {row.snapshotUnit || row.unit}
               </td>
               <td className="p-1 text-right">{formatMoney(row.contractAmount)}</td>
               <td className="p-1 text-right">{formatPct(row.weightPct)}</td>
@@ -330,9 +285,8 @@ export function WorkItemsTable({
             + Add work item
           </button>
           <p className="mt-2 text-xs text-text-muted">
-            Enter an <strong>Item No.</strong> (e.g. <code className="text-[11px]">B.7 (1)</code>,{' '}
-            <code className="text-[11px]">311 (1) c1</code>) — description and unit auto-fill from the
-            DPWH pay-item catalog ({boqCatalogSize().toLocaleString()} items).
+            Select a standardized <strong>Pay Item</strong>. Item No., description, and unit come from
+            the Pay Item Master and cannot be manually overridden.
             {showRevised && (
               <>
                 {' '}

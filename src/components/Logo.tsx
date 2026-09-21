@@ -1,31 +1,34 @@
-import { AGENCY_NAME, OFFICE_NAME, PEO_LOGO } from '../lib/branding';
+'use client';
+
+import { AGENCY_NAME, OFFICE_NAME, SYSTEM_LOGO, SYSTEM_NAME } from '../lib/branding';
 
 interface LogoProps {
-  size?: 'sm' | 'md';
+  size?: 'sm' | 'md' | 'lg' | 'xl';
+  /** Show office / agency caption under the mark (wordmark is in the image). */
   showText?: boolean;
+  className?: string;
 }
 
-export function Logo({ size = 'md', showText = true }: LogoProps) {
-  const box = size === 'sm' ? 'h-9 w-9' : 'h-11 w-11';
-  const textSize = size === 'sm' ? 'text-sm' : 'text-base';
+const HEIGHT: Record<NonNullable<LogoProps['size']>, string> = {
+  sm: 'h-11',
+  md: 'h-16',
+  lg: 'h-24',
+  xl: 'h-28 md:h-36',
+};
 
+export function Logo({ size = 'md', showText = true, className = '' }: LogoProps) {
   return (
-    <div className="flex items-center gap-3">
-      <div
-        className={`${box} flex shrink-0 items-center justify-center overflow-hidden rounded-xl border border-border bg-card p-1 shadow-sm`}
-        title={OFFICE_NAME}
-      >
-        <img src={PEO_LOGO} alt={OFFICE_NAME} className="h-full w-full object-contain" />
-      </div>
+    <div className={`flex flex-col gap-1.5 ${className}`.trim()}>
+      <img
+        src={SYSTEM_LOGO}
+        alt={SYSTEM_NAME}
+        title={`${SYSTEM_NAME} - ${OFFICE_NAME}`}
+        className={`${HEIGHT[size]} w-auto max-w-full object-contain`}
+      />
       {showText && (
-        <div className="text-left">
-          <p className={`${textSize} font-bold leading-tight text-text`}>{OFFICE_NAME}</p>
-          {size === 'md' && (
-            <p className="text-[10px] font-medium uppercase tracking-wider text-text-muted">
-              {AGENCY_NAME}
-            </p>
-          )}
-        </div>
+        <p className="text-[10px] font-medium uppercase tracking-wider text-text-muted">
+          {OFFICE_NAME} · {AGENCY_NAME}
+        </p>
       )}
     </div>
   );

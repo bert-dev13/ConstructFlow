@@ -1,5 +1,9 @@
+'use client';
+
 import { newVariationItem, type IarVariationItem } from '../lib/iarItems';
 import { fieldInputClass } from './ui/FormField';
+import { PayItemSelect } from './PayItemSelect';
+import type { PayItem } from '../lib/payItemsApi';
 
 interface Props {
   items: IarVariationItem[];
@@ -12,6 +16,20 @@ export function IarVariationTable({ items, onChange, readOnly }: Props) {
 
   const update = (id: string, patch: Partial<IarVariationItem>) => {
     onChange(items.map((i) => (i.id === id ? { ...i, ...patch } : i)));
+  };
+
+  const selectPayItem = (id: string, item: PayItem | null) => {
+    if (!item) return;
+    update(id, {
+      payItemId: item.id,
+      payItemVersion: item.version,
+      snapshotItemNo: item.itemNo,
+      snapshotDescription: item.description,
+      snapshotUnit: item.unit,
+      itemNo: item.itemNo,
+      description: item.description,
+      unit: item.unit,
+    });
   };
 
   return (
@@ -37,20 +55,10 @@ export function IarVariationTable({ items, onChange, readOnly }: Props) {
                 className={`border-b border-border/40 transition hover:bg-white/60 ${idx % 2 === 1 ? 'bg-white/40' : ''}`}
               >
                 <td className="px-2 py-2">
-                  <input
-                    disabled={readOnly}
-                    value={item.itemNo}
-                    onChange={(e) => update(item.id, { itemNo: e.target.value })}
-                    className={`${inputCls} w-20`}
-                  />
+                  {readOnly ? item.snapshotItemNo || item.itemNo : <PayItemSelect value={item.payItemId ?? ''} onChange={(selected) => selectPayItem(item.id, selected)} fallbackLabel={item.itemNo || undefined} />}
                 </td>
                 <td className="px-2 py-2">
-                  <input
-                    disabled={readOnly}
-                    value={item.description}
-                    onChange={(e) => update(item.id, { description: e.target.value })}
-                    className={`${inputCls} min-w-[160px]`}
-                  />
+                  <span className="block min-w-[160px] text-xs text-text">{item.snapshotDescription || item.description || 'Select a Pay Item'}</span>
                 </td>
                 <td className="px-2 py-2">
                   <input
@@ -66,12 +74,7 @@ export function IarVariationTable({ items, onChange, readOnly }: Props) {
                   />
                 </td>
                 <td className="px-2 py-2">
-                  <input
-                    disabled={readOnly}
-                    value={item.unit}
-                    onChange={(e) => update(item.id, { unit: e.target.value })}
-                    className={`${inputCls} w-16`}
-                  />
+                  <span className="text-xs text-text">{item.snapshotUnit || item.unit || '—'}</span>
                 </td>
                 <td className="px-2 py-2">
                   <input

@@ -7,8 +7,17 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
 use Peo\Auth;
 use Peo\DatabaseSetup;
 
-$pdo = db();
-DatabaseSetup::ensureUsersAndProjects($pdo);
+try {
+    $pdo = db();
+} catch (Throwable $e) {
+    jsonError('Database connection failed: ' . $e->getMessage(), 500);
+}
+
+try {
+    DatabaseSetup::ensureUsersAndProjects($pdo);
+} catch (Throwable $e) {
+    jsonError('Database setup failed: ' . $e->getMessage(), 500);
+}
 
 $method = $_SERVER['REQUEST_METHOD'];
 $action = $_GET['action'] ?? ($method === 'GET' ? 'me' : 'login');

@@ -187,7 +187,7 @@ function mailSwaSubmitToEngineer2(PDO $pdo, int $reportId, ?string $pdfRelPath):
     $html .= '<a href="' . $approveUrl . '" style="background:#4a6353;color:#fff;padding:10px 20px;text-decoration:none;border-radius:8px;margin-right:8px;">Approve</a>';
     $html .= '<a href="' . $reviseUrl . '" style="background:#e5e0d5;color:#333;padding:10px 20px;text-decoration:none;border-radius:8px;">Revise</a>';
     $html .= '</p>';
-    $html .= '<p><a href="' . $workflowUrl . '">Open For Approval in ConstructFlow / PEO Monitoring</a></p>';
+    $html .= '<p><a href="' . $workflowUrl . '">Open For Approval in ConstructFlow</a></p>';
     $html .= '<p><a href="' . $verifyUrl . '">Verify document (after final approval)</a></p>';
 
     $recipients = emailsForRoles($pdo, ['engineer_2']);
@@ -196,7 +196,7 @@ function mailSwaSubmitToEngineer2(PDO $pdo, int $reportId, ?string $pdfRelPath):
             $pdo,
             $reportId,
             $to,
-            'PEO Monitoring — ' . $report['report_type'] . ' Report Pending Approval',
+            'ConstructFlow — ' . $report['report_type'] . ' Report Pending Approval',
             $html,
             $pdfRelPath,
             $approveToken,
@@ -223,7 +223,7 @@ function mailSwaForwardToEngineer3(PDO $pdo, int $reportId, ?string $pdfRelPath)
             $pdo,
             $reportId,
             $to,
-            'PEO Monitoring — Report Forwarded for Checking',
+            'ConstructFlow — Report Forwarded for Checking',
             $html,
             $pdfRelPath,
         );
@@ -249,7 +249,7 @@ function mailFinalApprovedPackage(PDO $pdo, int $reportId, string $iarPdfRel, ar
     $html .= '<p>Attachment: <strong>' . htmlspecialchars($type) . ' PDF</strong></p>';
     $html .= '<p><a href="' . swaVerifyLink($report) . '">View verified report online</a></p>';
 
-    $subject = 'PEO Monitoring — Approved ' . $type . ' ' . ($report['report_number'] ?? '');
+    $subject = 'ConstructFlow — Approved ' . $type . ' ' . ($report['report_number'] ?? '');
     $recipients = emailsForRoles($pdo, ['engineer_1', 'engineer_2', 'engineer_3', 'engineer_4', 'contractor']);
     foreach ($recipients as $to) {
         queueSwaEmail($pdo, $reportId, $to, $subject, $html, $iarPdfRel, null, null, []);
@@ -281,7 +281,7 @@ function mailSwaNotifyRevision(PDO $pdo, int $reportId, string $comment, ?string
             $pdo,
             $reportId,
             $to,
-            'PEO Monitoring — Revision Required',
+            'ConstructFlow — Revision Required',
             $html,
             $pdfRelPath,
         );

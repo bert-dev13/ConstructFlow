@@ -1,37 +1,44 @@
-import { NavLink, useNavigate } from 'react-router-dom';
+'use client';
+
+import { NavLink, useNavigate } from '../lib/nextRouter';
 import { useAuth } from '../context/AuthContext';
 import { AGENCY_NAME, OFFICE_NAME } from '../lib/branding';
 import { ROLE_LABELS, type Role } from '../types';
 import { Logo } from './Logo';
+import { NavIcon, type NavIconName } from './NavIcon';
 
 /** Slim nav for Engineer II / III / IV — schedule & report tools live under Documents. */
-const REVIEWER_NAV = [
-  { to: '/dashboard', label: 'Dashboard', icon: '▦' },
-  { to: '/reports', label: 'Documents', icon: '📄' },
-  { to: '/workflow', label: 'For Approval', icon: '✓' },
+const REVIEWER_NAV: { to: string; label: string; icon: NavIconName }[] = [
+  { to: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
+  { to: '/reports', label: 'Documents', icon: 'reports' },
+  { to: '/workflow', label: 'For Approval', icon: 'approval' },
+  { to: '/pdm', label: 'PDM Schedule', icon: 'pdm' },
+  { to: '/bar-chart', label: 'Bar Chart', icon: 'bar-chart' },
+  { to: '/s-curve', label: 'S-Curve', icon: 's-curve' },
 ];
 
-const NAV_BY_ROLE: Record<Role, { to: string; label: string; icon: string }[]> = {
+const NAV_BY_ROLE: Record<Role, { to: string; label: string; icon: NavIconName }[]> = {
   engineer_1: [
-    { to: '/dashboard', label: 'Dashboard', icon: '▦' },
-    { to: '/projects', label: 'Projects', icon: '🏗' },
-    { to: '/pdm', label: 'PDM Schedule', icon: '◇' },
-    { to: '/bar-chart', label: 'Bar Chart', icon: '▬' },
-    { to: '/s-curve', label: 'S-Curve', icon: '⌇' },
-    { to: '/reports', label: 'Reports', icon: '📄' },
-    { to: '/workflow', label: 'My Submissions', icon: '✎' },
+    { to: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
+    { to: '/projects', label: 'Projects', icon: 'projects' },
+    { to: '/admin/pay-items', label: 'Pay Item Master', icon: 'projects' },
+    { to: '/pdm', label: 'PDM Schedule', icon: 'pdm' },
+    { to: '/bar-chart', label: 'Bar Chart', icon: 'bar-chart' },
+    { to: '/s-curve', label: 'S-Curve', icon: 's-curve' },
+    { to: '/reports', label: 'Reports', icon: 'reports' },
+    { to: '/workflow', label: 'My Submissions', icon: 'submissions' },
   ],
   engineer_2: REVIEWER_NAV,
   engineer_3: REVIEWER_NAV,
   engineer_4: REVIEWER_NAV,
   contractor: [
-    { to: '/dashboard', label: 'Dashboard', icon: '▦' },
-    { to: '/schedule', label: 'Prepare Schedule', icon: '✎' },
-    { to: '/bar-chart', label: 'Bar Chart', icon: '▬' },
-    { to: '/s-curve', label: 'S-Curve', icon: '⌇' },
-    { to: '/pdm', label: 'PDM Schedule', icon: '◇' },
-    { to: '/swa-stewa', label: 'IAR', icon: '📋' },
-    { to: '/reports', label: 'Reports', icon: '📄' },
+    { to: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
+    { to: '/schedule', label: 'Prepare Schedule', icon: 'schedule' },
+    { to: '/bar-chart', label: 'Bar Chart', icon: 'bar-chart' },
+    { to: '/s-curve', label: 'S-Curve', icon: 's-curve' },
+    { to: '/pdm', label: 'PDM Schedule', icon: 'pdm' },
+    { to: '/swa-stewa', label: 'IAR', icon: 'iar' },
+    { to: '/reports', label: 'Reports', icon: 'reports' },
   ],
 };
 
@@ -50,12 +57,12 @@ export function Sidebar() {
 
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-border/80 bg-card shadow-sm">
-      <div className="border-b border-border/80 bg-gradient-to-b from-primary-light/30 to-card p-5">
-        <Logo size="sm" />
+      <div className="border-b border-border/80 bg-gradient-to-b from-primary-light/30 to-card p-4">
+        <Logo size="md" showText={false} />
         <p className="mt-3 text-[11px] leading-relaxed text-text-muted">
-          {OFFICE_NAME}
-          <br />
-          <span className="text-text-muted/80">{AGENCY_NAME} · Progress monitoring</span>
+          <span className="text-text-muted/80">
+            {OFFICE_NAME} · {AGENCY_NAME}
+          </span>
         </p>
       </div>
 
@@ -73,8 +80,8 @@ export function Sidebar() {
               }`
             }
           >
-            <span className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm ${'opacity-90'}`}>
-              {item.icon}
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg opacity-90">
+              <NavIcon name={item.icon} className="h-4 w-4" />
             </span>
             {item.label}
           </NavLink>

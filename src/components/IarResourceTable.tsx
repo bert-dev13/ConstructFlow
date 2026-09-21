@@ -1,3 +1,5 @@
+'use client';
+
 import { newManpowerRow, type IarManpowerRow } from '../lib/iarItems';
 import { fieldInputClass } from './ui/FormField';
 

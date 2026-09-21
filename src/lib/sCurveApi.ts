@@ -1,7 +1,6 @@
-import { apiFetch } from './http';
-import { apiUrl } from './paths';
 import type { ReportProgressEntry } from '../components/ReportProgressFeed';
 import type { SCurvePoint } from '../types';
+import { getSCurveFs } from './firebase/sCurves';
 
 export interface SCurveActivity {
   number: string;
@@ -25,7 +24,7 @@ export interface ScheduleStatus {
 }
 
 export interface SCurveSnapshotSummary {
-  id: number;
+  id: string;
   captured_at: string;
   trigger_type: string;
   trigger_label: string | null;
@@ -45,13 +44,9 @@ export interface SCurveComparison {
   status_label: string;
 }
 
-export function getSCurve(projectId = 1, snapshotId?: number | null) {
-  const params = new URLSearchParams({ project_id: String(projectId) });
-  if (snapshotId != null && snapshotId > 0) {
-    params.set('snapshot_id', String(snapshotId));
-  }
-  return apiFetch<{
-    project_id: number;
+export function getSCurve(projectId: string | number = '1', snapshotId?: string | number | null) {
+  return getSCurveFs(projectId, snapshotId) as Promise<{
+    project_id: string;
     project_duration: number;
     project_start_date: string;
     project_end_date: string;
@@ -66,9 +61,11 @@ export function getSCurve(projectId = 1, snapshotId?: number | null) {
     report_feed: ReportProgressEntry[];
     latest_report_percent: number | null;
     latest_report_date: string | null;
+    target_plan_percent: number | null;
+    actual_plan_percent: number | null;
     versions: SCurveSnapshotSummary[];
-    viewing_snapshot_id: number | null;
+    viewing_snapshot_id: string | null;
     viewing_snapshot_label: string | null;
     viewing_snapshot_at: string | null;
-  }>(apiUrl('s_curve.php', params.toString()));
+  }>;
 }

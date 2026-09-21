@@ -1,5 +1,8 @@
-import { Link } from 'react-router-dom';
+'use client';
+
+import { Link } from '../lib/nextRouter';
 import { useAuth } from '../context/AuthContext';
+import { NavIcon } from './NavIcon';
 
 const REVIEWER_ROLES = new Set(['engineer_2', 'engineer_3', 'engineer_4']);
 
@@ -11,9 +14,10 @@ export function DocumentsBackLink() {
   return (
     <Link
       to="/reports"
-      className="mb-3 inline-flex text-sm font-medium text-text-muted transition hover:text-primary"
+      className="mb-3 inline-flex items-center gap-1.5 text-sm font-medium text-text-muted transition hover:text-primary"
     >
-      ← Documents
+      <NavIcon name="arrow-left" className="h-3.5 w-3.5" />
+      Documents
     </Link>
   );
 }
