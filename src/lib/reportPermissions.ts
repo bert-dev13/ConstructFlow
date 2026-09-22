@@ -39,14 +39,25 @@ export function canEditReport(
   role: Role | undefined,
   reportType: SwaStewaReportKind,
   status: SwaStewaStatus | string,
+  editUserIds?: string[] | null,
+  userId?: string | null,
 ): boolean {
   if (!role || !canUserEditReportType(role, reportType)) return false;
 
   const locked = ['pending_review', 'with_engineer_3', 'with_engineer_4', 'approved', 'generated'];
   if (locked.includes(status)) return false;
 
+  if (editUserIds?.length && userId && !editUserIds.includes(userId)) {
+    return false;
+  }
+
   if (role === 'contractor') {
-    if (reportType === 'IAR') return status === 'draft' || status === 'rejected';
+    if (reportType === 'IAR') {
+      return ['draft', 'pending_contractor', 'rejected', 'contractor_confirmed'].includes(status);
+    }
+    if (reportType === 'STEWA') {
+      return ['draft', 'pending_contractor', 'rejected'].includes(status);
+    }
     return status === 'pending_contractor' || status === 'rejected';
   }
 
@@ -62,8 +73,10 @@ export function reportIsViewOnly(
   role: Role | undefined,
   reportType: SwaStewaReportKind,
   status?: SwaStewaStatus | string,
+  editUserIds?: string[] | null,
+  userId?: string | null,
 ): boolean {
-  if (status) return !canEditReport(role, reportType, status);
+  if (status) return !canEditReport(role, reportType, status, editUserIds, userId);
   return !canUserEditReportType(role, reportType);
 }
 
@@ -71,9 +84,11 @@ export function contractorReportIsViewOnly(
   role: Role | undefined,
   reportType: SwaStewaReportKind,
   status?: SwaStewaStatus | string,
+  editUserIds?: string[] | null,
+  userId?: string | null,
 ): boolean {
   if (role !== 'contractor') return false;
-  if (status) return !canEditReport(role, reportType, status);
+  if (status) return !canEditReport(role, reportType, status, editUserIds, userId);
   return reportType !== 'IAR';
 }
 

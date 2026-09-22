@@ -6,6 +6,7 @@ import {
   getDoc,
   getDocs,
   query,
+  runTransaction,
   setDoc,
   updateDoc,
   where,
@@ -15,8 +16,18 @@ import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage
 import type { Role } from '../../types';
 import type { WorkItem } from '../workItems';
 import { computeWorkItems } from '../workItems';
-import type { ContractorChange, SwaStewaReport, SwaStewaStatus } from '../swaStewaApi';
+import type {
+  ApprovalActorState,
+  ContractorChange,
+  ContractorConfirmationState,
+  OptionalAttachmentKey,
+  ReportApprovalFlow,
+  ReportReleaseState,
+  SwaStewaReport,
+  SwaStewaStatus,
+} from '../swaStewaApi';
 import { COLLECTIONS, reportAuditPath, reportRevisionsPath } from './collections';
+import { getAccessContext, readProjectAccess } from './access';
 import { db, functions, storage } from './config';
 import { asId, nowIso, omitUndefined } from './ids';
 import { syncProgressCharts } from './sCurves';
@@ -46,6 +57,132 @@ function enrichReportData(
 
 function publicReportUrl(reportNumber: string) {
   return `${typeof window !== 'undefined' ? window.location.origin : ''}${BASE_URL}reports/view/${encodeURIComponent(reportNumber)}`;
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item ?? '').trim())
+    .filter((item) => item.length > 0);
+}
+
+function actorState(value: unknown): ApprovalActorState | null {
+  if (!value || typeof value !== 'object') return null;
+  const data = value as Record<string, unknown>;
+  return {
+    approved_by: data.approvedBy != null ? String(data.approvedBy) : null,
+    approved_role: data.approvedRole != null ? String(data.approvedRole) : null,
+    approved_at: data.approvedAt != null ? String(data.approvedAt) : null,
+  };
+}
+
+function contractorConfirmationState(value: unknown): ContractorConfirmationState | null {
+  if (!value || typeof value !== 'object') return null;
+  const data = value as Record<string, unknown>;
+  return {
+    confirmed_by: data.confirmedBy != null ? String(data.confirmedBy) : null,
+    confirmed_role: data.confirmedRole != null ? String(data.confirmedRole) : null,
+    confirmed_at: data.confirmedAt != null ? String(data.confirmedAt) : null,
+    confirms_swa: data.confirmsSwa === true,
+    confirms_iar: data.confirmsIar === true,
+  };
+}
+
+function approvalFlowState(value: unknown): ReportApprovalFlow | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const data = value as Record<string, unknown>;
+  return {
+    contractor_confirmation: contractorConfirmationState(data.contractorConfirmation),
+    engineer_2: actorState(data.engineer2),
+    engineer_3: actorState(data.engineer3),
+    engineer_4: actorState(data.engineer4),
+    current_stage:
+      data.currentStage != null ? String(data.currentStage) as ReportApprovalFlow['current_stage'] : undefined,
+    correction_cycle:
+      data.correctionCycle != null ? Number(data.correctionCycle) : undefined,
+    last_correction_reason:
+      data.lastCorrectionReason != null ? String(data.lastCorrectionReason) : null,
+    last_correction_by:
+      data.lastCorrectionBy != null ? String(data.lastCorrectionBy) : null,
+    last_correction_role:
+      data.lastCorrectionRole != null ? String(data.lastCorrectionRole) : null,
+  };
+}
+
+function releaseState(value: unknown): ReportReleaseState | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const data = value as Record<string, unknown>;
+  const attachmentUrlsRaw =
+    data.attachmentUrls && typeof data.attachmentUrls === 'object'
+      ? (data.attachmentUrls as Record<string, unknown>)
+      : {};
+  const attachmentUrls: Partial<Record<OptionalAttachmentKey, string>> = {};
+  for (const key of ['pdm', 'bar_chart', 's_curve', 'swa', 'stewa'] as OptionalAttachmentKey[]) {
+    if (attachmentUrlsRaw[key] != null) attachmentUrls[key] = String(attachmentUrlsRaw[key]);
+  }
+  return {
+    optional_attachments: stringArray(data.optionalAttachments) as OptionalAttachmentKey[],
+    attachments_released_at:
+      data.attachmentsReleasedAt != null ? String(data.attachmentsReleasedAt) : null,
+    released_by: data.releasedBy != null ? String(data.releasedBy) : null,
+    released_role: data.releasedRole != null ? String(data.releasedRole) : null,
+    email_sent_at: data.emailSentAt != null ? String(data.emailSentAt) : null,
+    attachment_urls: attachmentUrls,
+  };
+}
+
+function buildEditableUserIds(
+  reportType: 'SWA' | 'STEWA' | 'IAR',
+  projectAccessUserIds: string[],
+  projectData: Record<string, unknown> | null,
+  lastViewedBy?: string | null,
+): string[] {
+  const access = projectData ? readProjectAccess(projectData) : null;
+  const engineer1Ids = access ? access.assignedUserIds.filter((id) => id !== access.contractorId) : [];
+  const editable = new Set<string>([...engineer1Ids]);
+  if (access?.contractorId) editable.add(access.contractorId);
+  if ((reportType === 'SWA' || reportType === 'STEWA') && access?.involvedUserIds.length) {
+    for (const id of access.involvedUserIds) editable.add(id);
+  }
+  if (lastViewedBy) editable.add(lastViewedBy);
+  if (!editable.size) {
+    for (const id of projectAccessUserIds) editable.add(id);
+  }
+  return [...editable];
+}
+
+function initialApprovalFlow(reportType: 'SWA' | 'STEWA' | 'IAR'): ReportApprovalFlow | undefined {
+  if (reportType !== 'IAR') return undefined;
+  return {
+    contractor_confirmation: null,
+    engineer_2: null,
+    engineer_3: null,
+    engineer_4: null,
+    current_stage: 'draft',
+    correction_cycle: 0,
+    last_correction_reason: null,
+    last_correction_by: null,
+    last_correction_role: null,
+  };
+}
+
+function selectedOptionalAttachments(generate?: {
+  s_curve?: boolean;
+  pdm?: boolean;
+  bar_chart?: boolean;
+  swa?: boolean;
+  stewa?: boolean;
+}): OptionalAttachmentKey[] {
+  if (!generate) return [];
+  return ([
+    ['s_curve', generate.s_curve],
+    ['pdm', generate.pdm],
+    ['bar_chart', generate.bar_chart],
+    ['swa', generate.swa],
+    ['stewa', generate.stewa],
+  ] as const)
+    .filter(([, enabled]) => enabled)
+    .map(([key]) => key);
 }
 
 function standardizePayItemRow(row: Record<string, unknown>, masters: Map<string, PayItem>) {
@@ -103,6 +240,11 @@ function mapReport(id: string, data: Record<string, unknown>): SwaStewaReport {
     project_name: (data.projectName as string | undefined) ?? undefined,
     rejection_reason: (data.rejectionReason as string | undefined) ?? undefined,
     contractor_changes: (data.contractorChanges as ContractorChange[] | undefined) ?? undefined,
+    approval_flow: approvalFlowState(data.approvalFlow),
+    release_state: releaseState(data.releaseState),
+    edit_user_ids: stringArray(data.editUserIds),
+    last_viewed_by: data.lastViewedBy != null ? String(data.lastViewedBy) : null,
+    last_viewed_at: data.lastViewedAt != null ? String(data.lastViewedAt) : null,
     created_by: data.createdBy != null ? asId(data.createdBy as string) : null,
     created_at: String(data.createdAt ?? ''),
     generated_at: (data.generatedAt as string | undefined) ?? undefined,
@@ -132,29 +274,53 @@ async function nextReportNumber(type: string, reportDate?: string | null): Promi
   end.setDate(end.getDate() + 6);
   const endDay = end.getDate();
   const base = `${type}-${year}-${month}-${startDay}-${endDay}`;
-
-  const snap = await getDocs(collection(db, COLLECTIONS.reports));
-  const existing = new Set(
-    snap.docs.map((d) => String((d.data() as Record<string, unknown>).reportNumber ?? '')),
-  );
-  if (!existing.has(base)) return base;
-  let suffix = 2;
-  while (existing.has(`${base}-${suffix}`)) suffix += 1;
-  return `${base}-${suffix}`;
+  const counterRef = doc(db, COLLECTIONS.counters, `reportNumber_${base}`);
+  return runTransaction(db, async (tx) => {
+    const snap = await tx.get(counterRef);
+    const nextSuffix = Number((snap.data() as Record<string, unknown> | undefined)?.nextSuffix ?? 1);
+    tx.set(
+      counterRef,
+      {
+        kind: 'report_number',
+        base,
+        nextSuffix: nextSuffix + 1,
+        updatedAt: nowIso(),
+      },
+      { merge: true },
+    );
+    return nextSuffix <= 1 ? base : `${base}-${nextSuffix}`;
+  });
 }
 
 export async function listReportsFs(params?: Record<string, string>) {
+  const access = await getAccessContext();
+  if (!access) return { reports: [] as SwaStewaReport[] };
+  const reportType = params?.report_type ?? params?.type;
   let qRef = query(collection(db, COLLECTIONS.reports));
-  if (params?.project_id) {
-    qRef = query(collection(db, COLLECTIONS.reports), where('projectId', '==', asId(params.project_id)));
+  if (access?.hasGlobalProjectAccess) {
+    if (params?.project_id) {
+      qRef = query(collection(db, COLLECTIONS.reports), where('projectId', '==', asId(params.project_id)));
+    }
+  } else if (access?.uid) {
+    if (params?.project_id) {
+      qRef = query(collection(db, COLLECTIONS.reports), where('projectId', '==', asId(params.project_id)));
+    } else {
+      qRef = query(
+        collection(db, COLLECTIONS.reports),
+        where('accessUserIds', 'array-contains', access.uid),
+      );
+    }
   }
   const snap = await getDocs(qRef);
   let reports = snap.docs.map((d) => mapReport(d.id, d.data() as Record<string, unknown>));
+  if (params?.project_id) {
+    reports = reports.filter((r) => r.project_id === asId(params.project_id));
+  }
   if (params?.status) {
     reports = reports.filter((r) => r.status === params.status);
   }
-  if (params?.report_type) {
-    reports = reports.filter((r) => r.report_type === params.report_type);
+  if (reportType) {
+    reports = reports.filter((r) => r.report_type === reportType);
   }
   reports.sort((a, b) => b.created_at.localeCompare(a.created_at));
   return { reports };
@@ -187,6 +353,17 @@ export async function getReportFs(idOrNumber: string) {
     verified: ['approved', 'generated'].includes(report.status),
     pdf_url: report.pdf_file,
   };
+}
+
+export async function markReportViewedFs(reportId: string | number) {
+  const access = await getAccessContext();
+  if (!access?.uid) return { ok: false };
+  await updateDoc(doc(db, COLLECTIONS.reports, asId(reportId)), {
+    lastViewedBy: access.uid,
+    lastViewedAt: nowIso(),
+    updatedAt: nowIso(),
+  });
+  return { ok: true };
 }
 
 export async function verifyReportQrFs(qr: string) {
@@ -298,14 +475,21 @@ export async function saveReportFs(payload: {
   project_id: string | number;
   report_data: Record<string, unknown>;
   line_items?: WorkItem[];
+  contractor_changes?: ContractorChange[];
   created_by?: string | number;
   actor_name?: string;
 }) {
   const projectId = asId(payload.project_id);
   let projectName: string | undefined;
+  let accessUserIds: string[] = [];
+  let projectData: Record<string, unknown> | null = null;
   try {
     const proj = await getDoc(doc(db, COLLECTIONS.projects, projectId));
-    if (proj.exists()) projectName = String((proj.data() as Record<string, unknown>).name ?? '');
+    if (proj.exists()) {
+      projectData = proj.data() as Record<string, unknown>;
+      projectName = String(projectData.name ?? '');
+      accessUserIds = readProjectAccess(projectData).accessUserIds;
+    }
   } catch {
     /* ignore */
   }
@@ -326,6 +510,16 @@ export async function saveReportFs(payload: {
     const existing = await getDoc(ref);
     if (!existing.exists()) throw new Error('Report not found');
     const prev = existing.data() as Record<string, unknown>;
+    const existingEditUserIds = stringArray(prev.editUserIds);
+    const nextEditUserIds =
+      existingEditUserIds.length > 0
+        ? existingEditUserIds
+        : buildEditableUserIds(
+            payload.report_type,
+            accessUserIds,
+            projectData,
+            prev.lastViewedBy != null ? String(prev.lastViewedBy) : null,
+          );
     await addDoc(collection(db, reportRevisionsPath(id)), {
       revisionNumber: Date.now(),
       reportData: prev.reportData ?? {},
@@ -337,6 +531,15 @@ export async function saveReportFs(payload: {
       reportData,
       lineItems: standardized.lineItems ?? (prev.lineItems as WorkItem[] | undefined) ?? [],
       projectName: projectName ?? prev.projectName,
+      accessUserIds:
+        accessUserIds.length > 0
+          ? accessUserIds
+          : ((prev.accessUserIds as string[] | undefined) ?? []),
+      editUserIds: nextEditUserIds,
+      contractorChanges: payload.contractor_changes ?? (prev.contractorChanges as ContractorChange[] | undefined) ?? [],
+      approvalFlow: (prev.approvalFlow as Record<string, unknown> | undefined)
+        ?? initialApprovalFlow(payload.report_type),
+      releaseState: (prev.releaseState as Record<string, unknown> | undefined) ?? null,
       updatedAt: nowIso(),
     }));
     await writeAudit(id, 'saved', {}, payload.actor_name);
@@ -357,14 +560,20 @@ export async function saveReportFs(payload: {
     String(reportData.report_date ?? '') || null,
   );
   const ref = doc(collection(db, COLLECTIONS.reports));
+  const editUserIds = buildEditableUserIds(payload.report_type, accessUserIds, projectData, null);
   const docData = omitUndefined({
     reportNumber,
     projectId,
     projectName: projectName ?? null,
+    accessUserIds,
+    editUserIds,
     reportType: payload.report_type,
     reportData,
     lineItems: standardized.lineItems ?? [],
+    contractorChanges: payload.contractor_changes ?? [],
     status: 'draft' as SwaStewaStatus,
+    approvalFlow: initialApprovalFlow(payload.report_type) ?? null,
+    releaseState: null,
     publicUrl: publicReportUrl(reportNumber),
     createdBy: payload.created_by != null ? asId(payload.created_by) : null,
     createdAt: nowIso(),
@@ -397,10 +606,48 @@ export async function sendToContractorFs(reportId: string | number, actorName?: 
   if (!['draft', 'rejected'].includes(String(data.status))) {
     throw new Error('Report cannot be sent to contractor in current status');
   }
+  let projectData: Record<string, unknown> | null = null;
+  let accessUserIds = stringArray(data.accessUserIds);
+  try {
+    const projectSnap = await getDoc(doc(db, COLLECTIONS.projects, asId(data.projectId as string)));
+    if (projectSnap.exists()) {
+      projectData = projectSnap.data() as Record<string, unknown>;
+      accessUserIds = readProjectAccess(projectData).accessUserIds;
+    }
+  } catch {
+    /* ignore */
+  }
+  const nextEditUserIds = buildEditableUserIds(
+    data.reportType as 'SWA' | 'STEWA' | 'IAR',
+    accessUserIds,
+    projectData,
+    data.lastViewedBy != null ? String(data.lastViewedBy) : null,
+  );
   await updateDoc(ref, {
     status: 'pending_contractor',
     contractorBaseline: data.reportData ?? {},
     contractorChanges: [],
+    rejectionReason: null,
+    editUserIds: nextEditUserIds,
+    approvalFlow:
+      data.reportType === 'IAR'
+        ? {
+            contractorConfirmation: null,
+            engineer2: null,
+            engineer3: null,
+            engineer4: null,
+            currentStage: 'contractor_confirmation',
+            correctionCycle: Number(
+              (data.approvalFlow as Record<string, unknown> | undefined)?.correctionCycle ?? 0,
+            ),
+            lastCorrectionReason:
+              (data.approvalFlow as Record<string, unknown> | undefined)?.lastCorrectionReason ?? null,
+            lastCorrectionBy:
+              (data.approvalFlow as Record<string, unknown> | undefined)?.lastCorrectionBy ?? null,
+            lastCorrectionRole:
+              (data.approvalFlow as Record<string, unknown> | undefined)?.lastCorrectionRole ?? null,
+          }
+        : (data.approvalFlow ?? null),
     updatedAt: nowIso(),
   });
   await writeAudit(id, 'sent_to_contractor', {}, actorName);
@@ -409,14 +656,44 @@ export async function sendToContractorFs(reportId: string | number, actorName?: 
 }
 
 export async function contractorConfirmFs(reportId: string | number, actorName?: string) {
+  const access = await getAccessContext();
   const id = asId(reportId);
   const ref = doc(db, COLLECTIONS.reports, id);
   const snap = await getDoc(ref);
   if (!snap.exists()) throw new Error('Report not found');
-  if (String((snap.data() as Record<string, unknown>).status) !== 'pending_contractor') {
+  const data = snap.data() as Record<string, unknown>;
+  if (String(data.status) !== 'pending_contractor') {
     throw new Error('Report is not awaiting contractor confirmation');
   }
-  await updateDoc(ref, { status: 'contractor_confirmed', updatedAt: nowIso() });
+  await updateDoc(ref, {
+    status: 'contractor_confirmed',
+    approvalFlow:
+      data.reportType === 'IAR'
+        ? {
+            contractorConfirmation: {
+              confirmedBy: access?.uid ?? null,
+              confirmedRole: access?.role ?? 'contractor',
+              confirmedAt: nowIso(),
+              confirmsSwa: true,
+              confirmsIar: true,
+            },
+            engineer2: null,
+            engineer3: null,
+            engineer4: null,
+            currentStage: 'engineer_2',
+            correctionCycle: Number(
+              (data.approvalFlow as Record<string, unknown> | undefined)?.correctionCycle ?? 0,
+            ),
+            lastCorrectionReason:
+              (data.approvalFlow as Record<string, unknown> | undefined)?.lastCorrectionReason ?? null,
+            lastCorrectionBy:
+              (data.approvalFlow as Record<string, unknown> | undefined)?.lastCorrectionBy ?? null,
+            lastCorrectionRole:
+              (data.approvalFlow as Record<string, unknown> | undefined)?.lastCorrectionRole ?? null,
+          }
+        : data.approvalFlow ?? null,
+    updatedAt: nowIso(),
+  });
   await writeAudit(id, 'contractor_confirmed', {}, actorName);
   const updated = await getDoc(ref);
   return {
@@ -434,7 +711,30 @@ export async function submitReportFs(
   const ref = doc(db, COLLECTIONS.reports, id);
   const snap = await getDoc(ref);
   if (!snap.exists()) throw new Error('Report not found');
-  await updateDoc(ref, { status: 'pending_review', updatedAt: nowIso() });
+  const data = snap.data() as Record<string, unknown>;
+  if (String(data.reportType) === 'IAR') {
+    if (String(data.status) !== 'contractor_confirmed') {
+      throw new Error('IAR must be contractor-confirmed before Engineer II review');
+    }
+    const contractorConfirmation =
+      ((data.approvalFlow as Record<string, unknown> | undefined)?.contractorConfirmation as
+        | Record<string, unknown>
+        | undefined) ?? {};
+    if (contractorConfirmation.confirmsSwa !== true || contractorConfirmation.confirmsIar !== true) {
+      throw new Error('Contractor confirmation is incomplete');
+    }
+  }
+  await updateDoc(ref, {
+    status: 'pending_review',
+    approvalFlow:
+      String(data.reportType) === 'IAR'
+        ? {
+            ...((data.approvalFlow as Record<string, unknown> | undefined) ?? {}),
+            currentStage: 'engineer_2',
+          }
+        : (data.approvalFlow ?? null),
+    updatedAt: nowIso(),
+  });
   await writeAudit(id, 'submitted', {}, actorName);
   await queueEmail(id, 'submitted_for_review');
   return { status: 'pending_review' };
@@ -479,6 +779,20 @@ async function finalizeGenerated(reportId: string, actorName?: string) {
     pdfPath: pdfUrl ?? null,
     qrCode,
     publicUrl: publicReportUrl(reportNumber),
+    approvalFlow:
+      String(data.reportType) === 'IAR'
+        ? {
+            ...((data.approvalFlow as Record<string, unknown> | undefined) ?? {}),
+            currentStage: 'released',
+          }
+        : (data.approvalFlow ?? null),
+    releaseState:
+      String(data.reportType) === 'IAR'
+        ? {
+            ...((data.releaseState as Record<string, unknown> | undefined) ?? {}),
+            attachmentsReleasedAt: nowIso(),
+          }
+        : (data.releaseState ?? null),
     generatedAt: nowIso(),
     updatedAt: nowIso(),
   });
@@ -502,20 +816,45 @@ export async function approveReportFs(
   reportId: string | number,
   _actorId?: string | number,
   actorRole?: string,
-  _generate?: { s_curve?: boolean; pdm?: boolean; bar_chart?: boolean },
+  _generate?: { s_curve?: boolean; pdm?: boolean; bar_chart?: boolean; swa?: boolean; stewa?: boolean },
   actorName?: string,
 ) {
+  const access = await getAccessContext();
   const id = asId(reportId);
   const ref = doc(db, COLLECTIONS.reports, id);
   const snap = await getDoc(ref);
   if (!snap.exists()) throw new Error('Report not found');
   const data = snap.data() as Record<string, unknown>;
   const status = String(data.status);
-  const role = actorRole as Role | undefined;
+  const role = (actorRole ?? access?.role) as Role | undefined;
+  const actorId = _actorId != null ? asId(_actorId) : access?.uid ?? null;
+  const selectedAttachments = selectedOptionalAttachments(_generate);
+  const isIar = String(data.reportType) === 'IAR';
+  const approvalFlowData =
+    ((data.approvalFlow as Record<string, unknown> | undefined) ?? {}) as Record<string, unknown>;
+  const contractorConfirmation =
+    ((approvalFlowData.contractorConfirmation as Record<string, unknown> | undefined) ?? {}) as Record<
+      string,
+      unknown
+    >;
+
+  if (isIar && (contractorConfirmation.confirmsSwa !== true || contractorConfirmation.confirmsIar !== true)) {
+    throw new Error('Contractor confirmation is required before engineer approval');
+  }
 
   if (role === 'engineer_2') {
     if (status !== 'pending_review') throw new Error('Report is not pending Engineer II review');
-    await updateDoc(ref, { status: 'with_engineer_3', updatedAt: nowIso() });
+    await updateDoc(ref, {
+      status: 'with_engineer_3',
+      approvalFlow: isIar
+        ? {
+            ...approvalFlowData,
+            engineer2: { approvedBy: actorId, approvedRole: role, approvedAt: nowIso() },
+            currentStage: 'engineer_3',
+          }
+        : data.approvalFlow ?? null,
+      updatedAt: nowIso(),
+    });
     await writeAudit(id, 'approved_forwarded_e3', {}, actorName);
     await queueEmail(id, 'forwarded_e3');
     return { status: 'with_engineer_3', message: 'Forwarded to Engineer III for checking' };
@@ -523,17 +862,53 @@ export async function approveReportFs(
 
   if (role === 'engineer_3') {
     if (status !== 'with_engineer_3') throw new Error('Report is not with Engineer III');
-    await updateDoc(ref, { status: 'with_engineer_4', updatedAt: nowIso() });
+    if (isIar && !approvalFlowData.engineer2) {
+      throw new Error('Engineer II approval is required first');
+    }
+    await updateDoc(ref, {
+      status: 'with_engineer_4',
+      approvalFlow: isIar
+        ? {
+            ...approvalFlowData,
+            engineer3: { approvedBy: actorId, approvedRole: role, approvedAt: nowIso() },
+            currentStage: 'engineer_4',
+          }
+        : data.approvalFlow ?? null,
+      updatedAt: nowIso(),
+    });
     await writeAudit(id, 'approved_forwarded_e4', {}, actorName);
     await queueEmail(id, 'forwarded_e4');
     return { status: 'with_engineer_4', message: 'Forwarded to Engineer IV for final approval' };
   }
 
   if (role === 'engineer_4') {
-    if (status !== 'with_engineer_4' && status !== 'with_engineer_3') {
+    if (status !== 'with_engineer_4') {
       throw new Error('Report is not ready for final approval');
     }
-    await updateDoc(ref, { status: 'approved', updatedAt: nowIso() });
+    if (isIar && (!approvalFlowData.engineer2 || !approvalFlowData.engineer3)) {
+      throw new Error('Engineer II and Engineer III approvals are required first');
+    }
+    await updateDoc(ref, {
+      status: 'approved',
+      approvalFlow: isIar
+        ? {
+            ...approvalFlowData,
+            engineer4: { approvedBy: actorId, approvedRole: role, approvedAt: nowIso() },
+            currentStage: 'engineer_4',
+          }
+        : data.approvalFlow ?? null,
+      releaseState: isIar
+        ? {
+            ...((data.releaseState as Record<string, unknown> | undefined) ?? {}),
+            optionalAttachments: selectedAttachments,
+            releasedBy: actorId,
+            releasedRole: role,
+            attachmentsReleasedAt: null,
+            emailSentAt: null,
+          }
+        : data.releaseState ?? null,
+      updatedAt: nowIso(),
+    });
     await writeAudit(id, 'approved', {}, actorName);
     return finalizeGenerated(id, actorName);
   }
@@ -548,9 +923,48 @@ export async function rejectReportFs(
   actorName?: string,
 ) {
   const id = asId(reportId);
-  await updateDoc(doc(db, COLLECTIONS.reports, id), {
+  const access = await getAccessContext();
+  const reportRef = doc(db, COLLECTIONS.reports, id);
+  const snap = await getDoc(reportRef);
+  if (!snap.exists()) throw new Error('Report not found');
+  const data = snap.data() as Record<string, unknown>;
+  let projectData: Record<string, unknown> | null = null;
+  let accessUserIds = stringArray(data.accessUserIds);
+  try {
+    const projectSnap = await getDoc(doc(db, COLLECTIONS.projects, asId(data.projectId as string)));
+    if (projectSnap.exists()) {
+      projectData = projectSnap.data() as Record<string, unknown>;
+      accessUserIds = readProjectAccess(projectData).accessUserIds;
+    }
+  } catch {
+    /* ignore */
+  }
+  const reopenedEditors = buildEditableUserIds(
+    data.reportType as 'SWA' | 'STEWA' | 'IAR',
+    accessUserIds,
+    projectData,
+    data.lastViewedBy != null ? String(data.lastViewedBy) : null,
+  );
+  const prevApprovalFlow =
+    ((data.approvalFlow as Record<string, unknown> | undefined) ?? {}) as Record<string, unknown>;
+  await updateDoc(reportRef, {
     status: 'rejected',
     rejectionReason: reason,
+    editUserIds: reopenedEditors,
+    approvalFlow:
+      String(data.reportType) === 'IAR'
+        ? {
+            contractorConfirmation: null,
+            engineer2: null,
+            engineer3: null,
+            engineer4: null,
+            currentStage: 'draft',
+            correctionCycle: Number(prevApprovalFlow.correctionCycle ?? 0) + 1,
+            lastCorrectionReason: reason,
+            lastCorrectionBy: _actorId != null ? asId(_actorId) : access?.uid ?? null,
+            lastCorrectionRole: access?.role ?? null,
+          }
+        : data.approvalFlow ?? null,
     updatedAt: nowIso(),
   });
   await writeAudit(id, 'rejected', { reason }, actorName);

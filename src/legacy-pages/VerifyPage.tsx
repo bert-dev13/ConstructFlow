@@ -87,7 +87,7 @@ export function VerifyPage() {
               </div>
             </dl>
             <Link
-              to={`/reports/view/${encodeURIComponent(report.report_number)}`}
+              to={`/reports/view?reportNumber=${encodeURIComponent(report.report_number)}`}
               className="mt-6 inline-block text-sm font-semibold text-primary underline"
             >
               Open full report view

@@ -11,6 +11,7 @@ import {
   listReportAuditFs,
   listReportRevisionsFs,
   listReportsFs,
+  markReportViewedFs,
   previewReportFs,
   regeneratePdfFs,
   rejectReportFs,
@@ -32,11 +33,55 @@ export type SwaStewaStatus =
   | 'rejected'
   | 'generated';
 
+export type OptionalAttachmentKey = 'pdm' | 'bar_chart' | 's_curve' | 'swa' | 'stewa';
+
+export interface ApprovalActorState {
+  approved_by?: string | null;
+  approved_role?: string | null;
+  approved_at?: string | null;
+}
+
+export interface ContractorConfirmationState {
+  confirmed_by?: string | null;
+  confirmed_role?: string | null;
+  confirmed_at?: string | null;
+  confirms_swa: boolean;
+  confirms_iar: boolean;
+}
+
+export interface ReportApprovalFlow {
+  contractor_confirmation?: ContractorConfirmationState | null;
+  engineer_2?: ApprovalActorState | null;
+  engineer_3?: ApprovalActorState | null;
+  engineer_4?: ApprovalActorState | null;
+  current_stage?:
+    | 'draft'
+    | 'contractor_confirmation'
+    | 'engineer_2'
+    | 'engineer_3'
+    | 'engineer_4'
+    | 'released';
+  correction_cycle?: number;
+  last_correction_reason?: string | null;
+  last_correction_by?: string | null;
+  last_correction_role?: string | null;
+}
+
+export interface ReportReleaseState {
+  optional_attachments?: OptionalAttachmentKey[];
+  attachments_released_at?: string | null;
+  released_by?: string | null;
+  released_role?: string | null;
+  email_sent_at?: string | null;
+  attachment_urls?: Partial<Record<OptionalAttachmentKey, string>>;
+}
+
 export interface ContractorChange {
   field: string;
   label: string;
   old: string;
   new: string;
+  comment?: string;
 }
 
 export interface SwaStewaReport {
@@ -53,6 +98,11 @@ export interface SwaStewaReport {
   project_name?: string;
   rejection_reason?: string;
   contractor_changes?: ContractorChange[];
+  approval_flow?: ReportApprovalFlow;
+  release_state?: ReportReleaseState;
+  edit_user_ids?: string[];
+  last_viewed_by?: string | null;
+  last_viewed_at?: string | null;
   created_by?: string | null;
   created_at: string;
   generated_at?: string;
@@ -70,6 +120,10 @@ export function getReport(idOrNumber: string) {
   return getReportFs(idOrNumber);
 }
 
+export function markReportViewed(reportId: string | number) {
+  return markReportViewedFs(reportId);
+}
+
 export function getStewaFromSwa(projectId: string | number, reportDate: string) {
   return getStewaFromSwaFs(projectId, reportDate);
 }
@@ -84,6 +138,7 @@ export function saveReport(payload: {
   project_id: string | number;
   report_data: Record<string, unknown>;
   line_items?: WorkItem[];
+  contractor_changes?: ContractorChange[];
   created_by?: string | number;
 }) {
   return saveReportFs(payload);
@@ -117,7 +172,7 @@ export function approveReport(
   reportId: string | number,
   actorId?: string | number,
   actorRole?: string,
-  generate?: { s_curve?: boolean; pdm?: boolean; bar_chart?: boolean },
+  generate?: { s_curve?: boolean; pdm?: boolean; bar_chart?: boolean; swa?: boolean; stewa?: boolean },
 ): Promise<{ status: string; message?: string; pdf_url?: string; public_url?: string }> {
   return approveReportFs(reportId, actorId, actorRole, generate);
 }

@@ -76,7 +76,7 @@ export function RecentActivities() {
                 to={
                   APPROVED.has(r.status)
                     ? `/reports/view/${encodeURIComponent(r.report_number)}`
-                    : `/swa-stewa/edit/${r.id}`
+                    : `/swa-stewa/edit?id=${encodeURIComponent(r.id)}`
                 }
                 className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-surface/60 p-4 transition hover:bg-surface-muted/50"
               >

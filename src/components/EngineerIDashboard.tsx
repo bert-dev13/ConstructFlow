@@ -61,7 +61,7 @@ function formatDate(iso?: string | null) {
 
 function reportHref(report: SwaStewaReport) {
   if (canEditReport('engineer_1', report.report_type, report.status)) {
-    return `/swa-stewa/edit/${encodeURIComponent(report.id)}`;
+    return `/swa-stewa/edit?id=${encodeURIComponent(report.id)}`;
   }
   return `/reports/view/${encodeURIComponent(report.report_number)}`;
 }

@@ -25,6 +25,267 @@ service cloud.firestore {
       return isEngineer() || role() == 'contractor';
     }
 
+    function hasGlobalProjectAccess() {
+      return role() in ['engineer_3', 'engineer_4'];
+    }
+
+    function listHasUid(listValue) {
+      return listValue is list && request.auth.uid in listValue;
+    }
+
+    function projectData(projectId) {
+      return get(/databases/$(database)/documents/projects/$(projectId)).data;
+    }
+
+    function reportData(reportId) {
+      return get(/databases/$(database)/documents/reports/$(reportId)).data;
+    }
+
+    function hasProjectAccessFromData(data) {
+      return signedIn() && (
+        hasGlobalProjectAccess()
+        || request.auth.uid == data.contractorId
+        || listHasUid(data.accessUserIds)
+        || listHasUid(data.assignedUserIds)
+        || listHasUid(data.involvedUserIds)
+      );
+    }
+
+    function hasProjectAccess(projectId) {
+      return hasProjectAccessFromData(projectData(projectId));
+    }
+
+    function projectLifecycleState(data) {
+      return data.lifecycleState is string ? data.lifecycleState : 'active';
+    }
+
+    function activeProjectReadable(data) {
+      return hasProjectAccessFromData(data) && projectLifecycleState(data) != 'archived';
+    }
+
+    function canReadProjectDoc(data) {
+      return hasProjectAccessFromData(data);
+    }
+
+    function isPublicFinalizedReport(data) {
+      return data.status in ['approved', 'generated'];
+    }
+
+    function reportChangedKeys() {
+      return request.resource.data.diff(resource.data).changedKeys();
+    }
+
+    function editableReportStatus(data) {
+      return data.status in ['draft', 'rejected', 'pending_contractor', 'contractor_confirmed'];
+    }
+
+    function isEditableReportActor(data) {
+      return signedIn() && (
+        listHasUid(data.editUserIds)
+        || (role() == 'engineer_1' && hasProjectAccess(data.projectId))
+        || (role() == 'contractor' && request.auth.uid == projectData(data.projectId).contractorId)
+      );
+    }
+
+    function canMarkReportViewed() {
+      return reportChangedKeys().hasOnly(['lastViewedBy', 'lastViewedAt', 'updatedAt'])
+        && request.resource.data.lastViewedBy == request.auth.uid
+        && hasProjectAccess(resource.data.projectId);
+    }
+
+    function canSaveEditableReport() {
+      return editableReportStatus(resource.data)
+        && isEditableReportActor(resource.data)
+        && request.resource.data.projectId == resource.data.projectId
+        && request.resource.data.status == resource.data.status
+        && reportChangedKeys().hasOnly([
+          'reportData',
+          'lineItems',
+          'projectName',
+          'accessUserIds',
+          'editUserIds',
+          'approvalFlow',
+          'releaseState',
+          'updatedAt',
+          'contractorChanges'
+        ]);
+    }
+
+    function canSendToContractor() {
+      return role() == 'engineer_1'
+        && resource.data.status in ['draft', 'rejected']
+        && request.resource.data.status == 'pending_contractor'
+        && request.resource.data.projectId == resource.data.projectId
+        && hasProjectAccess(resource.data.projectId);
+    }
+
+    function canContractorConfirm() {
+      return role() == 'contractor'
+        && resource.data.status == 'pending_contractor'
+        && request.resource.data.status == 'contractor_confirmed'
+        && request.resource.data.projectId == resource.data.projectId
+        && hasProjectAccess(resource.data.projectId)
+        && (
+          resource.data.reportType != 'IAR'
+          || (
+            request.resource.data.approvalFlow.contractorConfirmation.confirmedBy == request.auth.uid
+            && request.resource.data.approvalFlow.contractorConfirmation.confirmsSwa == true
+            && request.resource.data.approvalFlow.contractorConfirmation.confirmsIar == true
+          )
+        );
+    }
+
+    function canSubmitForReview() {
+      return role() == 'engineer_1'
+        && request.resource.data.projectId == resource.data.projectId
+        && request.resource.data.status == 'pending_review'
+        && hasProjectAccess(resource.data.projectId)
+        && (
+          (resource.data.reportType == 'IAR' && resource.data.status == 'contractor_confirmed')
+          || (resource.data.reportType != 'IAR' && resource.data.status in ['draft', 'rejected', 'contractor_confirmed'])
+        );
+    }
+
+    function canApproveEngineer2() {
+      return role() == 'engineer_2'
+        && resource.data.status == 'pending_review'
+        && request.resource.data.status == 'with_engineer_3'
+        && request.resource.data.projectId == resource.data.projectId
+        && hasProjectAccess(resource.data.projectId)
+        && (
+          resource.data.reportType != 'IAR'
+          || (
+            request.resource.data.approvalFlow.contractorConfirmation.confirmsSwa == true
+            && request.resource.data.approvalFlow.contractorConfirmation.confirmsIar == true
+            && request.resource.data.approvalFlow.engineer2.approvedBy == request.auth.uid
+          )
+        );
+    }
+
+    function canApproveEngineer3() {
+      return role() == 'engineer_3'
+        && resource.data.status == 'with_engineer_3'
+        && request.resource.data.status == 'with_engineer_4'
+        && request.resource.data.projectId == resource.data.projectId
+        && hasProjectAccess(resource.data.projectId)
+        && (
+          resource.data.reportType != 'IAR'
+          || (
+            resource.data.approvalFlow.engineer2.approvedBy is string
+            && request.resource.data.approvalFlow.engineer3.approvedBy == request.auth.uid
+          )
+        );
+    }
+
+    function canApproveEngineer4() {
+      return role() == 'engineer_4'
+        && resource.data.status == 'with_engineer_4'
+        && request.resource.data.status == 'approved'
+        && request.resource.data.projectId == resource.data.projectId
+        && hasProjectAccess(resource.data.projectId)
+        && (
+          resource.data.reportType != 'IAR'
+          || (
+            resource.data.approvalFlow.engineer2.approvedBy is string
+            && resource.data.approvalFlow.engineer3.approvedBy is string
+            && request.resource.data.approvalFlow.engineer4.approvedBy == request.auth.uid
+            && request.resource.data.approvalFlow.contractorConfirmation.confirmsSwa == true
+            && request.resource.data.approvalFlow.contractorConfirmation.confirmsIar == true
+          )
+        );
+    }
+
+    function canRejectReport() {
+      return role() in ['engineer_2', 'engineer_3', 'engineer_4']
+        && request.resource.data.status == 'rejected'
+        && request.resource.data.projectId == resource.data.projectId
+        && hasProjectAccess(resource.data.projectId)
+        && request.resource.data.rejectionReason is string
+        && (
+          (role() == 'engineer_2' && resource.data.status == 'pending_review')
+          || (role() == 'engineer_3' && resource.data.status == 'with_engineer_3')
+          || (role() == 'engineer_4' && resource.data.status == 'with_engineer_4')
+        );
+    }
+
+    function projectChangedKeys() {
+      return request.resource.data.diff(resource.data).changedKeys();
+    }
+
+    function canEditProjectMetadata(projectId) {
+      return role() == 'engineer_1'
+        && projectLifecycleState(resource.data) == 'active'
+        && projectLifecycleState(request.resource.data) == 'active'
+        && projectChangedKeys().hasOnly([
+          'name',
+          'location',
+          'startDate',
+          'plannedEndDate',
+          'status',
+          'contractorId',
+          'contractorName',
+          'assignedUserIds',
+          'involvedUserIds',
+          'accessUserIds',
+          'contractAmount',
+          'updatedAt'
+        ])
+        && hasProjectAccess(projectId);
+    }
+
+    function canRequestProjectArchive(projectId) {
+      return role() == 'engineer_1'
+        && projectLifecycleState(resource.data) == 'active'
+        && projectLifecycleState(request.resource.data) == 'pending_delete_approval'
+        && request.resource.data.deletionApproval.requestedBy == request.auth.uid
+        && hasProjectAccess(projectId);
+    }
+
+    function canApproveProjectArchive(projectId) {
+      return role() in ['engineer_2', 'engineer_3', 'engineer_4']
+        && projectLifecycleState(resource.data) == 'pending_delete_approval'
+        && request.resource.data.deletionApproval.requestedBy == resource.data.deletionApproval.requestedBy
+        && hasProjectAccess(projectId)
+        && (
+          (role() == 'engineer_2'
+            && projectLifecycleState(request.resource.data) == 'pending_delete_approval'
+            && request.resource.data.deletionApproval.engineer2.approvedBy == request.auth.uid)
+          || (role() == 'engineer_3'
+            && projectLifecycleState(request.resource.data) == 'pending_delete_approval'
+            && request.resource.data.deletionApproval.engineer3.approvedBy == request.auth.uid)
+          || (role() == 'engineer_4'
+            && (
+              (projectLifecycleState(request.resource.data) == 'pending_delete_approval'
+                && request.resource.data.deletionApproval.engineer4.approvedBy == request.auth.uid)
+              || (projectLifecycleState(request.resource.data) == 'archived'
+                && resource.data.deletionApproval.engineer2.approvedBy is string
+                && resource.data.deletionApproval.engineer3.approvedBy is string
+                && request.resource.data.deletionApproval.engineer4.approvedBy == request.auth.uid
+                && request.resource.data.archiveOwnerId is string
+                && request.resource.data.accessUserIds.size() == 1
+                && request.auth.uid in request.resource.data.accessUserIds)
+            ))
+        );
+    }
+
+    function canDirectArchiveProject(projectId) {
+      return role() == 'engineer_4'
+        && projectLifecycleState(request.resource.data) == 'archived'
+        && request.resource.data.archiveOwnerId == request.auth.uid
+        && request.resource.data.accessUserIds.size() == 1
+        && request.auth.uid in request.resource.data.accessUserIds
+        && hasProjectAccess(projectId);
+    }
+
+    function canRestoreArchivedProject(projectId) {
+      return projectLifecycleState(resource.data) == 'archived'
+        && projectLifecycleState(request.resource.data) == 'active'
+        && (
+          request.auth.uid == resource.data.archiveOwnerId
+          || role() == 'engineer_4'
+        );
+    }
+
     match /users/{uid} {
       allow read: if signedIn();
       allow create: if signedIn() && request.auth.uid == uid;
@@ -32,23 +293,31 @@ service cloud.firestore {
     }
 
     match /projects/{projectId} {
-      allow read: if isStaff();
-      allow create, update: if isRole('engineer_1');
-      allow delete: if isRole('engineer_1') || isRole('engineer_4');
+      allow read: if canReadProjectDoc(resource.data);
+      allow create: if isRole('engineer_1')
+        && listHasUid(request.resource.data.accessUserIds)
+        && projectLifecycleState(request.resource.data) == 'active';
+      allow update: if canEditProjectMetadata(projectId)
+        || canRequestProjectArchive(projectId)
+        || canApproveProjectArchive(projectId)
+        || canDirectArchiveProject(projectId)
+        || canRestoreArchivedProject(projectId);
+      allow delete: if false;
 
       match /boqItems/{boqItemId} {
-        allow read: if isStaff();
-        allow create, update, delete: if isRole('engineer_1');
+        allow read: if activeProjectReadable(projectData(projectId));
+        allow create, update, delete: if isRole('engineer_1')
+          && activeProjectReadable(projectData(projectId));
       }
 
       match /auditLog/{entryId} {
-        allow read: if isStaff();
-        allow write: if isRole('engineer_1');
+        allow read: if canReadProjectDoc(projectData(projectId));
+        allow write: if isRole('engineer_1') && hasProjectAccess(projectId);
       }
 
       match /contractHistory/{entryId} {
-        allow read: if isStaff();
-        allow write: if isRole('engineer_1');
+        allow read: if canReadProjectDoc(projectData(projectId));
+        allow write: if isRole('engineer_1') && hasProjectAccess(projectId);
       }
     }
 
@@ -59,33 +328,55 @@ service cloud.firestore {
     }
 
     match /schedules/{projectId} {
-      allow read: if isStaff();
-      allow write: if isRole('contractor') || isRole('engineer_1');
+      allow read: if activeProjectReadable(projectData(projectId));
+      allow write: if (isRole('contractor') || isRole('engineer_1'))
+        && activeProjectReadable(projectData(projectId));
     }
 
     match /sCurves/{projectId} {
-      allow read: if isStaff();
-      allow write: if isStaff();
+      allow read: if activeProjectReadable(projectData(projectId));
+      allow write: if (isRole('contractor') || isRole('engineer_1'))
+        && activeProjectReadable(projectData(projectId));
 
       match /snapshots/{snapId} {
-        allow read: if isStaff();
-        allow write: if isStaff();
+        allow read: if activeProjectReadable(projectData(projectId));
+        allow write: if isStaff() && activeProjectReadable(projectData(projectId));
       }
     }
 
     match /reports/{reportId} {
-      allow read: if isStaff()
-        || resource.data.status in ['approved', 'generated'];
-      allow create: if isStaff();
-      allow update: if isStaff();
+      allow read: if isPublicFinalizedReport(resource.data)
+        || (isStaff()
+          && (
+            hasGlobalProjectAccess()
+            || listHasUid(resource.data.accessUserIds)
+            || hasProjectAccess(resource.data.projectId)
+          ));
+      allow create: if isStaff()
+        && request.resource.data.projectId is string
+        && activeProjectReadable(projectData(request.resource.data.projectId))
+        && request.resource.data.status == 'draft';
+      allow update: if isStaff()
+        && request.resource.data.projectId == resource.data.projectId
+        && (
+          canMarkReportViewed()
+          || canSaveEditableReport()
+          || canSendToContractor()
+          || canContractorConfirm()
+          || canSubmitForReview()
+          || canApproveEngineer2()
+          || canApproveEngineer3()
+          || canApproveEngineer4()
+          || canRejectReport()
+        );
       allow delete: if isRole('engineer_4');
 
       match /audit/{entryId} {
-        allow read, write: if isStaff();
+        allow read, write: if isStaff() && hasProjectAccess(reportData(reportId).projectId);
       }
 
       match /revisions/{revId} {
-        allow read, write: if isStaff();
+        allow read, write: if isStaff() && hasProjectAccess(reportData(reportId).projectId);
       }
     }
 

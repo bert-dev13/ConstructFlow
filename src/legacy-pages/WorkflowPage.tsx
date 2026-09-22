@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from '../lib/nextRouter';
 import { useAuth } from '../context/AuthContext';
+import { approveProjectArchive, listProjects, type ProjectRow } from '../lib/projectsApi';
 import {
   approveReport,
   listReports,
@@ -37,7 +38,11 @@ const STATUS_LABELS: Record<string, string> = {
 export function WorkflowPage() {
   const { user } = useAuth();
   const [reports, setReports] = useState<SwaStewaReport[]>([]);
+  const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [comments, setComments] = useState<Record<string, string>>({});
+  const [releaseSelections, setReleaseSelections] = useState<
+    Record<string, { pdm?: boolean; bar_chart?: boolean; s_curve?: boolean; swa?: boolean; stewa?: boolean }>
+  >({});
   const [loading, setLoading] = useState(true);
   const [actionId, setActionId] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -66,11 +71,20 @@ export function WorkflowPage() {
     );
   };
 
+  const matchesProjectQuery = (project: ProjectRow) => {
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    return [project.name, project.location, project.contractor_name]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(q));
+  };
+
   const loadReports = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await listReports();
+      const [data, projectData] = await Promise.all([listReports(), listProjects()]);
       setReports(data.reports);
+      setProjects(projectData.projects);
     } catch {
       setError('Could not load reports from database.');
     } finally {
@@ -90,15 +104,19 @@ export function WorkflowPage() {
         : user?.role === 'engineer_3'
           ? r.status === 'with_engineer_3'
           : user?.role === 'engineer_4'
-            ? r.status === 'with_engineer_4' || r.status === 'with_engineer_3'
+            ? r.status === 'with_engineer_4'
             : false),
   );
 
   const myEditable = reports.filter(
     (r) =>
       matchesQuery(r) &&
-      (r.status === 'draft' || r.status === 'rejected') &&
+      ['draft', 'rejected', 'pending_contractor', 'contractor_confirmed'].includes(r.status) &&
       canUserEditReportType(user?.role, r.report_type),
+  );
+
+  const pendingProjectArchive = projects.filter(
+    (project) => matchesProjectQuery(project) && project.lifecycle_state === 'pending_delete_approval',
   );
 
   const allFiltered = reports.filter(matchesQuery);
@@ -108,6 +126,7 @@ export function WorkflowPage() {
   ).length;
   const revisionCount = reports.filter((r) => r.status === 'rejected').length;
   const approvedCount = reports.filter((r) => r.status === 'approved' || r.status === 'generated').length;
+  const pendingProjectArchiveCount = pendingProjectArchive.length;
 
   const actorId = user?.id;
 
@@ -116,7 +135,12 @@ export function WorkflowPage() {
     setError('');
     setSuccess('');
     try {
-      const result = await approveReport(reportId, actorId, user?.role);
+      const result = await approveReport(
+        reportId,
+        actorId,
+        user?.role,
+        releaseSelections[reportId],
+      );
       if (result.status === 'with_engineer_3') {
         setSuccess('Report approved. Forwarded to Engineer III.');
       } else if (result.status === 'with_engineer_4') {
@@ -128,6 +152,25 @@ export function WorkflowPage() {
       await loadReports();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Approval failed');
+    } finally {
+      setActionId(null);
+    }
+  };
+
+  const handleProjectApprove = async (projectId: string) => {
+    setActionId(projectId);
+    setError('');
+    setSuccess('');
+    try {
+      const result = await approveProjectArchive(projectId);
+      setSuccess(
+        result.project.lifecycle_state === 'archived'
+          ? 'Project fully approved and moved to archive.'
+          : 'Project deletion approval recorded.',
+      );
+      await loadReports();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not approve project archive.');
     } finally {
       setActionId(null);
     }
@@ -265,7 +308,7 @@ export function WorkflowPage() {
                     )}
                   </div>
                   <Link
-                    to={`/swa-stewa/edit/${rpt.id}`}
+                    to={`/swa-stewa/edit?id=${encodeURIComponent(rpt.id)}`}
                     className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white"
                   >
                     Edit report
@@ -326,7 +369,7 @@ export function WorkflowPage() {
                           </span>
                         </td>
                         <td className="px-5 py-4">
-                          {user.role === 'engineer_2' ? (
+                          <div className="space-y-2">
                             <textarea
                               value={comments[rpt.id] ?? ''}
                               onChange={(e) => setComments((c) => ({ ...c, [rpt.id]: e.target.value }))}
@@ -334,15 +377,41 @@ export function WorkflowPage() {
                               className="w-56 rounded-lg border border-border bg-surface p-2 text-xs outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
                               rows={2}
                             />
-                          ) : (
-                            <span className="text-xs text-text-muted">Only Engineer II requests revisions.</span>
-                          )}
+                            {user.role === 'engineer_4' && rpt.report_type === 'IAR' && (
+                              <div className="grid grid-cols-2 gap-2 text-xs text-text-muted">
+                                {([
+                                  ['swa', 'SWA'],
+                                  ['stewa', 'STEWA'],
+                                  ['pdm', 'PDM'],
+                                  ['bar_chart', 'Bar Chart'],
+                                  ['s_curve', 'S-Curve'],
+                                ] as const).map(([key, label]) => (
+                                  <label key={key} className="flex items-center gap-2">
+                                    <input
+                                      type="checkbox"
+                                      checked={releaseSelections[rpt.id]?.[key] === true}
+                                      onChange={(e) =>
+                                        setReleaseSelections((current) => ({
+                                          ...current,
+                                          [rpt.id]: {
+                                            ...current[rpt.id],
+                                            [key]: e.target.checked,
+                                          },
+                                        }))
+                                      }
+                                    />
+                                    <span>{label}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </td>
                         <td className="px-5 py-4">
                           <div className="flex flex-wrap justify-end gap-2">
-                            <Link to={`/swa-stewa/edit/${rpt.id}`} className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted hover:bg-surface-muted">View</Link>
+                            <Link to={`/swa-stewa/edit?id=${encodeURIComponent(rpt.id)}`} className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted hover:bg-surface-muted">View</Link>
                             <button type="button" disabled={actionId === rpt.id} onClick={() => handleApprove(rpt.id)} className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">{actionId === rpt.id ? 'Saving…' : 'Approve'}</button>
-                            {user.role === 'engineer_2' && <button type="button" disabled={actionId === rpt.id} onClick={() => handleRevise(rpt.id)} className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 disabled:opacity-50">Request revision</button>}
+                            <button type="button" disabled={actionId === rpt.id} onClick={() => handleRevise(rpt.id)} className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 disabled:opacity-50">Request revision</button>
                           </div>
                         </td>
                       </tr>
@@ -350,6 +419,52 @@ export function WorkflowPage() {
                   </tbody>
                 </table>
               </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {(user?.role === 'engineer_2' || user?.role === 'engineer_3' || user?.role === 'engineer_4') && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50/50 p-5 shadow-sm">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold text-text">Project archive approvals</h2>
+              <p className="mt-1 text-sm text-text-muted">
+                Review Engineer I deletion requests before projects move into archive.
+              </p>
+            </div>
+            <span className="rounded-full border border-amber-200 bg-card px-3 py-1 text-xs font-semibold text-amber-700">
+              {loading ? '…' : `${pendingProjectArchiveCount} pending`}
+            </span>
+          </div>
+
+          {loading ? (
+            <div className="mt-4 h-32 animate-pulse rounded-xl bg-card/70" />
+          ) : pendingProjectArchive.length === 0 ? (
+            <div className="mt-4 rounded-xl border border-dashed border-amber-200 bg-card px-6 py-10 text-center">
+              <p className="font-semibold text-text">No project archive approvals pending</p>
+              <p className="mt-1 text-sm text-text-muted">New deletion requests from Engineer I will appear here.</p>
+            </div>
+          ) : (
+            <div className="mt-4 space-y-3">
+              {pendingProjectArchive.map((project) => (
+                <div key={project.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-card p-4">
+                  <div>
+                    <p className="font-semibold text-text">{project.name}</p>
+                    <p className="mt-1 text-xs text-text-muted">
+                      {project.location || 'Location not set'} · {project.contractor_name || 'No contractor assigned'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={actionId === project.id}
+                    onClick={() => handleProjectApprove(project.id)}
+                    className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  >
+                    {actionId === project.id ? 'Saving…' : 'Approve archive'}
+                  </button>
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -383,7 +498,7 @@ export function WorkflowPage() {
                     <td className="max-w-[320px] px-5 py-4"><p className="truncate font-medium text-text">{reportTitle(rpt)}</p>{rpt.rejection_reason && <p className="mt-1 truncate text-xs text-warning">Note: {rpt.rejection_reason}</p>}</td>
                     <td className="px-5 py-4"><span className="rounded-full bg-primary-light px-2.5 py-1 text-[10px] font-bold uppercase text-primary">{rpt.report_type}</span></td>
                     <td className="px-5 py-4"><span className="rounded-full border border-border bg-surface-muted px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-text-muted">{STATUS_LABELS[rpt.status] ?? rpt.status.replace(/_/g, ' ')}</span></td>
-                    <td className="px-5 py-4 text-right">{canUserEditReportType(user?.role, rpt.report_type) && (rpt.status === 'draft' || rpt.status === 'rejected') ? <Link to={`/swa-stewa/edit/${rpt.id}`} className="rounded-lg bg-primary-light px-3 py-1.5 text-xs font-semibold text-primary">Continue</Link> : <Link to={`/swa-stewa/edit/${rpt.id}`} className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted">View</Link>}</td>
+                    <td className="px-5 py-4 text-right">{canUserEditReportType(user?.role, rpt.report_type) && (rpt.status === 'draft' || rpt.status === 'rejected') ? <Link to={`/swa-stewa/edit?id=${encodeURIComponent(rpt.id)}`} className="rounded-lg bg-primary-light px-3 py-1.5 text-xs font-semibold text-primary">Continue</Link> : <Link to={`/swa-stewa/edit?id=${encodeURIComponent(rpt.id)}`} className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted">View</Link>}</td>
                   </tr>
                 ))}
               </tbody>

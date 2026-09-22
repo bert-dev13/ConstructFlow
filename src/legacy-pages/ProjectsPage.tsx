@@ -7,9 +7,12 @@ import { useSelectedProject } from '../context/SelectedProjectContext';
 import { NavIcon, type NavIconName } from '../components/NavIcon';
 import {
   createProject,
+  directArchiveProject,
   getProject,
   listContractors,
   listProjects,
+  requestProjectArchive,
+  restoreArchivedProject,
   updateProject,
   type ContractorOption,
   type ProjectAuditEntry,
@@ -57,9 +60,12 @@ function scheduleHealth(project: ProjectRow): { label: string; className: string
 export function ProjectsPage() {
   const { user } = useAuth();
   const { setProjectId } = useSelectedProject();
-  const canManage = user?.role === 'engineer_1';
+  const canManage = user?.role === 'engineer_1' || user?.role === 'engineer_4';
+  const canRequestArchive = user?.role === 'engineer_1';
+  const canDirectArchive = user?.role === 'engineer_4';
 
   const [projects, setProjects] = useState<ProjectRow[]>([]);
+  const [archivedProjects, setArchivedProjects] = useState<ProjectRow[]>([]);
   const [contractors, setContractors] = useState<ContractorOption[]>([]);
   const [auditLog, setAuditLog] = useState<ProjectAuditEntry[]>([]);
   const [contractHistory, setContractHistory] = useState<ContractHistoryEntry[]>([]);
@@ -70,7 +76,9 @@ export function ProjectsPage() {
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [sortBy, setSortBy] = useState('recent');
+  const [projectView, setProjectView] = useState<'active' | 'archived'>('active');
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [archiveBusyId, setArchiveBusyId] = useState<string | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState('');
@@ -102,8 +110,13 @@ export function ProjectsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [projRes, contractorRes] = await Promise.all([listProjects(), listContractors()]);
+      const [projRes, archivedRes, contractorRes] = await Promise.all([
+        listProjects(),
+        listProjects({ view: 'archived' }),
+        listContractors(),
+      ]);
       setProjects(projRes.projects);
+      setArchivedProjects(archivedRes.projects);
       setContractors(contractorRes.contractors);
     } catch {
       setError('Could not load projects from database.');
@@ -188,6 +201,51 @@ export function ProjectsPage() {
     }
   };
 
+  const handleRequestArchive = async (project: ProjectRow) => {
+    setArchiveBusyId(project.id);
+    setError('');
+    setSuccess('');
+    try {
+      await requestProjectArchive(project.id);
+      setSuccess(`Deletion approval requested for "${project.name}".`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not request deletion approval.');
+    } finally {
+      setArchiveBusyId(null);
+    }
+  };
+
+  const handleDirectArchive = async (project: ProjectRow) => {
+    setArchiveBusyId(project.id);
+    setError('');
+    setSuccess('');
+    try {
+      await directArchiveProject(project.id);
+      setSuccess(`"${project.name}" moved to archive for 21 days.`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not archive project.');
+    } finally {
+      setArchiveBusyId(null);
+    }
+  };
+
+  const handleRestoreArchive = async (project: ProjectRow) => {
+    setArchiveBusyId(project.id);
+    setError('');
+    setSuccess('');
+    try {
+      await restoreArchivedProject(project.id);
+      setSuccess(`"${project.name}" restored to active projects.`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not restore project.');
+    } finally {
+      setArchiveBusyId(null);
+    }
+  };
+
   const openCreate = () => {
     resetForm();
     setError('');
@@ -196,14 +254,16 @@ export function ProjectsPage() {
   };
 
   const filteredProjects = useMemo(() => {
+    const source = projectView === 'archived' ? archivedProjects : projects;
     const normalizedQuery = query.trim().toLowerCase();
-    const result = projects.filter((project) => {
+    const result = source.filter((project) => {
       const matchesQuery =
         !normalizedQuery ||
         [project.name, project.location, project.contractor_name]
           .filter(Boolean)
           .some((value) => String(value).toLowerCase().includes(normalizedQuery));
-      const matchesStatus = statusFilter === 'all' || project.status === statusFilter;
+      const matchesStatus =
+        projectView === 'archived' || statusFilter === 'all' || project.status === statusFilter;
       return matchesQuery && matchesStatus;
     });
 
@@ -213,12 +273,14 @@ export function ProjectsPage() {
       if (sortBy === 'start') return (a.start_date ?? '').localeCompare(b.start_date ?? '');
       return (b.updated_at ?? b.created_at ?? '').localeCompare(a.updated_at ?? a.created_at ?? '');
     });
-  }, [projects, query, sortBy, statusFilter]);
+  }, [archivedProjects, projectView, projects, query, sortBy, statusFilter]);
 
   const activeCount = projects.filter((project) => project.status === 'active').length;
-  const onHoldCount = projects.filter((project) => project.status === 'on_hold').length;
   const completedCount = projects.filter((project) => project.status === 'completed').length;
-  const totalContractValue = projects.reduce((sum, project) => sum + (project.contract_amount ?? 0), 0);
+  const pendingDeleteCount = projects.filter(
+    (project) => project.lifecycle_state === 'pending_delete_approval',
+  ).length;
+  const archivedCount = archivedProjects.length;
 
   const inputCls =
     'mt-1.5 w-full rounded-lg border border-border bg-white px-3.5 py-2.5 text-sm text-text shadow-sm transition focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20';
@@ -229,11 +291,13 @@ export function ProjectsPage() {
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <span className="inline-block rounded-full bg-primary-light px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-primary">
-              Engineer I · Portfolio
+              {user?.role === 'engineer_4' ? 'Engineer IV · Archive Control' : 'Engineer I · Portfolio'}
             </span>
             <h1 className="mt-3 font-serif text-3xl text-text">Projects</h1>
             <p className="mt-2 max-w-2xl text-sm leading-relaxed text-text-muted">
-              Keep project information, contract details, and delivery status in one place.
+              {user?.role === 'engineer_4'
+                ? 'Archive, restore, and monitor project lifecycle alongside project details.'
+                : 'Keep project information, contract details, and delivery status in one place.'}
             </p>
           </div>
           {canManage && (
@@ -255,8 +319,8 @@ export function ProjectsPage() {
           {([
             ['Total projects', projects.length, 'All registered projects', 'projects'],
             ['Active', activeCount, 'Currently in delivery', 'schedule'],
-            ['On hold', onHoldCount, 'Needs attention', 'approval'],
-            ['Contract value', `₱${formatMoney(totalContractValue)}`, 'Across all projects', 'reports'],
+            ['Pending archive', pendingDeleteCount, 'Awaiting approvals or final action', 'approval'],
+            ['Archived', archivedCount, 'Recoverable for 21 days', 'reports'],
           ] as [string, string | number, string, NavIconName][]).map(([label, value, caption, icon]) => (
             <div key={label} className="rounded-2xl border border-border bg-card p-4 shadow-sm">
               <div className="flex items-start justify-between gap-3">
@@ -271,7 +335,25 @@ export function ProjectsPage() {
           ))}
         </div>
 
-        <div className="mt-8 flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm sm:flex-row">
+        <div className="mt-8 flex flex-col gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setProjectView('active')}
+              className={`rounded-full px-3 py-1.5 text-xs font-semibold ${projectView === 'active' ? 'bg-primary text-white' : 'border border-border text-text-muted'}`}
+            >
+              Active & pending
+            </button>
+            <button
+              type="button"
+              onClick={() => setProjectView('archived')}
+              className={`rounded-full px-3 py-1.5 text-xs font-semibold ${projectView === 'archived' ? 'bg-primary text-white' : 'border border-border text-text-muted'}`}
+            >
+              Archived
+            </button>
+          </div>
+
+          <div className="flex flex-col gap-3 sm:flex-row">
           <label className="relative flex-1">
             <span className="sr-only">Search projects</span>
             <input
@@ -281,7 +363,7 @@ export function ProjectsPage() {
               className="w-full rounded-xl border border-border bg-surface px-4 py-2.5 text-sm text-text outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
             />
           </label>
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-xl border border-border bg-surface px-3 py-2.5 text-sm text-text outline-none focus:border-primary">
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} disabled={projectView === 'archived'} className="rounded-xl border border-border bg-surface px-3 py-2.5 text-sm text-text outline-none focus:border-primary disabled:opacity-50">
             <option value="all">All statuses</option>
             <option value="active">Active</option>
             <option value="on_hold">On hold</option>
@@ -294,15 +376,22 @@ export function ProjectsPage() {
             <option value="start">Start date</option>
           </select>
         </div>
+        </div>
 
         <div className="mt-8 flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-text">Project portfolio</h2>
+            <h2 className="text-lg font-semibold text-text">
+              {projectView === 'archived' ? 'Archived projects' : 'Project portfolio'}
+            </h2>
             <p className="mt-1 text-sm text-text-muted">
-              {loading ? 'Loading projects…' : `${filteredProjects.length} of ${projects.length} projects`}
+              {loading
+                ? 'Loading projects…'
+                : `${filteredProjects.length} of ${projectView === 'archived' ? archivedProjects.length : projects.length} projects`}
             </p>
           </div>
-          {completedCount > 0 && <p className="text-sm text-text-muted">{completedCount} completed</p>}
+          {projectView === 'active' && completedCount > 0 && (
+            <p className="text-sm text-text-muted">{completedCount} completed</p>
+          )}
         </div>
 
         {loading ? (
@@ -311,9 +400,19 @@ export function ProjectsPage() {
           </div>
         ) : filteredProjects.length === 0 ? (
           <div className="mt-4 rounded-2xl border border-dashed border-border bg-card px-6 py-16 text-center">
-            <p className="font-semibold text-text">{projects.length ? 'No matching projects' : 'No projects yet'}</p>
+            <p className="font-semibold text-text">
+              {projectView === 'archived'
+                ? 'No archived projects'
+                : projects.length
+                  ? 'No matching projects'
+                  : 'No projects yet'}
+            </p>
             <p className="mt-2 text-sm text-text-muted">
-              {projects.length ? 'Try changing your search or filters.' : 'Create your first project to begin tracking delivery.'}
+              {projectView === 'archived'
+                ? 'Archived projects that are still within the 21-day recovery window will appear here.'
+                : projects.length
+                  ? 'Try changing your search or filters.'
+                  : 'Create your first project to begin tracking delivery.'}
             </p>
             {!projects.length && canManage && (
               <button type="button" onClick={openCreate} className="mt-5 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white">
@@ -332,13 +431,19 @@ export function ProjectsPage() {
                     <th className="px-5 py-3 font-semibold">Contract value</th>
                     <th className="px-5 py-3 font-semibold">Schedule</th>
                     <th className="px-5 py-3 font-semibold">Planned end</th>
-                    <th className="px-5 py-3 font-semibold">Status</th>
+                    <th className="px-5 py-3 font-semibold">State</th>
                     <th className="px-5 py-3 text-right font-semibold">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/80">
                   {filteredProjects.map((p) => {
                     const health = scheduleHealth(p);
+                    const lifecycleLabel =
+                      p.lifecycle_state === 'archived'
+                        ? 'Archived'
+                        : p.lifecycle_state === 'pending_delete_approval'
+                          ? 'Pending archive approval'
+                          : statusLabel(p.status);
                     return (
                       <tr key={p.id} className="transition hover:bg-surface-muted/40">
                         <td className="px-5 py-4">
@@ -353,16 +458,46 @@ export function ProjectsPage() {
                         <td className="px-5 py-4 text-sm text-text">{dateInputValue(p.planned_end_date) || 'Not set'}</td>
                         <td className="px-5 py-4">
                           <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${statusClass(p.status)}`}>
-                            {statusLabel(p.status)}
+                            {lifecycleLabel}
                           </span>
                         </td>
                         <td className="px-5 py-4">
                           <div className="flex justify-end gap-2">
-                            <button type="button" onClick={() => setProjectId(String(p.id))} className="rounded-lg bg-primary-light px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary-light/70">
-                              Select
-                            </button>
-                            {canManage && <Link to={`/projects/${p.id}/boq`} className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted hover:bg-surface-muted">BOQ</Link>}
-                            {canManage && <button type="button" onClick={() => startRevise(p)} className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted hover:bg-surface-muted">Edit</button>}
+                            {projectView === 'active' && (
+                              <button type="button" onClick={() => setProjectId(String(p.id))} className="rounded-lg bg-primary-light px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary-light/70">
+                                Select
+                              </button>
+                            )}
+                            {projectView === 'active' && canManage && (
+                              <Link to={`/projects/${p.id}/boq`} className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted hover:bg-surface-muted">
+                                BOQ
+                              </Link>
+                            )}
+                            {projectView === 'active' && canManage && (
+                              <button type="button" onClick={() => startRevise(p)} className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted hover:bg-surface-muted">
+                                Edit
+                              </button>
+                            )}
+                            {projectView === 'active' && canRequestArchive && p.lifecycle_state !== 'pending_delete_approval' && (
+                              <button type="button" disabled={archiveBusyId === p.id} onClick={() => handleRequestArchive(p)} className="rounded-lg border border-amber-200 px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-50">
+                                {archiveBusyId === p.id ? 'Requesting…' : 'Request archive'}
+                              </button>
+                            )}
+                            {projectView === 'active' && canRequestArchive && p.lifecycle_state === 'pending_delete_approval' && (
+                              <span className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700">
+                                Awaiting E2/E3/E4
+                              </span>
+                            )}
+                            {projectView === 'active' && canDirectArchive && (
+                              <button type="button" disabled={archiveBusyId === p.id} onClick={() => handleDirectArchive(p)} className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50">
+                                {archiveBusyId === p.id ? 'Archiving…' : 'Archive now'}
+                              </button>
+                            )}
+                            {projectView === 'archived' && (
+                              <button type="button" disabled={archiveBusyId === p.id} onClick={() => handleRestoreArchive(p)} className="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50">
+                                {archiveBusyId === p.id ? 'Restoring…' : 'Restore'}
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>

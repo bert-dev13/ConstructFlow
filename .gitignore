@@ -30,3 +30,11 @@ out
 # Local generated reports
 storage/reports/*
 !storage/reports/.gitkeep
+
+# Local cloud credentials
+.secrets/
+*firebase-adminsdk*.json
+.firebase-cli/
+.firebase-tmp/
+.firebase-cli/
+.firebase-tmp/

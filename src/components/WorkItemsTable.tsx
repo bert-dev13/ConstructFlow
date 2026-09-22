@@ -226,20 +226,18 @@ export function WorkItemsTable({
               </td>
               <td className="p-1">
                 {readOnly ? (
-                  row.thisPeriod
+                  formatMoney(row.thisPeriod)
                 ) : (
                   <input
                     type="number"
                     step="0.01"
-                    className="w-20 rounded border border-border px-1 py-0.5 text-right"
-                    value={row.thisPeriod || ''}
-                    onChange={(e) =>
-                      update(row.id, { thisPeriod: parseFloat(e.target.value) || 0 })
-                    }
+                    className="w-24 rounded border border-border bg-surface-muted px-1 py-0.5 text-right"
+                    value={row.thisPeriod ? Number(row.thisPeriod.toFixed(2)) : ''}
+                    readOnly
                   />
                 )}
               </td>
-              <td className="p-1 text-right">{row.toDate}</td>
+              <td className="p-1 text-right">{formatMoney(row.toDate)}</td>
               <td className="p-1 text-right">{formatPct(row.accomplishmentWeightPct)}</td>
               <td className="p-1 text-left">{row.status}</td>
               {!readOnly && (
@@ -293,6 +291,10 @@ export function WorkItemsTable({
                 When a revised quantity is entered, accomplishment weight uses the revised baseline.
               </>
             )}
+          </p>
+          <p className="mt-1 text-xs text-text-muted">
+            <strong>Formula:</strong> To Date = (Quantity / 2) × Unit Price, and This Period =
+            To Date − Previous.
           </p>
         </>
       )}

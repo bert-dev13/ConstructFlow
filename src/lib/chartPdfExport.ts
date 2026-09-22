@@ -2,6 +2,14 @@ import { jsPDF } from 'jspdf';
 import type { SCurvePoint } from '../types';
 import type { BarChartTask } from '../types';
 import type { ScheduleStatus, SCurveComparison } from './sCurveApi';
+import type { SCurvePeriodRow } from './sCurvePeriods';
+
+function formatMoney(value: number): string {
+  return value.toLocaleString('en-PH', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
 
 function addHeader(doc: jsPDF, title: string) {
   doc.setFont('helvetica', 'bold');
@@ -35,13 +43,63 @@ export function exportSCurvePdf(input: {
   projectLabel?: string;
   points: SCurvePoint[];
   comparisons: SCurveComparison[];
+  periods: SCurvePeriodRow[];
   status: ScheduleStatus | null;
   targetPlanPercent?: number | null;
+  targetPlanPhp?: number | null;
   actualPlanPercent?: number | null;
 }) {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   addHeader(doc, `S-Curve Progress — ${input.projectLabel ?? 'Project'}`);
   let y = addStatusBlock(doc, input.status, 40);
+
+  if (input.targetPlanPercent != null || input.targetPlanPhp != null) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text(
+      `Current cumulative target: ${
+        input.targetPlanPercent != null ? `${input.targetPlanPercent}%` : '—'
+      }   ·   ${
+        input.targetPlanPhp != null ? `P ${formatMoney(input.targetPlanPhp)}` : '—'
+      }`,
+      14,
+      y,
+    );
+    y += 8;
+  }
+
+  if (input.periods.length > 0) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('Monthly Target Accomplishment Baseline', 14, y);
+    y += 6;
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    const baselineHeaders = ['Period', 'Date range', 'Target %', 'Target PHP', 'Cumulative %', 'Cumulative PHP'];
+    const baselineCols = [14, 36, 98, 126, 162, 190];
+    baselineHeaders.forEach((header, index) => doc.text(header, baselineCols[index], y));
+    y += 5;
+    doc.setFont('helvetica', 'normal');
+
+    for (const period of input.periods) {
+      if (y > 185) {
+        doc.addPage();
+        y = 20;
+      }
+      const row = [
+        period.label,
+        `${period.startDate} to ${period.endDate}`,
+        `${period.targetAccomplishmentPct.toFixed(2)}%`,
+        `P ${formatMoney(period.targetAccomplishmentPhp)}`,
+        `${period.cumulativePct.toFixed(2)}%`,
+        `P ${formatMoney(period.cumulativePhp)}`,
+      ];
+      row.forEach((cell, index) => doc.text(String(cell).slice(0, 30), baselineCols[index], y));
+      y += 5;
+    }
+    y += 4;
+  }
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
@@ -50,8 +108,8 @@ export function exportSCurvePdf(input: {
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8);
-  const headers = ['Date', 'Label', 'Target Plan %', 'Actual Plan %', 'Variance', 'Status'];
-  const cols = [14, 40, 100, 130, 160, 190];
+  const headers = ['Date', 'Label', 'Target Plan %', 'Target PHP', 'Actual Plan %', 'Variance', 'Status'];
+  const cols = [14, 38, 92, 120, 150, 176, 204];
   headers.forEach((h, i) => doc.text(h, cols[i], y));
   y += 5;
   doc.setFont('helvetica', 'normal');
@@ -62,6 +120,7 @@ export function exportSCurvePdf(input: {
           c.date,
           c.date_label,
           String(c.target_pct),
+          `P ${formatMoney(c.target_php)}`,
           String(c.actual_pct),
           String(c.variance_pct),
           c.status_label,
@@ -72,6 +131,7 @@ export function exportSCurvePdf(input: {
             p.date,
             p.label ?? '',
             p.originalPlan != null ? String(p.originalPlan) : '—',
+            p.cumulativePhp != null ? `P ${formatMoney(p.cumulativePhp)}` : '—',
             p.actual != null ? String(p.actual) : '—',
             p.originalPlan != null && p.actual != null
               ? String(Math.round((Number(p.actual) - Number(p.originalPlan)) * 100) / 100)

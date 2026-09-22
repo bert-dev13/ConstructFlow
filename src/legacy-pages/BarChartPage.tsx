@@ -11,7 +11,9 @@ import { NavIcon, type NavIconName } from '../components/NavIcon';
 import { getSchedule } from '../lib/scheduleApi';
 import type { BarChartTask } from '../types';
 import { exportBarChartPdf } from '../lib/chartPdfExport';
-import type { ScheduleStatus } from '../lib/sCurveApi';
+import { getSCurve, saveSCurveSettings, type SCurveReportingInterval, type SCurveType, type ScheduleStatus } from '../lib/sCurveApi';
+import { applyReportProgressToBarChart } from '../lib/scheduleSync';
+import { buildTheoreticalBarChartTasks } from '../lib/sCurvePeriods';
 
 function getScheduleStatus(
   plannedEnd: number,
@@ -36,17 +38,22 @@ const STATUS_COLORS = {
   planned: 'bg-blue-600',
 };
 
-function buildWeeks(totalDays: number) {
-  const weeks: { label: string; start: number; end: number }[] = [];
+function buildGroups(totalDays: number, reportingInterval: SCurveReportingInterval) {
+  const groups: { label: string; start: number; end: number }[] = [];
+  const span = reportingInterval === '10_day' ? 10 : 30;
   let day = 1;
-  let week = 1;
+  let index = 1;
   while (day <= totalDays) {
-    const end = Math.min(day + 4, totalDays);
-    weeks.push({ label: `Week ${week}`, start: day, end });
+    const end = Math.min(day + span - 1, totalDays);
+    groups.push({
+      label: reportingInterval === '10_day' ? `Days ${day}-${end}` : `Month ${index}`,
+      start: day,
+      end,
+    });
     day = end + 1;
-    week += 1;
+    index += 1;
   }
-  return weeks;
+  return groups;
 }
 
 export function BarChartPage() {
@@ -61,26 +68,85 @@ export function BarChartPage() {
   const [targetPlanPercent, setTargetPlanPercent] = useState<number | null>(null);
   const [actualPlanPercent, setActualPlanPercent] = useState<number | null>(null);
   const [progressStatus, setProgressStatus] = useState<ScheduleStatus | null>(null);
+  const [curveType, setCurveType] = useState<SCurveType>('pdm_based');
+  const [reportingInterval, setReportingInterval] = useState<SCurveReportingInterval>('30_day');
+  const [theoreticalTotalPeriods, setTheoreticalTotalPeriods] = useState(1);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsVersion, setSettingsVersion] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [exporting, setExporting] = useState(false);
+
+  const persistScheduleSettings = async (next: {
+    curveType?: SCurveType;
+    reportingInterval?: SCurveReportingInterval;
+    theoreticalTotalPeriods?: number;
+  }) => {
+    const nextCurveType = next.curveType ?? curveType;
+    const nextReportingInterval = next.reportingInterval ?? reportingInterval;
+    const nextTheoreticalTotalPeriods = Math.max(
+      1,
+      next.theoreticalTotalPeriods ?? theoreticalTotalPeriods,
+    );
+
+    setSettingsSaving(true);
+    try {
+      const saved = await saveSCurveSettings({
+        project_id: projectId,
+        curve_type: nextCurveType,
+        reporting_interval: nextReportingInterval,
+        theoretical_total_periods: nextTheoreticalTotalPeriods,
+      });
+      setCurveType(saved.curve_type);
+      setReportingInterval(saved.reporting_interval);
+      setTheoreticalTotalPeriods(saved.theoretical_total_periods);
+      setSettingsVersion((value) => value + 1);
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
       try {
-        const data = await getSchedule(projectId);
+        const [data, curve] = await Promise.all([getSchedule(projectId), getSCurve(projectId)]);
         if (!cancelled) {
-          setTasks(data.barChartTasks);
-          setTotalDays(data.barChartTotalDays);
-          setTimeNow(data.barChartTimeNow);
-          setReportFeed(data.reportFeed ?? []);
-          setLatestReportPercent(data.latestReportPercent ?? null);
-          setLatestReportDate(data.latestReportDate ?? null);
-          setTargetPlanPercent(data.targetPlanPercent ?? null);
-          setActualPlanPercent(data.actualPlanPercent ?? null);
-          setProgressStatus(data.progressStatus ?? null);
+          setCurveType(curve.curve_type);
+          setReportingInterval(curve.reporting_interval);
+          setTheoreticalTotalPeriods(curve.theoretical_total_periods);
+          if (curve.curve_type === 'ideal_theoretical' && curve.project_start_date) {
+            const theoretical = buildTheoreticalBarChartTasks({
+              totalPeriods: curve.theoretical_total_periods,
+              reportingInterval: curve.reporting_interval,
+            });
+            const applied = applyReportProgressToBarChart(
+              theoretical.tasks,
+              curve.report_feed ?? [],
+              curve.project_start_date,
+              theoretical.totalDays,
+            );
+            setTasks(applied.tasks);
+            setTotalDays(theoretical.totalDays);
+            setTimeNow(applied.timeNow);
+            setReportFeed(curve.report_feed ?? []);
+            setLatestReportPercent(applied.latestPercent);
+            setLatestReportDate(applied.latestReportDate);
+            setTargetPlanPercent(curve.target_plan_percent ?? null);
+            setActualPlanPercent(curve.actual_plan_percent ?? null);
+            setProgressStatus(curve.schedule_status ?? null);
+          } else {
+            setTasks(data.barChartTasks);
+            setTotalDays(data.barChartTotalDays);
+            setTimeNow(data.barChartTimeNow);
+            setReportFeed(data.reportFeed ?? []);
+            setLatestReportPercent(data.latestReportPercent ?? null);
+            setLatestReportDate(data.latestReportDate ?? null);
+            setTargetPlanPercent(curve.target_plan_percent ?? data.targetPlanPercent ?? null);
+            setActualPlanPercent(curve.actual_plan_percent ?? data.actualPlanPercent ?? null);
+            setProgressStatus(curve.schedule_status ?? data.progressStatus ?? null);
+          }
         }
       } catch (e) {
         if (!cancelled) {
@@ -93,13 +159,13 @@ export function BarChartPage() {
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, settingsVersion]);
 
   const days = useMemo(
     () => Array.from({ length: totalDays }, (_, i) => i + 1),
     [totalDays],
   );
-  const weeks = useMemo(() => buildWeeks(totalDays), [totalDays]);
+  const groups = useMemo(() => buildGroups(totalDays, reportingInterval), [reportingInterval, totalDays]);
   const hasReportActuals = timeNow >= 1 && latestReportPercent != null;
   const behindTaskCount = tasks.filter(
     (task) => getScheduleStatus(task.endDay, hasReportActuals ? task.actualEndDay : null, timeNow) === 'behind',
@@ -146,6 +212,66 @@ export function BarChartPage() {
                 </p>
               )}
             </div>
+          )}
+          <div className="flex rounded-xl bg-surface-muted p-1">
+            <button
+              type="button"
+              onClick={() => void persistScheduleSettings({ curveType: 'pdm_based' })}
+              disabled={settingsSaving}
+              className={`rounded-lg px-3 py-2 text-sm font-semibold ${
+                curveType === 'pdm_based'
+                  ? 'bg-primary text-white shadow-sm'
+                  : 'text-text-muted'
+              }`}
+            >
+              PDM-Based Target
+            </button>
+            <button
+              type="button"
+              onClick={() => void persistScheduleSettings({ curveType: 'ideal_theoretical' })}
+              disabled={settingsSaving}
+              className={`rounded-lg px-3 py-2 text-sm font-semibold ${
+                curveType === 'ideal_theoretical'
+                  ? 'bg-primary text-white shadow-sm'
+                  : 'text-text-muted'
+              }`}
+            >
+              Ideal/Theoretical
+            </button>
+          </div>
+          <label className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-sm text-text">
+            <span className="font-semibold text-text-muted">Interval</span>
+            <select
+              value={reportingInterval}
+              disabled={settingsSaving}
+              onChange={(e) =>
+                void persistScheduleSettings({
+                  reportingInterval: e.target.value as SCurveReportingInterval,
+                })
+              }
+              className="bg-transparent text-sm font-semibold text-text outline-none"
+            >
+              <option value="10_day">10-Day Interval</option>
+              <option value="30_day">30-Day / Monthly</option>
+            </select>
+          </label>
+          {curveType === 'ideal_theoretical' && (
+            <label className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-sm text-text">
+              <span className="font-semibold text-text-muted">Theoretical periods</span>
+              <input
+                type="number"
+                min={1}
+                value={theoreticalTotalPeriods}
+                disabled={settingsSaving}
+                onChange={(e) => setTheoreticalTotalPeriods(Math.max(1, Number(e.target.value || 1)))}
+                onBlur={(e) =>
+                  void persistScheduleSettings({
+                    theoreticalTotalPeriods: Math.max(1, Number(e.currentTarget.value || 1)),
+                  })
+                }
+                className="w-20 bg-transparent text-sm font-semibold text-text outline-none"
+              />
+            </label>
           )}
           <ProjectSelect value={projectId} onChange={setProjectId} className="min-w-[240px]" />
           <button
@@ -242,7 +368,7 @@ export function BarChartPage() {
               <p className="mt-1 text-sm text-text-muted">Target plan, actual progress, and the current reporting day.</p>
             </div>
             <div className="text-right text-xs text-text-muted">
-              <p>{weeks.length} planning weeks</p>
+              <p>{groups.length} planning {reportingInterval === '10_day' ? 'intervals' : 'months'}</p>
               {hasReportActuals && <p className="mt-1 font-semibold text-amber-700">Time now: Day {timeNow}</p>}
             </div>
           </div>
@@ -252,7 +378,7 @@ export function BarChartPage() {
               <tr className="border-b border-border bg-surface-muted">
                 <th className="w-8 p-2 text-left">#</th>
                 <th className="min-w-[200px] p-2 text-left">Task</th>
-                {weeks.map((w) => (
+                {groups.map((w) => (
                   <th
                     key={w.label}
                     colSpan={w.end - w.start + 1}

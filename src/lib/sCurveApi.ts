@@ -1,8 +1,12 @@
 import type { ReportProgressEntry } from '../components/ReportProgressFeed';
 import type { SCurvePoint } from '../types';
-import { getSCurveFs } from './firebase/sCurves';
+import type { SCurveCostItem } from './sCurveItems';
+export type { SCurveCostItem } from './sCurveItems';
+export type { SCurvePeriodRow, SCurveReportingInterval } from './sCurvePeriods';
+import { getSCurveFs, saveSCurveCostItemsFs, saveSCurveSettingsFs } from './firebase/sCurves';
 
 export interface SCurveActivity {
+  id: string;
   number: string;
   name: string;
   duration: number;
@@ -38,14 +42,21 @@ export interface SCurveComparison {
   date: string;
   date_label: string;
   target_pct: number;
+  target_php: number;
   actual_pct: number;
   variance_pct: number;
   status: 'on_schedule' | 'ahead' | 'behind';
   status_label: string;
 }
 
-export function getSCurve(projectId: string | number = '1', snapshotId?: string | number | null) {
-  return getSCurveFs(projectId, snapshotId) as Promise<{
+export type SCurveType = 'pdm_based' | 'ideal_theoretical';
+
+export function getSCurve(
+  projectId: string | number = '1',
+  snapshotId?: string | number | null,
+  reportingInterval?: import('./sCurvePeriods').SCurveReportingInterval,
+) {
+  return getSCurveFs(projectId, snapshotId, reportingInterval) as Promise<{
     project_id: string;
     project_duration: number;
     project_start_date: string;
@@ -53,6 +64,10 @@ export function getSCurve(projectId: string | number = '1', snapshotId?: string 
     critical_path: string[];
     points: SCurvePoint[];
     activities: SCurveActivity[];
+    cost_items: SCurveCostItem[];
+    periods: import('./sCurvePeriods').SCurvePeriodRow[];
+    total_contract_amount: number;
+    total_weight_pct: number;
     synced_from_pdm: boolean;
     has_actual_progress: boolean;
     has_revised_schedule: boolean;
@@ -61,11 +76,41 @@ export function getSCurve(projectId: string | number = '1', snapshotId?: string 
     report_feed: ReportProgressEntry[];
     latest_report_percent: number | null;
     latest_report_date: string | null;
+    reporting_interval: import('./sCurvePeriods').SCurveReportingInterval;
+    curve_type: SCurveType;
+    theoretical_total_periods: number;
+    theoretical_duration_days: number;
     target_plan_percent: number | null;
+    target_plan_php: number | null;
     actual_plan_percent: number | null;
     versions: SCurveSnapshotSummary[];
     viewing_snapshot_id: string | null;
     viewing_snapshot_label: string | null;
     viewing_snapshot_at: string | null;
+  }>;
+}
+
+export function saveSCurveSettings(payload: {
+  project_id: string | number;
+  curve_type: SCurveType;
+  reporting_interval: import('./sCurvePeriods').SCurveReportingInterval;
+  theoretical_total_periods?: number;
+}) {
+  return saveSCurveSettingsFs(payload) as Promise<{
+    curve_type: SCurveType;
+    reporting_interval: import('./sCurvePeriods').SCurveReportingInterval;
+    theoretical_total_periods: number;
+    theoretical_duration_days: number;
+  }>;
+}
+
+export function saveSCurveCostItems(payload: {
+  project_id: string | number;
+  items: Array<{ activityId: string; quantity: number; unitCost: number }>;
+}) {
+  return saveSCurveCostItemsFs(payload) as Promise<{
+    cost_items: SCurveCostItem[];
+    total_contract_amount: number;
+    total_weight_pct: number;
   }>;
 }

@@ -4,11 +4,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { listProjects, type ProjectRow } from '../lib/projectsApi';
 import { NavIcon } from './NavIcon';
 
-const FALLBACK_PROJECTS: ProjectRow[] = [
-  { id: 'demo-capitol-annex', name: 'Provincial Capitol Annex', location: null, status: 'active' },
-  { id: 'demo-remebella-road', name: 'Remebella Road Improvement', location: null, status: 'active' },
-];
-
 interface ProjectSelectProps {
   value: string;
   onChange: (value: string) => void;
@@ -34,8 +29,8 @@ export function ProjectSelect({
 
   useEffect(() => {
     listProjects()
-      .then((res) => setProjects(res.projects.length ? res.projects : FALLBACK_PROJECTS))
-      .catch(() => setProjects(FALLBACK_PROJECTS))
+      .then((res) => setProjects(res.projects))
+      .catch(() => setProjects([]))
       .finally(() => setLoaded(true));
   }, []);
 

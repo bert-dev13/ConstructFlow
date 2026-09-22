@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Link, useParams, usePathname } from '../lib/nextRouter';
+import { Link, useParams, usePathname, useSearchParams } from '../lib/nextRouter';
 import { Logo } from '../components/Logo';
 import { NavIcon } from '../components/NavIcon';
 import { useAuth } from '../context/AuthContext';
@@ -11,7 +11,12 @@ import { getReport } from '../lib/swaStewaApi';
 export function PublicReportViewPage() {
   const { reportNumber: routeReportNumber } = useParams<{ reportNumber: string }>();
   const pathname = usePathname();
-  const reportNumber = routeReportNumber || pathname.match(/\/reports\/view\/([^/]+)/)?.[1] || '';
+  const [searchParams] = useSearchParams();
+  const reportNumber =
+    routeReportNumber
+    || searchParams.get('reportNumber')
+    || pathname.match(/\/reports\/view\/([^/]+)/)?.[1]
+    || '';
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [valid, setValid] = useState(false);

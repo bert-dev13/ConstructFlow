@@ -1,32 +1,42 @@
-# ConstructFlow Demo Accounts
+# ConstructFlow Accounts
 
-One account per role. Password for all:
+These are the official ConstructFlow accounts. Sign in at `/login` and ConstructFlow will load the role from Firestore automatically.
 
-**Password:** `engineer123`
+## Contractors
 
----
+Password: `contractor123`
 
-| Role | Email | Password |
-|------|-------|----------|
-| Engineer I | `engineer1@gmail.com` | `engineer123` |
-| Engineer II | `engineer2@gmail.com` | `engineer123` |
-| Engineer III | `engineer3@gmail.com` | `engineer123` |
-| Engineer IV | `engineer4@gmail.com` | `engineer123` |
-| Contractor | `contractor@gmail.com` | `engineer123` |
+- `constructflow.contractor.1@gmail.com`
+- `constructflow.contractor.2@gmail.com`
+- `constructflow.contractor.3@gmail.com`
 
----
+## Engineer I
 
-## Quick copy
+Password: `engineer123`
 
-```
-engineer1@gmail.com
-engineer2@gmail.com
-engineer3@gmail.com
-engineer4@gmail.com
-contractor@gmail.com
-```
+- `constructflow.engineer1.1@gmail.com`
+- `constructflow.engineer1.2@gmail.com`
+- `constructflow.engineer1.3@gmail.com`
 
-Sign in at `/login` — role is loaded from Firestore after login.
+## Engineer II
+
+Password: `engineer123`
+
+- `constructflow.engineer2.1@gmail.com`
+- `constructflow.engineer2.2@gmail.com`
+- `constructflow.engineer2.3@gmail.com`
+
+## Engineer III
+
+Password: `engineer123`
+
+- `constructflow.engineer3.1@gmail.com`
+
+## Engineer IV
+
+Password: `engineer123`
+
+- `constructflow.engineer4.1@gmail.com`
 
 ## Reseed
 

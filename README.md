@@ -39,15 +39,12 @@ Open [http://localhost:3000/ConstructFlow/](http://localhost:3000/ConstructFlow/
 
 If you only need to add missing tables without wiping data, use `database/schema.sql` instead.
 
-## Demo accounts
+## Accounts
 
-| Role | Email | Password |
-|------|-------|----------|
-| Engineer I | `engineer1@gmail.com` | `engineer123` |
-| Engineer II | `engineer2@gmail.com` | `engineer123` |
-| Engineer III | `engineer3@gmail.com` | `engineer123` |
-| Engineer IV | `engineer4@gmail.com` | `engineer123` |
-| Contractor | `contractor@gmail.com` | `engineer123` |
+See `DEMO_ACCOUNTS.md` for the full list of ConstructFlow accounts.
+
+- Contractors use password `contractor123`
+- Engineers I-IV use password `engineer123`
 
 ## Approval workflow
 

@@ -4,8 +4,8 @@ import type { PdmActivity, PdmDependency } from '../types';
 /** Activity node half-width (must match PdmNode PDM_NODE_W / 2). */
 const PDM_ACTIVITY_HALF_W = 64;
 
-export const PDM_COL_W = 168;
-export const PDM_ROW_H = 132;
+export const PDM_COL_W = 184;
+export const PDM_ROW_H = 144;
 export const PDM_ORIGIN_X = 160;
 export const PDM_ORIGIN_Y = 110;
 export const PDM_START_NODE_W = 72;
@@ -62,26 +62,68 @@ export function layoutPaperNetwork(
 
   const uniqueEs = [...new Set(activities.map((a) => a.es ?? 0))].sort((a, b) => a - b);
   const colByEs = new Map(uniqueEs.map((es, index) => [es, index]));
-
-  const slotInEsCol = new Map<number, number>();
   const map: Record<string, { x: number; y: number }> = {};
+  const incomingById = new Map<string, PdmDependency[]>();
+  for (const dep of dependencies) {
+    if (!incomingById.has(dep.toId)) incomingById.set(dep.toId, []);
+    incomingById.get(dep.toId)!.push(dep);
+  }
 
-  [...core]
-    .sort(
-      (a, b) =>
-        (a.es ?? 0) - (b.es ?? 0) ||
-        a.number.localeCompare(b.number, undefined, { numeric: true }),
-    )
-    .forEach((a) => {
-      const es = a.es ?? 0;
-      const col = colByEs.get(es) ?? 0;
-      const slot = slotInEsCol.get(es) ?? 0;
-      slotInEsCol.set(es, slot + 1);
-      map[a.id] = {
+  const usedSlotsByEs = new Map<number, Set<number>>();
+
+  function claimSlot(es: number, preferredSlot: number) {
+    const used = usedSlotsByEs.get(es) ?? new Set<number>();
+    usedSlotsByEs.set(es, used);
+    if (!used.has(preferredSlot)) {
+      used.add(preferredSlot);
+      return preferredSlot;
+    }
+    for (let distance = 1; distance < 64; distance += 1) {
+      const below = preferredSlot + distance;
+      if (!used.has(below)) {
+        used.add(below);
+        return below;
+      }
+      const above = Math.max(0, preferredSlot - distance);
+      if (!used.has(above)) {
+        used.add(above);
+        return above;
+      }
+    }
+    const fallback = used.size;
+    used.add(fallback);
+    return fallback;
+  }
+
+  for (const es of uniqueEs) {
+    const col = colByEs.get(es) ?? 0;
+    const group = core
+      .filter((activity) => (activity.es ?? 0) === es)
+      .map((activity, index) => {
+        const predecessorYs = (incomingById.get(activity.id) ?? [])
+          .map((dep) => map[dep.fromId]?.y)
+          .filter((y): y is number => y != null);
+        const idealY =
+          predecessorYs.length > 0
+            ? predecessorYs.reduce((sum, y) => sum + y, 0) / predecessorYs.length
+            : PDM_ORIGIN_Y + index * PDM_ROW_H;
+        return { activity, idealY };
+      })
+      .sort(
+        (a, b) =>
+          a.idealY - b.idealY ||
+          a.activity.number.localeCompare(b.activity.number, undefined, { numeric: true }),
+      );
+
+    for (const { activity, idealY } of group) {
+      const preferredSlot = Math.max(0, Math.round((idealY - PDM_ORIGIN_Y) / PDM_ROW_H));
+      const slot = claimSlot(es, preferredSlot);
+      map[activity.id] = {
         x: pdmActivityColumnX(col),
         y: PDM_ORIGIN_Y + slot * PDM_ROW_H,
       };
-    });
+    }
+  }
 
   // Driving predecessor for branch placement.
   const drivingPred = new Map<string, string>();

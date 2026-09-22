@@ -169,11 +169,11 @@ export function PdmPage() {
             >
 
               <defs>
-                <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-                  <path d="M0,0 L6,3 L0,6" fill="#9ca89f" />
+                <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="4.5" orient="auto">
+                  <path d="M0,0 L9,4.5 L0,9" fill="#8a958e" />
                 </marker>
-                <marker id="arrow-critical" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-                  <path d="M0,0 L6,3 L0,6" fill="#dc2626" />
+                <marker id="arrow-critical" markerWidth="12" markerHeight="12" refX="9" refY="4.5" orient="auto">
+                  <path d="M0,0 L9,4.5 L0,9" fill="#dc2626" />
                 </marker>
               </defs>
 
@@ -277,7 +277,7 @@ export function PdmPage() {
                 if (!from || !to) return null;
                 const isCritical =
                   mainChainIds.has(dep.fromId) && mainChainIds.has(dep.toId);
-                const stroke = isCritical ? '#dc2626' : '#9ca89f';
+                const stroke = isCritical ? '#dc2626' : '#8a958e';
                 const edge = dependencyEdge(from, to, PDM_NODE_HALF_W);
                 const lagText = formatDependencyLag(dep.lag);
                 return (
@@ -286,7 +286,9 @@ export function PdmPage() {
                       d={edge.d}
                       fill="none"
                       stroke={stroke}
-                      strokeWidth={isCritical ? 3 : 1.5}
+                      strokeWidth={isCritical ? 3.75 : 2.75}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
                       markerEnd={isCritical ? 'url(#arrow-critical)' : 'url(#arrow)'}
                     >
                       <title>

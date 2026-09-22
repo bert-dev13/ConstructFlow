@@ -21,11 +21,14 @@ npm run firebase:deploy:rules
 If `firebase use` says the project is invalid, add your Google account under  
 Firebase Console → Project settings → Users and permissions.
 
-## 3. Seed demo accounts and projects
+## 3. Seed ConstructFlow accounts and projects
 ```bash
+npx firebase deploy --only functions:seedDemoData,firestore:rules
 npm run seed:firebase
 ```
-Demo password: `engineer123` (see `DEMO_ACCOUNTS.md`)
+Engineer passwords: `engineer123`  
+Contractor passwords: `contractor123`  
+See `DEMO_ACCOUNTS.md` for the full list.
 
 ## 4. Optional Cloud Functions
 ```bash

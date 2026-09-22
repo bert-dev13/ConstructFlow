@@ -3,6 +3,8 @@ import { COLLECTIONS } from './collections';
 import { db } from './config';
 import { auth } from './config';
 import { fetchUserProfile } from './auth';
+import { listProjectsFs } from './projects';
+import { listReportsFs } from './reports';
 
 export interface DashboardKpi {
   value: number;
@@ -26,8 +28,8 @@ export interface DashboardData {
 }
 
 export async function getDashboardStatsFs(): Promise<DashboardData> {
-  const projectsSnap = await getDocs(collection(db, COLLECTIONS.projects));
-  const reportsSnap = await getDocs(collection(db, COLLECTIONS.reports));
+  const [projects, reportRes] = await Promise.all([listProjectsFs(), listReportsFs()]);
+  const reports = reportRes.reports;
 
   const uid = auth.currentUser?.uid;
   const profile = uid ? await fetchUserProfile(uid) : null;
@@ -38,10 +40,9 @@ export async function getDashboardStatsFs(): Promise<DashboardData> {
   let approved = 0;
   let pendingApprovals = 0;
 
-  for (const d of reportsSnap.docs) {
-    const data = d.data() as Record<string, unknown>;
-    const status = String(data.status ?? '');
-    const createdBy = data.createdBy != null ? String(data.createdBy) : '';
+  for (const report of reports) {
+    const status = String(report.status ?? '');
+    const createdBy = report.created_by != null ? String(report.created_by) : '';
     if (status === 'draft') {
       drafts += 1;
       if (uid && createdBy === uid) my_drafts += 1;
@@ -56,16 +57,15 @@ export async function getDashboardStatsFs(): Promise<DashboardData> {
 
   let delayedProjects = 0;
   const now = new Date().toISOString().slice(0, 10);
-  for (const d of projectsSnap.docs) {
-    const data = d.data() as Record<string, unknown>;
-    const end = data.plannedEndDate ? String(data.plannedEndDate) : '';
-    const status = String(data.status ?? 'active');
+  for (const project of projects) {
+    const end = project.planned_end_date ? String(project.planned_end_date) : '';
+    const status = String(project.status ?? 'active');
     if (end && end < now && status === 'active') delayedProjects += 1;
   }
 
   return {
     kpis: {
-      visibleProjects: { value: projectsSnap.size, label: 'Projects' },
+      visibleProjects: { value: projects.length, label: 'Projects' },
       pendingApprovals: { value: pendingApprovals, label: 'Pending approvals' },
       delayedProjects: { value: delayedProjects, label: 'Delayed projects' },
       inputWarnings: { value: my_rejected, label: 'Revision requests' },
@@ -78,5 +78,8 @@ export async function getDashboardStatsFs(): Promise<DashboardData> {
 export async function listUsersByRoleFs(role: string) {
   const q = query(collection(db, COLLECTIONS.users), where('role', '==', role));
   const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...(d.data() as Record<string, unknown>) }));
+  return snap.docs.map((docSnap) => ({
+    id: docSnap.id,
+    ...(docSnap.data() as Record<string, unknown>),
+  }));
 }

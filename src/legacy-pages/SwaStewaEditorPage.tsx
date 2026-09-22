@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { useNavigate, useParams, usePathname } from '../lib/nextRouter';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useNavigate, useParams, usePathname, useSearchParams } from '../lib/nextRouter';
 import { useAuth } from '../context/AuthContext';
 import { useSelectedProject } from '../context/SelectedProjectContext';
 import { IarAccomplishmentTable } from '../components/IarAccomplishmentTable';
@@ -22,6 +22,7 @@ import {
   getIarProgress,
   getStewaFromSwa,
   listReportRevisions,
+  markReportViewed,
   previewReport,
   rejectReport,
   saveReport,
@@ -142,7 +143,11 @@ const STEWA_FIELDS = [
 export function SwaStewaEditorPage() {
   const { type: typeParam, id: routeId } = useParams<{ type?: string; id?: string }>();
   const pathname = usePathname();
-  const idParam = routeId || pathname.match(/\/swa-stewa\/edit\/([^/]+)/)?.[1];
+  const [searchParams] = useSearchParams();
+  const idParam =
+    routeId
+    || searchParams.get('id')
+    || pathname.match(/\/swa-stewa\/edit\/([^/]+)/)?.[1];
   const navigate = useNavigate();
   const { user } = useAuth();
   const { projectId: selectedProjectId, setProjectId: setSelectedProjectId } = useSelectedProject();
@@ -189,11 +194,21 @@ export function SwaStewaEditorPage() {
   const [rejectReason, setRejectReason] = useState('');
   const [contractorChanges, setContractorChanges] = useState<ContractorChange[]>([]);
   const [revisionCount, setRevisionCount] = useState(0);
+  const [editableUserIds, setEditableUserIds] = useState<string[]>([]);
   const [projectBoqItems, setProjectBoqItems] = useState<ProjectBoqItem[]>([]);
   const autoSaveReady = useRef(false);
   const saveSeq = useRef(0);
   const savingRef = useRef(false);
   const skipNextLoad = useRef(false);
+  const contractorBaselineRef = useRef<Record<string, string>>({});
+  const contractorDraftCommentMode =
+    user?.role === 'contractor' &&
+    (reportType === 'IAR' || reportType === 'STEWA') &&
+    ['draft', 'pending_contractor', 'rejected'].includes(status);
+  const contractorChangeByField = useMemo(
+    () => new Map(contractorChanges.map((change) => [change.field, change])),
+    [contractorChanges],
+  );
 
   useEffect(() => {
     if (!idParam && isContractor && routeType === 'IAR') {
@@ -353,6 +368,8 @@ export function SwaStewaEditorPage() {
   useEffect(() => {
     if (!idParam) {
       setDirty(false);
+      setContractorChanges([]);
+      contractorBaselineRef.current = {};
       autoSaveReady.current = false;
       requestAnimationFrame(() => {
         autoSaveReady.current = true;
@@ -376,7 +393,9 @@ export function SwaStewaEditorPage() {
         setStatus(r.status);
         setReportNumber(r.report_number);
         setContractorChanges(r.contractor_changes ?? []);
+        setEditableUserIds(r.edit_user_ids ?? []);
         trackReportViewed(r.id);
+        void markReportViewed(r.id);
         listReportRevisions(r.id)
           .then((rev) => setRevisionCount(rev.revisions.length))
           .catch(() => setRevisionCount(0));
@@ -398,6 +417,19 @@ export function SwaStewaEditorPage() {
         const eq = rd.equipment as IarManpowerRow[] | undefined;
         const acts = rd.activities as string[] | undefined;
         const instr = rd.field_instructions as string[] | undefined;
+        const baselineData: Record<string, string> = { ...base.data, ...scalar };
+        let baselineActivitiesText = acts?.length ? acts.join('\n') : '';
+        let baselineFieldInstructionsText = instr?.length ? instr.join('\n') : '';
+        for (const change of r.contractor_changes ?? []) {
+          baselineData[change.field] = change.old ?? '';
+          if (change.field === 'activities_text') baselineActivitiesText = change.old ?? '';
+          if (change.field === 'field_instructions_text') baselineFieldInstructionsText = change.old ?? '';
+        }
+        contractorBaselineRef.current = {
+          ...baselineData,
+          activities_text: baselineActivitiesText,
+          field_instructions_text: baselineFieldInstructionsText,
+        };
         replaceEditor({
           projectId: String(r.project_id),
           data: { ...base.data, ...scalar },
@@ -485,13 +517,44 @@ export function SwaStewaEditorPage() {
     setSuccess('');
   };
 
-  const setField = (key: string, value: string) => {
+  const updateContractorChange = useCallback(
+    (field: string, label: string, previousValue: string, nextValue: string) => {
+      if (!contractorDraftCommentMode) return;
+      const baseline = contractorBaselineRef.current[field] ?? previousValue;
+      contractorBaselineRef.current[field] = baseline;
+      setContractorChanges((current) => {
+        const existing = current.find((change) => change.field === field);
+        if (nextValue === baseline) {
+          return current.filter((change) => change.field !== field);
+        }
+        const nextChange: ContractorChange = {
+          field,
+          label,
+          old: baseline,
+          new: nextValue,
+          comment: existing?.comment ?? '',
+        };
+        return [...current.filter((change) => change.field !== field), nextChange];
+      });
+    },
+    [contractorDraftCommentMode],
+  );
+
+  const setContractorChangeComment = useCallback((field: string, comment: string) => {
+    setContractorChanges((current) =>
+      current.map((change) => (change.field === field ? { ...change, comment } : change)),
+    );
+  }, []);
+
+  const setField = (key: string, value: string, label?: string) => {
     markDirty();
     setEditor((s) => {
+      const previousValue = String(s.data[key] ?? '');
       let nextData = { ...s.data, [key]: value };
       if (reportType === 'STEWA' && STEWA_DERIVE_KEYS.has(key)) {
         nextData = applyStewaDerivedFields(nextData);
       }
+      updateContractorChange(key, label ?? key.replace(/_/g, ' '), previousValue, String(nextData[key] ?? ''));
       return { ...s, data: nextData };
     });
   };
@@ -522,11 +585,22 @@ export function SwaStewaEditorPage() {
   };
   const setActivitiesText = (value: string) => {
     markDirty();
-    setEditor((s) => ({ ...s, activitiesText: value }));
+    setEditor((s) => {
+      updateContractorChange('activities_text', 'Activities for the week', s.activitiesText, value);
+      return { ...s, activitiesText: value };
+    });
   };
   const setFieldInstructionsText = (value: string) => {
     markDirty();
-    setEditor((s) => ({ ...s, fieldInstructionsText: value }));
+    setEditor((s) => {
+      updateContractorChange(
+        'field_instructions_text',
+        'Field instructions',
+        s.fieldInstructionsText,
+        value,
+      );
+      return { ...s, fieldInstructionsText: value };
+    });
   };
 
   const payItemValidationError = useCallback(() => {
@@ -595,10 +669,16 @@ export function SwaStewaEditorPage() {
       project_id: projectId,
       report_data,
       line_items: reportType === 'SWA' ? lineItems : [],
+      contractor_changes:
+        contractorDraftCommentMode && (reportType === 'IAR' || reportType === 'STEWA')
+          ? contractorChanges
+          : undefined,
       created_by: user?.id || undefined,
     };
   }, [
     activitiesText,
+    contractorChanges,
+    contractorDraftCommentMode,
     data,
     equipment,
     fieldInstructionsText,
@@ -643,7 +723,7 @@ export function SwaStewaEditorPage() {
         autoSaveReady.current = false;
         if (wasNew || !idParam) {
           skipNextLoad.current = true;
-          navigate(`/swa-stewa/edit/${res.report.id}`, { replace: true });
+          navigate(`/swa-stewa/edit?id=${encodeURIComponent(res.report.id)}`, { replace: true });
         }
         requestAnimationFrame(() => {
           autoSaveReady.current = true;
@@ -698,7 +778,7 @@ export function SwaStewaEditorPage() {
         id = res.report.id;
         setReportId(id);
         setReportNumber(res.report.report_number);
-        navigate(`/swa-stewa/edit/${id}`, { replace: true });
+        navigate(`/swa-stewa/edit?id=${encodeURIComponent(id)}`, { replace: true });
       }
       await submitReport(id!, user?.id);
       setStatus('pending_review');
@@ -736,10 +816,43 @@ export function SwaStewaEditorPage() {
     setStatus('rejected');
   };
 
-  const canEditForm = canEditReport(user?.role, reportType, status);
-  const isViewOnly = reportIsViewOnly(user?.role, reportType, status);
+  const canEditForm = canEditReport(user?.role, reportType, status, editableUserIds, user?.id ? String(user.id) : null);
+  const isViewOnly = reportIsViewOnly(
+    user?.role,
+    reportType,
+    status,
+    editableUserIds,
+    user?.id ? String(user.id) : null,
+  );
   const changedFields = new Set(contractorChanges.map((c) => c.field.split('.')[0]));
   const isFieldChanged = (key: string) => changedFields.has(key);
+  const renderContractorChangeBox = (field: string) => {
+    const change = contractorChangeByField.get(field);
+    if (!change) return null;
+    return (
+      <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50/70 p-3">
+        <p className="text-xs font-semibold text-amber-900">
+          Original: <span className="line-through">{change.old || '—'}</span>
+          {' '}→ Current: <strong>{change.new || '—'}</strong>
+        </p>
+        {contractorDraftCommentMode ? (
+          <TextArea
+            rows={2}
+            value={change.comment ?? ''}
+            onChange={(e) => setContractorChangeComment(field, e.target.value)}
+            placeholder="Add a short reason for this change…"
+            className="mt-2 border-amber-300 bg-white"
+          />
+        ) : change.comment ? (
+          <p className="mt-2 text-xs text-amber-900">
+            Comment: <strong>{change.comment}</strong>
+          </p>
+        ) : (
+          <p className="mt-2 text-xs text-amber-800">No comment added.</p>
+        )}
+      </div>
+    );
+  };
 
   // Auto-save ~1.2s after the last edit while the form is editable.
   useEffect(() => {
@@ -791,9 +904,11 @@ export function SwaStewaEditorPage() {
   const canApproveNow =
     (user?.role === 'engineer_2' && status === 'pending_review') ||
     (user?.role === 'engineer_3' && status === 'with_engineer_3') ||
-    (user?.role === 'engineer_4' &&
-      (status === 'with_engineer_4' || status === 'with_engineer_3'));
-  const canRequestRevision = user?.role === 'engineer_2' && status === 'pending_review';
+    (user?.role === 'engineer_4' && status === 'with_engineer_4');
+  const canRequestRevision =
+    (user?.role === 'engineer_2' && status === 'pending_review') ||
+    (user?.role === 'engineer_3' && status === 'with_engineer_3') ||
+    (user?.role === 'engineer_4' && status === 'with_engineer_4');
   useUndoRedoKeyboard(handleUndo, handleRedo, canEditForm);
 
   const renderField = (
@@ -805,7 +920,6 @@ export function SwaStewaEditorPage() {
     hint?: string,
   ) => {
     const changed = isFieldChanged(key);
-    const change = contractorChanges.find((c) => c.field === key);
     const readOnly = computed;
     return (
       <FormField key={key} label={label} hint={hint} className={span2 ? 'sm:col-span-2' : ''}>
@@ -814,7 +928,7 @@ export function SwaStewaEditorPage() {
             disabled={!canEditForm}
             rows={3}
             value={data[key] ?? ''}
-            onChange={(e) => setField(key, e.target.value)}
+            onChange={(e) => setField(key, e.target.value, label)}
             className={changed ? 'border-amber-400 bg-amber-50 ring-1 ring-amber-300' : undefined}
           />
         ) : (
@@ -823,7 +937,7 @@ export function SwaStewaEditorPage() {
             readOnly={readOnly}
             type={type}
             value={data[key] ?? ''}
-            onChange={(e) => setField(key, e.target.value)}
+            onChange={(e) => setField(key, e.target.value, label)}
             className={
               readOnly
                 ? 'bg-surface-muted'
@@ -833,12 +947,7 @@ export function SwaStewaEditorPage() {
             }
           />
         )}
-        {change && (
-          <p className="mt-1 text-xs text-amber-800">
-            Contractor changed: <span className="line-through">{change.old || '—'}</span> →{' '}
-            <strong>{change.new || '—'}</strong>
-          </p>
-        )}
+        {renderContractorChangeBox(key)}
       </FormField>
     );
   };
@@ -878,6 +987,9 @@ export function SwaStewaEditorPage() {
                 <li key={c.field}>
                   {c.label}: <span className="line-through">{c.old || '—'}</span> →{' '}
                   <strong>{c.new || '—'}</strong>
+                  {c.comment ? (
+                    <span className="block text-xs text-amber-900">Comment: {c.comment}</span>
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -1021,10 +1133,18 @@ export function SwaStewaEditorPage() {
               </div>
             </FormSection>
             <FormSection title="Accomplishment" step={2} description="Quantity of work completed this week.">
-              <IarAccomplishmentTable items={iarItems} onChange={setIarItems} readOnly={!canEditForm} />
+              <IarAccomplishmentTable
+                items={iarItems}
+                onChange={setIarItems}
+                readOnly={!canEditForm || contractorDraftCommentMode}
+              />
             </FormSection>
             <FormSection title="For variation order" step={3} description="Contract changes — additive, deductive, or new items.">
-              <IarVariationTable items={variationItems} onChange={setVariationItems} readOnly={!canEditForm} />
+              <IarVariationTable
+                items={variationItems}
+                onChange={setVariationItems}
+                readOnly={!canEditForm || contractorDraftCommentMode}
+              />
             </FormSection>
             <FormSection title="Site activities & remarks" step={4}>
               <div className="grid gap-5 lg:grid-cols-2">
@@ -1035,7 +1155,9 @@ export function SwaStewaEditorPage() {
                     value={activitiesText}
                     onChange={(e) => setActivitiesText(e.target.value)}
                     placeholder="Preparation of sub-grade&#10;Pouring of concrete..."
+                    className={isFieldChanged('activities_text') ? 'border-amber-400 bg-amber-50 ring-1 ring-amber-300' : undefined}
                   />
+                  {renderContractorChangeBox('activities_text')}
                 </FormField>
                 <FormField label="Field instructions" hint="One instruction per line">
                   <TextArea
@@ -1043,7 +1165,9 @@ export function SwaStewaEditorPage() {
                     rows={5}
                     value={fieldInstructionsText}
                     onChange={(e) => setFieldInstructionsText(e.target.value)}
+                    className={isFieldChanged('field_instructions_text') ? 'border-amber-400 bg-amber-50 ring-1 ring-amber-300' : undefined}
                   />
+                  {renderContractorChangeBox('field_instructions_text')}
                 </FormField>
               </div>
               <div className="mt-5">
@@ -1056,13 +1180,13 @@ export function SwaStewaEditorPage() {
                   title="Manpower"
                   items={manpower}
                   onChange={setManpower}
-                  readOnly={!canEditForm}
+                  readOnly={!canEditForm || contractorDraftCommentMode}
                 />
                 <IarResourceTable
                   title="Equipment"
                   items={equipment}
                   onChange={setEquipment}
-                  readOnly={!canEditForm}
+                  readOnly={!canEditForm || contractorDraftCommentMode}
                 />
               </div>
             </FormSection>
@@ -1164,29 +1288,27 @@ export function SwaStewaEditorPage() {
                 Preview
               </Button>
               {user?.role === 'engineer_1' &&
-                (reportType === 'SWA' || reportType === 'STEWA') &&
+                (reportType === 'SWA' || reportType === 'STEWA' || reportType === 'IAR') &&
                 (status === 'draft' || status === 'rejected') && (
                   <Button type="button" variant="secondary" disabled={loading} onClick={handleSendToContractor}>
-                    Send to contractor
+                    {reportType === 'IAR' ? 'Send IAR to contractor' : 'Send to contractor'}
                   </Button>
                 )}
               {user?.role === 'contractor' &&
-                (reportType === 'SWA' || reportType === 'STEWA') &&
+                (reportType === 'SWA' || reportType === 'STEWA' || reportType === 'IAR') &&
                 status === 'pending_contractor' && (
                   <Button type="button" variant="primary" disabled={loading} onClick={handleContractorConfirm}>
-                    Confirm SWA/STEWA
+                    {reportType === 'IAR' ? 'Confirm SWA and IAR' : 'Confirm SWA/STEWA'}
                   </Button>
                 )}
-              {(user?.role === 'engineer_1' || user?.role === 'engineer_2') && (
+              {user?.role === 'engineer_1' &&
+                ((reportType === 'IAR' && status === 'contractor_confirmed') ||
+                  (reportType !== 'IAR' &&
+                    ['draft', 'rejected', 'contractor_confirmed'].includes(status))) && (
                   <Button type="button" variant="primary" disabled={loading} onClick={handleSubmit}>
                     Submit for review
                   </Button>
                 )}
-              {user?.role === 'contractor' && reportType === 'IAR' && (
-                <Button type="button" variant="primary" disabled={loading} onClick={handleSubmit}>
-                  Submit IAR
-                </Button>
-              )}
             </>
           )}
           {!canEditForm && status === 'pending_contractor' && user?.role === 'contractor' && (
@@ -1205,7 +1327,7 @@ export function SwaStewaEditorPage() {
             </span>
           )}
           {isViewOnly && reportNumber && (status === 'generated' || status === 'approved') && (
-            <ButtonLink to={`/reports/view/${reportNumber}`} variant="secondary">
+            <ButtonLink to={`/reports/view?reportNumber=${encodeURIComponent(reportNumber)}`} variant="secondary">
               Open official PDF
             </ButtonLink>
           )}
@@ -1230,7 +1352,7 @@ export function SwaStewaEditorPage() {
             </>
           )}
           {status === 'generated' && reportNumber && (
-            <ButtonLink to={`/reports/view/${reportNumber}`} variant="secondary">
+            <ButtonLink to={`/reports/view?reportNumber=${encodeURIComponent(reportNumber)}`} variant="secondary">
               Open QR verification page
             </ButtonLink>
           )}

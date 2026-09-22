@@ -1,7 +1,12 @@
 'use client';
 
 import NextLink from 'next/link';
-import { usePathname, useRouter, useParams as useNextParams } from 'next/navigation';
+import {
+  usePathname,
+  useRouter,
+  useParams as useNextParams,
+  useSearchParams as useNextSearchParams,
+} from 'next/navigation';
 import { useEffect, useState, type ComponentProps, type ReactNode } from 'react';
 
 type LinkProps = Omit<ComponentProps<typeof NextLink>, 'href'> & {
@@ -30,12 +35,7 @@ export function useParams<T extends Record<string, string | undefined> = Record<
 export { usePathname };
 
 export function useSearchParams() {
-  const [params, setParams] = useState(() => new URLSearchParams());
-
-  useEffect(() => {
-    setParams(new URLSearchParams(window.location.search));
-  }, []);
-
+  const params = useNextSearchParams();
   return [params] as const;
 }
 

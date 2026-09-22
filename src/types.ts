@@ -47,14 +47,30 @@ export const DEMO_ACCOUNTS_BY_ROLE: Record<
   Role,
   { email: string; password: string; name: string }[]
 > = {
-  engineer_1: [{ email: 'engineer1@gmail.com', password: 'engineer123', name: 'Engineer I' }],
-  engineer_2: [{ email: 'engineer2@gmail.com', password: 'engineer123', name: 'Engineer II' }],
-  engineer_3: [{ email: 'engineer3@gmail.com', password: 'engineer123', name: 'Engineer III' }],
-  engineer_4: [{ email: 'engineer4@gmail.com', password: 'engineer123', name: 'Engineer IV' }],
-  contractor: [{ email: 'contractor@gmail.com', password: 'engineer123', name: 'Contractor' }],
+  contractor: [
+    { email: 'constructflow.contractor.1@gmail.com', password: 'contractor123', name: 'Contractor Alpha' },
+    { email: 'constructflow.contractor.2@gmail.com', password: 'contractor123', name: 'Contractor Bravo' },
+    { email: 'constructflow.contractor.3@gmail.com', password: 'contractor123', name: 'Contractor Charlie' },
+  ],
+  engineer_1: [
+    { email: 'constructflow.engineer1.1@gmail.com', password: 'engineer123', name: 'Engr. Juan Dela Cruz' },
+    { email: 'constructflow.engineer1.2@gmail.com', password: 'engineer123', name: 'Engr. Carlos Mendoza' },
+    { email: 'constructflow.engineer1.3@gmail.com', password: 'engineer123', name: 'Engr. Sofia Ramirez' },
+  ],
+  engineer_2: [
+    { email: 'constructflow.engineer2.1@gmail.com', password: 'engineer123', name: 'Engr. Maria Santos' },
+    { email: 'constructflow.engineer2.2@gmail.com', password: 'engineer123', name: 'Engr. Luis Garcia' },
+    { email: 'constructflow.engineer2.3@gmail.com', password: 'engineer123', name: 'Engr. Elena Cruz' },
+  ],
+  engineer_3: [
+    { email: 'constructflow.engineer3.1@gmail.com', password: 'engineer123', name: 'Engr. Pedro Reyes' },
+  ],
+  engineer_4: [
+    { email: 'constructflow.engineer4.1@gmail.com', password: 'engineer123', name: 'Engr. Ana Lopez' },
+  ],
 };
 
-/** First demo account per role (backward compatible). */
+/** First configured account per role (backward compatible). */
 export const DEMO_ACCOUNTS: Record<Role, { email: string; password: string; name: string }> = {
   engineer_1: DEMO_ACCOUNTS_BY_ROLE.engineer_1[0],
   engineer_2: DEMO_ACCOUNTS_BY_ROLE.engineer_2[0],
@@ -119,10 +135,15 @@ export interface SCurvePoint {
   date: string;
   pointDate?: string;
   label?: string | null;
+  periodLabel?: string | null;
   originalPlan: number | null;
   currentPlan: number | null;
   actual: number | null;
   variance?: number | null;
+  targetAccomplishmentPct?: number | null;
+  targetAccomplishmentPhp?: number | null;
+  cumulativePct?: number | null;
+  cumulativePhp?: number | null;
 }
 
 export interface ProgressReport {

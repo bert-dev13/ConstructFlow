@@ -30,7 +30,15 @@ const NAV_BY_ROLE: Record<Role, { to: string; label: string; icon: NavIconName }
   ],
   engineer_2: REVIEWER_NAV,
   engineer_3: REVIEWER_NAV,
-  engineer_4: REVIEWER_NAV,
+  engineer_4: [
+    { to: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
+    { to: '/projects', label: 'Projects', icon: 'projects' },
+    { to: '/reports', label: 'Documents', icon: 'reports' },
+    { to: '/workflow', label: 'For Approval', icon: 'approval' },
+    { to: '/pdm', label: 'PDM Schedule', icon: 'pdm' },
+    { to: '/bar-chart', label: 'Bar Chart', icon: 'bar-chart' },
+    { to: '/s-curve', label: 'S-Curve', icon: 's-curve' },
+  ],
   contractor: [
     { to: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
     { to: '/schedule', label: 'Prepare Schedule', icon: 'schedule' },

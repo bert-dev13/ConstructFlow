@@ -76,16 +76,19 @@ export function computeWorkItems(
     const revisedWeightPct =
       showRevised && totalRevised > 0 ? (revisedAmount / totalRevised) * 100 : 0;
 
-    const toDate = item.previous + item.thisPeriod;
     const baseQty = useRevised ? revisedQty : item.programmedQty;
+    const baselineAmount = showRevised && totalRevised > 0 ? totalRevised : totalContract;
+    const toDate = (baseQty / 2) * item.unitPrice;
+    const thisPeriod = toDate - item.previous;
     const plannedWeight = useRevised ? revisedWeightPct : weightPct;
     const accomplishmentWeightPct =
-      baseQty > 0 ? (toDate / baseQty) * plannedWeight : 0;
+      baselineAmount > 0 ? (toDate / baselineAmount) * 100 : 0;
     const status = workItemRemarksStatus(accomplishmentWeightPct, plannedWeight);
 
     return {
       ...item,
       revisedQty: item.revisedQty ?? 0,
+      thisPeriod,
       contractAmount,
       weightPct,
       revisedAmount,
@@ -97,12 +100,10 @@ export function computeWorkItems(
   });
 
   const totalToDateWeightPct = computed.reduce((s, i) => s + i.accomplishmentWeightPct, 0);
-  const totalThisAccomplishment = computed.reduce(
-    (s, i) => s + i.thisPeriod * i.unitPrice,
-    0,
-  );
+  const totalThisAccomplishment = computed.reduce((s, i) => s + i.thisPeriod, 0);
+  const accomplishmentBaseline = showRevised && totalRevised > 0 ? totalRevised : totalContract;
   const pctThisAccomplishment =
-    totalContract > 0 ? (totalThisAccomplishment / totalContract) * 100 : 0;
+    accomplishmentBaseline > 0 ? (totalThisAccomplishment / accomplishmentBaseline) * 100 : 0;
 
   return {
     items: computed,

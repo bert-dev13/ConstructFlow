@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   CartesianGrid,
   Legend,
@@ -15,13 +15,21 @@ import {
 import { ProjectSelect } from '../components/ProjectSelect';
 import { DocumentsBackLink } from '../components/DocumentsBackLink';
 import { ReportProgressFeed, type ReportProgressEntry } from '../components/ReportProgressFeed';
+import { useAuth } from '../context/AuthContext';
 import { useSelectedProject } from '../context/SelectedProjectContext';
 import { getSCurve,
+  saveSCurveCostItems,
+  saveSCurveSettings,
   type SCurveActivity,
+  type SCurveCostItem,
   type SCurveComparison,
+  type SCurvePeriodRow,
+  type SCurveReportingInterval,
   type ScheduleStatus,
   type SCurveSnapshotSummary,
+  type SCurveType,
 } from '../lib/sCurveApi';
+import { computeSCurveCostSummary } from '../lib/sCurveItems';
 import type { SCurvePoint } from '../types';
 import { exportSCurvePdf } from '../lib/chartPdfExport';
 import { NavIcon, type NavIconName } from '../components/NavIcon';
@@ -34,16 +42,36 @@ const STATUS_STYLES: Record<string, { badge: string; label: string }> = {
   unknown: { badge: 'bg-surface-muted text-text-muted', label: 'Status unknown' },
 };
 
+const INTERVAL_LABELS: Record<SCurveReportingInterval, string> = {
+  '10_day': '10-Day Interval',
+  '30_day': '30-Day / Monthly',
+};
+
 function formatSnapshotLabel(version: SCurveSnapshotSummary): string {
   const when = new Date(version.captured_at).toLocaleString();
   const label = version.trigger_label ?? version.trigger_type.replace(/_/g, ' ');
   return `${when} — ${label}`;
 }
 
+function formatMoney(value: number): string {
+  return value.toLocaleString('en-PH', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 export function SCurvePage() {
+  const { user } = useAuth();
   const { projectId, setProjectId } = useSelectedProject();
+  const [curveType, setCurveType] = useState<SCurveType>('pdm_based');
+  const [reportingInterval, setReportingInterval] = useState<SCurveReportingInterval>('30_day');
+  const [theoreticalTotalPeriods, setTheoreticalTotalPeriods] = useState(1);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsVersion, setSettingsVersion] = useState(0);
   const [points, setPoints] = useState<SCurvePoint[]>([]);
   const [activities, setActivities] = useState<SCurveActivity[]>([]);
+  const [costItems, setCostItems] = useState<SCurveCostItem[]>([]);
+  const [periods, setPeriods] = useState<SCurvePeriodRow[]>([]);
   const [criticalPath, setCriticalPath] = useState<string[]>([]);
   const [syncedFromPdm, setSyncedFromPdm] = useState(false);
   const [hasActualProgress, setHasActualProgress] = useState(false);
@@ -59,10 +87,16 @@ export function SCurvePage() {
   const [projectStartDate, setProjectStartDate] = useState<string | null>(null);
   const [projectEndDate, setProjectEndDate] = useState<string | null>(null);
   const [targetPlanPercent, setTargetPlanPercent] = useState<number | null>(null);
+  const [targetPlanPhp, setTargetPlanPhp] = useState<number | null>(null);
   const [actualPlanPercent, setActualPlanPercent] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [chartReady, setChartReady] = useState(false);
+  const [costSaving, setCostSaving] = useState(false);
+  const [costDirty, setCostDirty] = useState(false);
+  const [costMessage, setCostMessage] = useState('');
+  const canEditCostItems = user?.role === 'contractor' || user?.role === 'engineer_1';
+  const costSummary = useMemo(() => computeSCurveCostSummary(costItems), [costItems]);
 
   useEffect(() => {
     setViewingSnapshotId(null);
@@ -72,12 +106,52 @@ export function SCurvePage() {
     setChartReady(true);
   }, []);
 
+  const updateCostItem = (activityId: string, patch: Partial<Pick<SCurveCostItem, 'quantity' | 'unitCost'>>) => {
+    setCostItems((current) =>
+      current.map((item) => (item.activityId === activityId ? { ...item, ...patch } : item)),
+    );
+    setCostDirty(true);
+    setCostMessage('');
+  };
+
+  const persistScheduleSettings = async (next: {
+    curveType?: SCurveType;
+    reportingInterval?: SCurveReportingInterval;
+    theoreticalTotalPeriods?: number;
+  }) => {
+    if (viewingSnapshotId) return;
+    const nextCurveType = next.curveType ?? curveType;
+    const nextReportingInterval = next.reportingInterval ?? reportingInterval;
+    const nextTheoreticalTotalPeriods = Math.max(
+      1,
+      next.theoreticalTotalPeriods ?? theoreticalTotalPeriods,
+    );
+
+    setSettingsSaving(true);
+    try {
+      const saved = await saveSCurveSettings({
+        project_id: projectId,
+        curve_type: nextCurveType,
+        reporting_interval: nextReportingInterval,
+        theoretical_total_periods: nextTheoreticalTotalPeriods,
+      });
+      setCurveType(saved.curve_type);
+      setReportingInterval(saved.reporting_interval);
+      setTheoreticalTotalPeriods(saved.theoretical_total_periods);
+      setSettingsVersion((value) => value + 1);
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
   useEffect(() => {
     setLoading(true);
     getSCurve(projectId, viewingSnapshotId)
       .then((res) => {
         setPoints(res.points);
         setActivities(res.activities);
+        setCostItems(res.cost_items ?? []);
+        setPeriods(res.periods ?? []);
         setCriticalPath(res.critical_path);
         setSyncedFromPdm(res.synced_from_pdm);
         setHasActualProgress(res.has_actual_progress);
@@ -91,12 +165,20 @@ export function SCurvePage() {
         setViewingSnapshotLabel(res.viewing_snapshot_label);
         setProjectStartDate(res.project_start_date ?? null);
         setProjectEndDate(res.project_end_date ?? null);
+        setCurveType(res.curve_type);
+        setReportingInterval(res.reporting_interval);
+        setTheoreticalTotalPeriods(res.theoretical_total_periods);
         setTargetPlanPercent(res.target_plan_percent ?? null);
+        setTargetPlanPhp(res.target_plan_php ?? null);
         setActualPlanPercent(res.actual_plan_percent ?? null);
+        setCostDirty(false);
+        setCostMessage('');
       })
       .catch(() => {
         setPoints([]);
         setActivities([]);
+        setCostItems([]);
+        setPeriods([]);
         setCriticalPath([]);
         setSyncedFromPdm(false);
         setHasActualProgress(false);
@@ -110,11 +192,44 @@ export function SCurvePage() {
         setViewingSnapshotLabel(null);
         setProjectStartDate(null);
         setProjectEndDate(null);
+        setCurveType('pdm_based');
+        setReportingInterval('30_day');
+        setTheoreticalTotalPeriods(1);
         setTargetPlanPercent(null);
+        setTargetPlanPhp(null);
         setActualPlanPercent(null);
+        setCostDirty(false);
+        setCostMessage('');
       })
       .finally(() => setLoading(false));
-  }, [projectId, viewingSnapshotId]);
+  }, [projectId, viewingSnapshotId, settingsVersion]);
+
+  useEffect(() => {
+    if (!canEditCostItems || !costDirty || viewingSnapshotId) return;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        setCostSaving(true);
+        try {
+          const res = await saveSCurveCostItems({
+            project_id: projectId,
+            items: costItems.map((item) => ({
+              activityId: item.activityId,
+              quantity: item.quantity,
+              unitCost: item.unitCost,
+            })),
+          });
+          setCostItems(res.cost_items);
+          setCostDirty(false);
+          setCostMessage('Cost items auto-saved.');
+        } catch {
+          setCostMessage('Could not save S-Curve cost items.');
+        } finally {
+          setCostSaving(false);
+        }
+      })();
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [canEditCostItems, costDirty, costItems, projectId, viewingSnapshotId]);
 
   const statusStyle = STATUS_STYLES[scheduleStatus?.status ?? 'unknown'] ?? STATUS_STYLES.unknown;
   const variance =
@@ -175,6 +290,66 @@ export function SCurvePage() {
               )}
             </div>
           )}
+          <div className="flex rounded-xl bg-surface-muted p-1">
+            <button
+              type="button"
+              onClick={() => void persistScheduleSettings({ curveType: 'pdm_based' })}
+              disabled={settingsSaving || !!viewingSnapshotId}
+              className={`rounded-lg px-3 py-2 text-sm font-semibold ${
+                curveType === 'pdm_based'
+                  ? 'bg-primary text-white shadow-sm'
+                  : 'text-text-muted'
+              }`}
+            >
+              PDM-Based Target
+            </button>
+            <button
+              type="button"
+              onClick={() => void persistScheduleSettings({ curveType: 'ideal_theoretical' })}
+              disabled={settingsSaving || !!viewingSnapshotId}
+              className={`rounded-lg px-3 py-2 text-sm font-semibold ${
+                curveType === 'ideal_theoretical'
+                  ? 'bg-primary text-white shadow-sm'
+                  : 'text-text-muted'
+              }`}
+            >
+              Ideal/Theoretical
+            </button>
+          </div>
+          <label className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-sm text-text">
+            <span className="font-semibold text-text-muted">Interval</span>
+            <select
+              value={reportingInterval}
+              disabled={settingsSaving || !!viewingSnapshotId}
+              onChange={(e) =>
+                void persistScheduleSettings({
+                  reportingInterval: e.target.value as SCurveReportingInterval,
+                })
+              }
+              className="bg-transparent text-sm font-semibold text-text outline-none"
+            >
+              <option value="10_day">10-Day Interval</option>
+              <option value="30_day">30-Day / Monthly</option>
+            </select>
+          </label>
+          {curveType === 'ideal_theoretical' && (
+            <label className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-sm text-text">
+              <span className="font-semibold text-text-muted">Theoretical periods</span>
+              <input
+                type="number"
+                min={1}
+                value={theoreticalTotalPeriods}
+                disabled={settingsSaving || !!viewingSnapshotId}
+                onChange={(e) => setTheoreticalTotalPeriods(Math.max(1, Number(e.target.value || 1)))}
+                onBlur={(e) =>
+                  void persistScheduleSettings({
+                    theoreticalTotalPeriods: Math.max(1, Number(e.currentTarget.value || 1)),
+                  })
+                }
+                className="w-20 bg-transparent text-sm font-semibold text-text outline-none"
+              />
+            </label>
+          )}
           <ProjectSelect value={projectId} onChange={setProjectId} className="min-w-[240px]" />
           <button
             type="button"
@@ -186,8 +361,10 @@ export function SCurvePage() {
                   projectLabel: `Project ${projectId}`,
                   points,
                   comparisons,
+                  periods,
                   status: scheduleStatus,
                   targetPlanPercent,
+                  targetPlanPhp,
                   actualPlanPercent,
                 });
               } finally {
@@ -203,10 +380,13 @@ export function SCurvePage() {
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {([
-          ['Target plan', targetPlanPercent != null ? `${targetPlanPercent}%` : '—', 'Baseline approved progress', 'planned'],
+          ['Target plan', targetPlanPercent != null ? `${targetPlanPercent}%` : '—', `Current cumulative target from ${INTERVAL_LABELS[reportingInterval].toLowerCase()} grouping`, 'planned'],
+          ['Target plan (PHP)', targetPlanPhp != null ? `P ${formatMoney(targetPlanPhp)}` : '—', 'Current cumulative target amount', 'reports'],
           ['Actual progress', actualPlanPercent != null ? `${actualPlanPercent}%` : '—', latestReportDate ? `Latest report ${latestReportDate}` : 'No approved report yet', 'actual'],
           ['Schedule variance', variance != null ? `${variance > 0 ? '+' : ''}${variance}%` : '—', variance == null ? 'Waiting for actual progress' : variance < 0 ? 'Behind target plan' : variance > 0 ? 'Ahead of target plan' : 'Matching target plan', 's-curve'],
           ['Critical path', criticalPath.length, syncedFromPdm ? 'Synced from PDM schedule' : 'Not synced from PDM', 'approval'],
+          ['Total contract amount', `P ${formatMoney(costSummary.totalContractAmount)}`, 'Sum of all PDM-based item amounts', 'reports'],
+          ['Total WT%', `${costSummary.totalWeightPct.toFixed(2)}%`, 'Should total 100% when items have amounts', 'projects'],
         ] as [string, string | number, string, NavIconName][]).map(([label, value, caption, icon]) => (
           <div key={label} className="rounded-2xl border border-border bg-card p-4 shadow-sm">
             <div className="flex items-start justify-between gap-3">
@@ -228,6 +408,53 @@ export function SCurvePage() {
         emptyMessage="No approved SWA or STEWA reports yet — Target Plan appears after the first approved progress."
       />
 
+      {periods.length > 0 && (
+        <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+          <h2 className="text-lg font-semibold text-text">
+            {reportingInterval === '10_day'
+              ? '10-day target accomplishment baseline'
+              : 'Monthly target accomplishment baseline'}
+          </h2>
+          <p className="mt-1 text-sm text-text-muted">
+            {reportingInterval === '10_day'
+              ? 'Each period uses a 10-day baseline. Target accomplishment comes from the WT% of PDM items scheduled within that period, and cumulative target builds sequentially.'
+              : 'Each month uses a 30-day baseline. Target accomplishment comes from the WT% of PDM items scheduled within that period, and cumulative target builds sequentially.'}
+          </p>
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="border-b border-border text-xs uppercase text-text-muted">
+                  <th className="py-2 pr-3">Period</th>
+                  <th className="py-2 pr-3">Date range</th>
+                  <th className="py-2 pr-3">Target %</th>
+                  <th className="py-2 pr-3">Target (PHP)</th>
+                  <th className="py-2 pr-3">Cumulative %</th>
+                  <th className="py-2">Cumulative (PHP)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {periods.map((period) => (
+                  <tr key={period.periodIndex} className="border-b border-border/50">
+                    <td className="py-2 pr-3 font-medium">{period.label}</td>
+                    <td className="py-2 pr-3">
+                      {period.startDate} to {period.endDate}
+                    </td>
+                    <td className="py-2 pr-3 font-semibold text-[#2563eb]">
+                      {period.targetAccomplishmentPct.toFixed(2)}%
+                    </td>
+                    <td className="py-2 pr-3">P {formatMoney(period.targetAccomplishmentPhp)}</td>
+                    <td className="py-2 pr-3 font-semibold text-primary">
+                      {period.cumulativePct.toFixed(2)}%
+                    </td>
+                    <td className="py-2">P {formatMoney(period.cumulativePhp)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {comparisons.length > 0 && (
         <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-text">Target plan vs. actual</h2>
@@ -241,6 +468,7 @@ export function SCurvePage() {
                 <tr className="border-b border-border text-xs uppercase text-text-muted">
                   <th className="py-2 pr-3">Date</th>
                   <th className="py-2 pr-3 text-[#2563eb]">Target Plan %</th>
+                  <th className="py-2 pr-3">Target Plan (PHP)</th>
                   <th className="py-2 pr-3 text-[#f97316]">Actual %</th>
                   <th className="py-2 pr-3">Difference</th>
                   <th className="py-2">Status</th>
@@ -251,6 +479,7 @@ export function SCurvePage() {
                   <tr key={row.date} className="border-b border-border/50">
                     <td className="py-2 pr-3 font-medium">{row.date_label}</td>
                     <td className="py-2 pr-3 font-semibold text-[#2563eb]">{row.target_pct}%</td>
+                    <td className="py-2 pr-3">P {formatMoney(row.target_php)}</td>
                     <td className="py-2 pr-3 font-semibold text-[#f97316]">{row.actual_pct}%</td>
                     <td className="py-2 pr-3">
                       {row.variance_pct > 0 ? '+' : ''}
@@ -348,8 +577,19 @@ export function SCurvePage() {
                       return (
                         <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs shadow-md">
                           <p className="font-semibold text-text">{label}</p>
+                          {row?.periodLabel && (
+                            <p className="text-text-muted">{row.periodLabel}</p>
+                          )}
                           {target != null && (
                             <p className="text-[#2563eb]">Target Plan: {target}%</p>
+                          )}
+                          {row?.targetAccomplishmentPct != null && (
+                            <p className="text-text-muted">
+                              Target this period: {row.targetAccomplishmentPct.toFixed(2)}%
+                              {row.targetAccomplishmentPhp != null
+                                ? ` · P ${formatMoney(row.targetAccomplishmentPhp)}`
+                                : ''}
+                            </p>
                           )}
                           {actual != null && (
                             <p className="text-[#f97316]">Actual Plan: {actual}%</p>
@@ -438,10 +678,26 @@ export function SCurvePage() {
                 </thead>
                 <tbody>
                   <tr className="border-b border-border">
-                    <td className="p-2 text-left font-semibold text-[#2563eb]">Target Plan %</td>
+                    <td className="p-2 text-left font-semibold text-[#2563eb]">Cumulative target %</td>
                     {points.map((p) => (
                       <td key={p.pointDate ?? p.date} className="border-l border-border p-2">
                         {p.originalPlan != null ? `${p.originalPlan}%` : ''}
+                      </td>
+                    ))}
+                  </tr>
+                  <tr className="border-b border-border">
+                    <td className="p-2 text-left font-semibold text-text-muted">Target this period %</td>
+                    {points.map((p) => (
+                      <td key={p.pointDate ?? p.date} className="border-l border-border p-2">
+                        {p.targetAccomplishmentPct != null ? `${p.targetAccomplishmentPct.toFixed(2)}%` : ''}
+                      </td>
+                    ))}
+                  </tr>
+                  <tr className="border-b border-border">
+                    <td className="p-2 text-left font-semibold text-text-muted">Target this period (PHP)</td>
+                    {points.map((p) => (
+                      <td key={p.pointDate ?? p.date} className="border-l border-border p-2">
+                        {p.targetAccomplishmentPhp != null ? `P ${formatMoney(p.targetAccomplishmentPhp)}` : ''}
                       </td>
                     ))}
                   </tr>
@@ -506,6 +762,115 @@ export function SCurvePage() {
         </p>
       </div>
 
+      <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="font-semibold text-text">PDM-based target S-Curve items</h3>
+            <p className="mt-1 text-sm text-text-muted">
+              Item No. and Description stay synchronized with the PDM. Enter Qty and Unit Cost here
+              to calculate Amount, Total Contract Amount, and WT%.
+            </p>
+          </div>
+          <div className="text-right">
+            <p className="text-xs uppercase tracking-wide text-text-muted">Total contract amount</p>
+            <p className="text-lg font-semibold text-text">P {formatMoney(costSummary.totalContractAmount)}</p>
+            <p className="text-xs text-text-muted">Total WT% {costSummary.totalWeightPct.toFixed(2)}%</p>
+          </div>
+        </div>
+
+        {costMessage && (
+          <p className={`mt-3 text-xs ${costMessage.includes('Could not') ? 'text-red-600' : 'text-text-muted'}`}>
+            {costMessage}
+          </p>
+        )}
+        {costSaving && <p className="mt-2 text-xs text-text-muted">Saving S-Curve cost items…</p>}
+        {viewingSnapshotId && (
+          <p className="mt-2 text-xs text-amber-700">
+            Cost items are read-only while viewing an archived snapshot.
+          </p>
+        )}
+
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full min-w-[860px] text-left text-sm">
+            <thead>
+              <tr className="border-b border-border text-xs uppercase text-text-muted">
+                <th className="py-2 pr-3">Item No.</th>
+                <th className="py-2 pr-3">Description</th>
+                <th className="py-2 pr-3">Qty</th>
+                <th className="py-2 pr-3">Unit Cost (PHP)</th>
+                <th className="py-2 pr-3">Amount (PHP)</th>
+                <th className="py-2">WT%</th>
+              </tr>
+            </thead>
+            <tbody>
+              {costSummary.items.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="py-6 text-center text-text-muted">
+                    Add activities in the PDM schedule to populate the S-Curve item table.
+                  </td>
+                </tr>
+              ) : (
+                costSummary.items.map((item) => (
+                  <tr key={item.activityId} className="border-b border-border/50">
+                    <td className="py-2 pr-3 font-medium">{item.itemNo || '—'}</td>
+                    <td className="py-2 pr-3">{item.description || '—'}</td>
+                    <td className="py-2 pr-3">
+                      {canEditCostItems && !viewingSnapshotId ? (
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={item.quantity || ''}
+                          onChange={(e) =>
+                            updateCostItem(item.activityId, {
+                              quantity: parseFloat(e.target.value) || 0,
+                            })
+                          }
+                          className="w-28 rounded border border-border px-2 py-1 text-right"
+                        />
+                      ) : (
+                        item.quantity
+                      )}
+                    </td>
+                    <td className="py-2 pr-3">
+                      {canEditCostItems && !viewingSnapshotId ? (
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={item.unitCost || ''}
+                          onChange={(e) =>
+                            updateCostItem(item.activityId, {
+                              unitCost: parseFloat(e.target.value) || 0,
+                            })
+                          }
+                          className="w-32 rounded border border-border px-2 py-1 text-right"
+                        />
+                      ) : (
+                        `P ${formatMoney(item.unitCost)}`
+                      )}
+                    </td>
+                    <td className="py-2 pr-3 font-medium">P {formatMoney(item.amount)}</td>
+                    <td className="py-2">{item.weightPct.toFixed(2)}%</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+            {costSummary.items.length > 0 && (
+              <tfoot>
+                <tr className="bg-surface-muted font-semibold text-text">
+                  <td colSpan={4} className="py-2 pr-3 text-right">
+                    Total Contract Amount
+                  </td>
+                  <td className="py-2 pr-3">P {formatMoney(costSummary.totalContractAmount)}</td>
+                  <td className="py-2">{costSummary.totalWeightPct.toFixed(2)}%</td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      </div>
+
       {versions.length > 0 && (
         <div className="mt-6 rounded-2xl border border-border bg-card p-6 shadow-sm">
           <h3 className="font-semibold text-text">S-Curve version history</h3>
@@ -550,7 +915,9 @@ export function SCurvePage() {
         <div className="mt-6 rounded-2xl border border-border bg-card p-6 shadow-sm">
           <h3 className="font-semibold text-text">PDM activities on this S-curve</h3>
           <p className="mt-1 text-sm text-text-muted">
-            Each row is one PDM activity. Planned % is cumulative when that activity finishes.
+            Each row is one PDM activity. Planned % is the cumulative target at the end of the
+            selected reporting period where that activity is scheduled to finish. PDM start, end,
+            and duration stay unchanged.
           </p>
           <div className="mt-4 overflow-x-auto">
             <table className="w-full text-left text-sm">
@@ -562,7 +929,7 @@ export function SCurvePage() {
                   <th className="py-2 pr-3">ES</th>
                   <th className="py-2 pr-3">EF</th>
                   <th className="py-2 pr-3">Finish date</th>
-                  <th className="py-2 pr-3">Planned %</th>
+                  <th className="py-2 pr-3">Cumulative target %</th>
                   <th className="py-2">Critical</th>
                 </tr>
               </thead>

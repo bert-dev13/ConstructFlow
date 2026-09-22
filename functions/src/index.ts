@@ -1,29 +1,454 @@
 import * as admin from 'firebase-admin';
-import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { onDocumentCreated } from 'firebase-functions/v2/firestore';
+import { onCall, HttpsError } from 'firebase-functions/v2/https';
+import { onSchedule } from 'firebase-functions/v2/scheduler';
 import * as nodemailer from 'nodemailer';
 
 admin.initializeApp();
 const db = admin.firestore();
 const bucket = admin.storage().bucket();
 
-const DEMO_USERS: Array<{
+type OptionalAttachmentKey = 'pdm' | 'bar_chart' | 's_curve' | 'swa' | 'stewa';
+
+const ACCOUNTS: Array<{
   email: string;
   password: string;
   fullName: string;
   role: string;
 }> = [
-  { email: 'engineer1@gmail.com', password: 'engineer123', fullName: 'Engineer I', role: 'engineer_1' },
-  { email: 'engineer2@gmail.com', password: 'engineer123', fullName: 'Engineer II', role: 'engineer_2' },
-  { email: 'engineer3@gmail.com', password: 'engineer123', fullName: 'Engineer III', role: 'engineer_3' },
-  { email: 'engineer4@gmail.com', password: 'engineer123', fullName: 'Engineer IV', role: 'engineer_4' },
-  { email: 'contractor@gmail.com', password: 'engineer123', fullName: 'Contractor', role: 'contractor' },
+  { email: 'constructflow.contractor.1@gmail.com', password: 'contractor123', fullName: 'Contractor Alpha', role: 'contractor' },
+  { email: 'constructflow.contractor.2@gmail.com', password: 'contractor123', fullName: 'Contractor Bravo', role: 'contractor' },
+  { email: 'constructflow.contractor.3@gmail.com', password: 'contractor123', fullName: 'Contractor Charlie', role: 'contractor' },
+  { email: 'constructflow.engineer1.1@gmail.com', password: 'engineer123', fullName: 'Engr. Juan Dela Cruz', role: 'engineer_1' },
+  { email: 'constructflow.engineer1.2@gmail.com', password: 'engineer123', fullName: 'Engr. Carlos Mendoza', role: 'engineer_1' },
+  { email: 'constructflow.engineer1.3@gmail.com', password: 'engineer123', fullName: 'Engr. Sofia Ramirez', role: 'engineer_1' },
+  { email: 'constructflow.engineer2.1@gmail.com', password: 'engineer123', fullName: 'Engr. Maria Santos', role: 'engineer_2' },
+  { email: 'constructflow.engineer2.2@gmail.com', password: 'engineer123', fullName: 'Engr. Luis Garcia', role: 'engineer_2' },
+  { email: 'constructflow.engineer2.3@gmail.com', password: 'engineer123', fullName: 'Engr. Elena Cruz', role: 'engineer_2' },
+  { email: 'constructflow.engineer3.1@gmail.com', password: 'engineer123', fullName: 'Engr. Pedro Reyes', role: 'engineer_3' },
+  { email: 'constructflow.engineer4.1@gmail.com', password: 'engineer123', fullName: 'Engr. Ana Lopez', role: 'engineer_4' },
 ];
 
-export const seedDemoData = onCall({ invoker: 'public' }, async () => {
-  const contractorUids: string[] = [];
+const PROJECT_SPECS = [
+  {
+    id: 'demo-capitol-annex',
+    name: 'Provincial Capitol Annex',
+    location: 'Tuguegarao City, Cagayan',
+    status: 'active',
+    startDate: '2025-07-01',
+    plannedEndDate: '2025-10-19',
+    contractAmount: 5991119.01,
+    contractorEmail: 'constructflow.contractor.1@gmail.com',
+    engineer1Email: 'constructflow.engineer1.1@gmail.com',
+    engineer2Emails: ['constructflow.engineer2.1@gmail.com'],
+  },
+  {
+    id: 'demo-remebella-road',
+    name: 'Remebella Road Improvement',
+    location: 'Remebella, Buguey, Cagayan',
+    status: 'active',
+    startDate: '2025-07-01',
+    plannedEndDate: '2025-10-19',
+    contractAmount: 5991119.01,
+    contractorEmail: 'constructflow.contractor.2@gmail.com',
+    engineer1Email: 'constructflow.engineer1.2@gmail.com',
+    engineer2Emails: ['constructflow.engineer2.2@gmail.com'],
+  },
+  {
+    id: 'demo-north-zone-pipe',
+    name: 'North Zone Pipe Replacement',
+    location: 'North Zone, Cagayan',
+    status: 'active',
+    startDate: '2025-08-01',
+    plannedEndDate: '2025-12-15',
+    contractAmount: 2500000,
+    contractorEmail: 'constructflow.contractor.3@gmail.com',
+    engineer1Email: 'constructflow.engineer1.3@gmail.com',
+    engineer2Emails: ['constructflow.engineer2.3@gmail.com'],
+  },
+] as const;
 
-  for (const account of DEMO_USERS) {
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function uniqueIds(values: Array<string | null | undefined>) {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => String(item ?? '').trim()).filter((item) => item.length > 0)
+    : [];
+}
+
+function buildProjectAccess(input: {
+  contractorId?: string | null;
+  assignedUserIds?: string[];
+  involvedUserIds?: string[];
+}) {
+  const assignedUserIds = uniqueIds([...(input.assignedUserIds ?? []), input.contractorId ?? null]);
+  const involvedUserIds = uniqueIds(input.involvedUserIds ?? []);
+  return {
+    contractorId: input.contractorId ?? null,
+    assignedUserIds,
+    involvedUserIds,
+    accessUserIds: uniqueIds([input.contractorId ?? null, ...assignedUserIds, ...involvedUserIds]),
+  };
+}
+
+function parseReportNumberCounter(reportNumber: string) {
+  const parts = reportNumber.split('-');
+  if (parts.length > 5) {
+    const suffix = Number(parts[parts.length - 1]);
+    if (Number.isFinite(suffix)) {
+      return {
+        base: parts.slice(0, -1).join('-'),
+        nextSuffix: suffix + 1,
+      };
+    }
+  }
+  return { base: reportNumber, nextSuffix: 2 };
+}
+
+function htmlEscape(value: unknown) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+async function writeReportAudit(reportId: string, action: string, details: Record<string, unknown> = {}) {
+  await db.collection(`reports/${reportId}/audit`).add({
+    action,
+    details,
+    createdAt: nowIso(),
+    actorName: 'cloud-function',
+  });
+}
+
+async function writeProjectAudit(projectId: string, fieldName: string, oldValue: unknown, newValue: unknown) {
+  await db.collection(`projects/${projectId}/auditLog`).add({
+    fieldName,
+    oldValue: oldValue != null ? String(oldValue) : null,
+    newValue: newValue != null ? String(newValue) : null,
+    createdAt: nowIso(),
+    actorName: 'cloud-function',
+  });
+}
+
+async function resolveUserEmailsByIds(userIds: string[]) {
+  const emails: string[] = [];
+  for (const userId of uniqueIds(userIds)) {
+    const snap = await db.collection('users').doc(userId).get();
+    if (!snap.exists) continue;
+    const email = String(snap.data()?.email ?? '').trim();
+    if (email) emails.push(email);
+  }
+  return uniqueIds(emails);
+}
+
+async function resolveRoleEmails(role: string) {
+  const snap = await db.collection('users').where('role', '==', role).get();
+  return uniqueIds(
+    snap.docs.map((doc) => String(doc.data().email ?? '').trim()).filter((email) => email.length > 0),
+  );
+}
+
+async function resolveProjectRecipients(projectId: string, projectData?: FirebaseFirestore.DocumentData) {
+  const projectSnap = projectData ? null : await db.collection('projects').doc(projectId).get();
+  const project = projectData ?? projectSnap?.data();
+  if (!project) return [];
+  const assignedUserIds = stringArray(project.assignedUserIds);
+  const involvedUserIds = stringArray(project.involvedUserIds);
+  const contractorId = typeof project.contractorId === 'string' ? project.contractorId : null;
+  const recipientIds = uniqueIds([contractorId, ...assignedUserIds, ...involvedUserIds]);
+  const [directEmails, engineer3Emails, engineer4Emails] = await Promise.all([
+    resolveUserEmailsByIds(recipientIds),
+    resolveRoleEmails('engineer_3'),
+    resolveRoleEmails('engineer_4'),
+  ]);
+  return uniqueIds([...directEmails, ...engineer3Emails, ...engineer4Emails]);
+}
+
+async function uploadHtmlAttachment(path: string, html: string) {
+  const file = bucket.file(path);
+  await file.save(html, { contentType: 'text/html', public: true });
+  return `https://storage.googleapis.com/${bucket.name}/${path}`;
+}
+
+async function resolveLatestApprovedReportFile(projectId: string, reportType: 'SWA' | 'STEWA') {
+  const snap = await db
+    .collection('reports')
+    .where('projectId', '==', projectId)
+    .where('reportType', '==', reportType)
+    .get();
+  const candidate = snap.docs
+    .map((doc) => ({ id: doc.id, data: doc.data() }))
+    .filter((entry) => ['approved', 'generated'].includes(String(entry.data.status)))
+    .sort((a, b) => String(b.data.updatedAt ?? b.data.createdAt ?? '').localeCompare(String(a.data.updatedAt ?? a.data.createdAt ?? '')))[0];
+  if (!candidate) return null;
+  const pdfPath = String(candidate.data.pdfPath ?? '').trim();
+  if (!pdfPath) return null;
+  return {
+    key: reportType.toLowerCase() as OptionalAttachmentKey,
+    filename: `${String(candidate.data.reportNumber ?? candidate.id)}.${pdfPath.endsWith('.html') ? 'html' : 'pdf'}`,
+    url: pdfPath,
+  };
+}
+
+async function buildScheduleHtmlAttachment(
+  reportId: string,
+  projectData: FirebaseFirestore.DocumentData,
+  kind: 'pdm' | 'bar_chart' | 's_curve',
+) {
+  if (kind === 's_curve') {
+    const curveSnap = await db.collection('sCurves').doc(String(projectData.projectId ?? projectData.id ?? '')).get();
+    if (!curveSnap.exists) return null;
+    const curve = curveSnap.data() ?? {};
+    const points = Array.isArray(curve.points) ? curve.points : [];
+    const html = `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;padding:24px">
+      <h1>S-Curve Summary</h1>
+      <p><strong>Project:</strong> ${htmlEscape(projectData.name)}</p>
+      <table border="1" cellspacing="0" cellpadding="6">
+        <tr><th>Date</th><th>Target Plan</th><th>Actual</th></tr>
+        ${points
+          .map((point) => `<tr><td>${htmlEscape((point as Record<string, unknown>).date)}</td><td>${htmlEscape((point as Record<string, unknown>).originalPlan)}</td><td>${htmlEscape((point as Record<string, unknown>).actual)}</td></tr>`)
+          .join('')}
+      </table>
+    </body></html>`;
+    const url = await uploadHtmlAttachment(`reports/${reportId}/attachments/s-curve.html`, html);
+    return { key: kind, filename: 's-curve.html', url };
+  }
+
+  const scheduleSnap = await db.collection('schedules').doc(String(projectData.projectId ?? projectData.id ?? '')).get();
+  if (!scheduleSnap.exists) return null;
+  const schedule = scheduleSnap.data() ?? {};
+  if (kind === 'pdm') {
+    const activities = Array.isArray(schedule.activities) ? schedule.activities : [];
+    const html = `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;padding:24px">
+      <h1>PDM Schedule Summary</h1>
+      <p><strong>Project:</strong> ${htmlEscape(projectData.name)}</p>
+      <table border="1" cellspacing="0" cellpadding="6">
+        <tr><th>#</th><th>Activity</th><th>Duration</th><th>Critical</th></tr>
+        ${activities
+          .map((activity) => `<tr><td>${htmlEscape((activity as Record<string, unknown>).number)}</td><td>${htmlEscape((activity as Record<string, unknown>).name)}</td><td>${htmlEscape((activity as Record<string, unknown>).duration)}</td><td>${htmlEscape((activity as Record<string, unknown>).isCritical ? 'Yes' : 'No')}</td></tr>`)
+          .join('')}
+      </table>
+    </body></html>`;
+    const url = await uploadHtmlAttachment(`reports/${reportId}/attachments/pdm.html`, html);
+    return { key: kind, filename: 'pdm.html', url };
+  }
+
+  const tasks = Array.isArray(schedule.barChartTasks) ? schedule.barChartTasks : [];
+  const html = `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;padding:24px">
+    <h1>Bar Chart Summary</h1>
+    <p><strong>Project:</strong> ${htmlEscape(projectData.name)}</p>
+    <table border="1" cellspacing="0" cellpadding="6">
+      <tr><th>#</th><th>Task</th><th>Start</th><th>End</th><th>Actual End</th></tr>
+      ${tasks
+        .map((task) => `<tr><td>${htmlEscape((task as Record<string, unknown>).index)}</td><td>${htmlEscape((task as Record<string, unknown>).name)}</td><td>${htmlEscape((task as Record<string, unknown>).startDay)}</td><td>${htmlEscape((task as Record<string, unknown>).endDay)}</td><td>${htmlEscape((task as Record<string, unknown>).actualEndDay)}</td></tr>`)
+        .join('')}
+    </table>
+  </body></html>`;
+  const url = await uploadHtmlAttachment(`reports/${reportId}/attachments/bar-chart.html`, html);
+  return { key: kind, filename: 'bar-chart.html', url };
+}
+
+async function buildOptionalAttachments(reportId: string, reportData: FirebaseFirestore.DocumentData) {
+  const optionalAttachments = stringArray(reportData.releaseState?.optionalAttachments) as OptionalAttachmentKey[];
+  const projectId = String(reportData.projectId ?? '');
+  const projectSnap = await db.collection('projects').doc(projectId).get();
+  const project = projectSnap.exists ? projectSnap.data() ?? {} : {};
+  const generated = await Promise.all(
+    optionalAttachments.map(async (key) => {
+      if (key === 'swa') return resolveLatestApprovedReportFile(projectId, 'SWA');
+      if (key === 'stewa') return resolveLatestApprovedReportFile(projectId, 'STEWA');
+      return buildScheduleHtmlAttachment(reportId, { ...project, projectId }, key as 'pdm' | 'bar_chart' | 's_curve');
+    }),
+  );
+  const attachmentUrls: Record<string, string> = {};
+  const mailAttachments: nodemailer.SendMailOptions['attachments'] = [];
+  for (const entry of generated) {
+    if (!entry) continue;
+    attachmentUrls[entry.key] = entry.url;
+    mailAttachments.push({ filename: entry.filename, path: entry.url });
+  }
+  return { attachmentUrls, mailAttachments, projectData: project };
+}
+
+function reportIsFullyApproved(data: FirebaseFirestore.DocumentData) {
+  if (String(data.reportType) !== 'IAR') return true;
+  const approvalFlow = (data.approvalFlow ?? {}) as Record<string, unknown>;
+  const contractorConfirmation = (approvalFlow.contractorConfirmation ?? {}) as Record<string, unknown>;
+  const engineer2 = approvalFlow.engineer2 as Record<string, unknown> | undefined;
+  const engineer3 = approvalFlow.engineer3 as Record<string, unknown> | undefined;
+  const engineer4 = approvalFlow.engineer4 as Record<string, unknown> | undefined;
+  return (
+    contractorConfirmation.confirmsSwa === true &&
+    contractorConfirmation.confirmsIar === true &&
+    Boolean(contractorConfirmation.confirmedAt) &&
+    Boolean(engineer2?.approvedAt) &&
+    Boolean(engineer3?.approvedAt) &&
+    Boolean(engineer4?.approvedAt)
+  );
+}
+
+async function buildReportEmailPayload(reportId: string, event: string) {
+  const reportSnap = await db.collection('reports').doc(reportId).get();
+  if (!reportSnap.exists) throw new Error('Report not found');
+  const data = reportSnap.data()!;
+  const projectId = String(data.projectId ?? '');
+  const recipients = await resolveProjectRecipients(projectId);
+  const subjectBase = `${String(data.reportType)} ${String(data.reportNumber ?? reportId)}`;
+  const attachments: nodemailer.SendMailOptions['attachments'] = [];
+  const attachmentUrls: Record<string, string> = {};
+
+  if (event === 'final_approved') {
+    const reportFile = String(data.pdfPath ?? '').trim();
+    if (reportFile) {
+      attachments.push({
+        filename: `${String(data.reportNumber ?? reportId)}.${reportFile.endsWith('.html') ? 'html' : 'pdf'}`,
+        path: reportFile,
+      });
+    }
+    const optional = await buildOptionalAttachments(reportId, data);
+    attachments.push(...(optional.mailAttachments ?? []));
+    Object.assign(attachmentUrls, optional.attachmentUrls);
+    await reportSnap.ref.set(
+      {
+        releaseState: {
+          ...(data.releaseState ?? {}),
+          attachmentUrls,
+          emailSentAt: nowIso(),
+        },
+        updatedAt: nowIso(),
+      },
+      { merge: true },
+    );
+    await writeReportAudit(reportId, 'release_notified', {
+      recipients,
+      attachmentKeys: Object.keys(attachmentUrls),
+    });
+  }
+
+  const subjectByEvent: Record<string, string> = {
+    sent_to_contractor: `${subjectBase} sent to contractor`,
+    submitted_for_review: `${subjectBase} submitted for Engineer II review`,
+    forwarded_e3: `${subjectBase} forwarded to Engineer III`,
+    forwarded_e4: `${subjectBase} forwarded to Engineer IV`,
+    revision_requested: `${subjectBase} returned for correction`,
+    final_approved: `${subjectBase} approved and released`,
+  };
+  const textByEvent: Record<string, string> = {
+    sent_to_contractor: `The report is ready for contractor confirmation.\n\nProject: ${String(data.projectName ?? projectId)}`,
+    submitted_for_review: `The report is now waiting for Engineer II review.\n\nProject: ${String(data.projectName ?? projectId)}`,
+    forwarded_e3: `The report has been approved by Engineer II and is now with Engineer III.`,
+    forwarded_e4: `The report has been approved by Engineer III and is now with Engineer IV.`,
+    revision_requested: `A correction has been requested.\n\nReason: ${String(data.rejectionReason ?? 'Revision required.')}`,
+    final_approved: `The IAR has been fully approved and released.\n\nProject: ${String(data.projectName ?? projectId)}\nReport: ${String(data.reportNumber ?? reportId)}`,
+  };
+
+  return {
+    recipients,
+    subject: `[ConstructFlow] ${subjectByEvent[event] ?? `${event} — ${subjectBase}`}`,
+    text: textByEvent[event] ?? `Workflow event "${event}" for report ${reportId}.`,
+    attachments,
+  };
+}
+
+async function buildProjectEmailPayload(projectId: string, event: string) {
+  const projectSnap = await db.collection('projects').doc(projectId).get();
+  if (!projectSnap.exists) throw new Error('Project not found');
+  const data = projectSnap.data()!;
+  const accessSnapshot =
+    (data.archivedAccessSnapshot as Record<string, unknown> | undefined) ?? data;
+  const recipients = await resolveProjectRecipients(projectId, accessSnapshot);
+  const projectName = String(data.name ?? projectId);
+
+  const subjectByEvent: Record<string, string> = {
+    project_archive_requested: `Archive approval requested for ${projectName}`,
+    project_archive_approved: `Archive approval recorded for ${projectName}`,
+    project_archived: `${projectName} moved to archive`,
+    project_restored: `${projectName} restored from archive`,
+  };
+  const textByEvent: Record<string, string> = {
+    project_archive_requested: `Engineer I requested deletion approval for ${projectName}.`,
+    project_archive_approved: `A deletion approval step has been recorded for ${projectName}.`,
+    project_archived: `${projectName} has been archived and can be restored for 21 days.`,
+    project_restored: `${projectName} has been restored to active projects.`,
+  };
+
+  return {
+    recipients,
+    subject: `[ConstructFlow] ${subjectByEvent[event] ?? `${event} — ${projectName}`}`,
+    text: textByEvent[event] ?? `Project workflow event "${event}" for ${projectName}.`,
+    attachments: [] as nodemailer.SendMailOptions['attachments'],
+  };
+}
+
+async function transporter() {
+  const smtpHost = process.env.SMTP_HOST;
+  if (!smtpHost) return null;
+  return nodemailer.createTransport({
+    host: smtpHost,
+    port: Number(process.env.SMTP_PORT || 587),
+    secure: false,
+    auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } : undefined,
+  });
+}
+
+async function processQueuedEmail(
+  queueRef: FirebaseFirestore.DocumentReference,
+  data: FirebaseFirestore.DocumentData,
+) {
+  const smtp = await transporter();
+  if (!smtp) {
+    await queueRef.set({ status: 'skipped', reason: 'SMTP not configured', updatedAt: nowIso() }, { merge: true });
+    return { ok: true, skipped: true };
+  }
+
+  const reportId = typeof data.reportId === 'string' ? data.reportId : '';
+  const projectId = typeof data.projectId === 'string' ? data.projectId : '';
+  const event = String(data.event ?? '');
+  const payload = reportId
+    ? await buildReportEmailPayload(reportId, event)
+    : await buildProjectEmailPayload(projectId, event);
+
+  const recipients = uniqueIds(payload.recipients);
+  const mailTo =
+    recipients.length > 0
+      ? recipients.join(', ')
+      : process.env.MAIL_TO || process.env.SMTP_USER || 'noreply@constructflow.local';
+
+  await smtp.sendMail({
+    from: process.env.MAIL_FROM || 'noreply@constructflow.local',
+    to: mailTo,
+    subject: payload.subject,
+    text: payload.text,
+    attachments: payload.attachments,
+  });
+
+  await queueRef.set(
+    {
+      status: 'sent',
+      sentAt: nowIso(),
+      recipientEmails: recipients,
+      attachmentCount: payload.attachments?.length ?? 0,
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
+  return { ok: true };
+}
+
+export const seedDemoData = onCall({ invoker: 'public' }, async () => {
+  const now = nowIso();
+  const usersByEmail = new Map<string, { uid: string; role: string; fullName: string }>();
+
+  for (const account of ACCOUNTS) {
     let uid: string;
     try {
       const created = await admin.auth().createUser({
@@ -37,65 +462,84 @@ export const seedDemoData = onCall({ invoker: 'public' }, async () => {
       if (code !== 'auth/email-already-exists') throw err;
       const existing = await admin.auth().getUserByEmail(account.email);
       uid = existing.uid;
+      await admin.auth().updateUser(uid, {
+        email: account.email,
+        password: account.password,
+        displayName: account.fullName,
+        disabled: false,
+      });
     }
-    await db.collection('users').doc(uid).set(
+    usersByEmail.set(account.email, { uid, role: account.role, fullName: account.fullName });
+  }
+
+  const allProjectIds = PROJECT_SPECS.map((project) => project.id);
+  for (const account of ACCOUNTS) {
+    const user = usersByEmail.get(account.email)!;
+    const assignedProjectIds = PROJECT_SPECS
+      .filter((project) => project.contractorEmail === account.email || project.engineer1Email === account.email)
+      .map((project) => project.id);
+    const involvedProjectIds = PROJECT_SPECS
+      .filter((project) => project.engineer2Emails.some((email) => email === account.email))
+      .map((project) => project.id);
+    const accessibleProjectIds =
+      account.role === 'engineer_3' || account.role === 'engineer_4'
+        ? allProjectIds
+        : uniqueIds([...assignedProjectIds, ...involvedProjectIds]);
+
+    await db.collection('users').doc(user.uid).set(
       {
         email: account.email,
         fullName: account.fullName,
         role: account.role,
         isActive: true,
-        createdAt: new Date().toISOString(),
+        isTestAccount: admin.firestore.FieldValue.delete(),
+        isDevelopmentAccount: admin.firestore.FieldValue.delete(),
+        accountType: admin.firestore.FieldValue.delete(),
+        notes: admin.firestore.FieldValue.delete(),
+        assignedProjectIds,
+        involvedProjectIds,
+        accessibleProjectIds,
+        updatedAt: now,
+        createdAt: now,
       },
       { merge: true },
     );
-    if (account.role === 'contractor') contractorUids.push(uid);
   }
 
-  const projects = [
-    {
-      id: 'demo-capitol-annex',
-      name: 'Provincial Capitol Annex',
-      location: 'Tuguegarao City, Cagayan',
-      status: 'active',
-      startDate: '2025-07-01',
-      plannedEndDate: '2025-10-19',
-      contractAmount: 5991119.01,
-      contractorId: contractorUids[0] ?? null,
-      contractorName: 'Contractor',
-    },
-    {
-      id: 'demo-remebella-road',
-      name: 'Remebella Road Improvement',
-      location: 'Remebella, Buguey, Cagayan',
-      status: 'active',
-      startDate: '2025-07-01',
-      plannedEndDate: '2025-10-19',
-      contractAmount: 5991119.01,
-      contractorId: contractorUids[0] ?? null,
-      contractorName: 'Contractor',
-    },
-    {
-      id: 'demo-north-zone-pipe',
-      name: 'North Zone Pipe Replacement',
-      location: 'North Zone, Cagayan',
-      status: 'active',
-      startDate: '2025-08-01',
-      plannedEndDate: '2025-12-15',
-      contractAmount: 2500000,
-      contractorId: contractorUids[0] ?? null,
-      contractorName: 'Contractor',
-    },
-  ];
-
-  for (const p of projects) {
-    const { id, ...rest } = p;
-    await db.collection('projects').doc(id).set(
-      { ...rest, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  for (const project of PROJECT_SPECS) {
+    const contractor = usersByEmail.get(project.contractorEmail);
+    const engineer1 = usersByEmail.get(project.engineer1Email);
+    const engineer2Uids = project.engineer2Emails
+      .map((email) => usersByEmail.get(email)?.uid ?? null)
+      .filter((uid): uid is string => Boolean(uid));
+    const access = buildProjectAccess({
+      contractorId: contractor?.uid ?? null,
+      assignedUserIds: [engineer1?.uid ?? null].filter((uid): uid is string => Boolean(uid)),
+      involvedUserIds: engineer2Uids,
+    });
+    await db.collection('projects').doc(project.id).set(
+      {
+        name: project.name,
+        location: project.location,
+        status: project.status,
+        lifecycleState: 'active',
+        startDate: project.startDate,
+        plannedEndDate: project.plannedEndDate,
+        contractAmount: project.contractAmount,
+        contractorId: access.contractorId,
+        contractorName: contractor?.fullName ?? null,
+        assignedUserIds: access.assignedUserIds,
+        involvedUserIds: access.involvedUserIds,
+        accessUserIds: access.accessUserIds,
+        isTestProject: admin.firestore.FieldValue.delete(),
+        createdAt: now,
+        updatedAt: now,
+      },
       { merge: true },
     );
-    await db.collection('schedules').doc(id).set(
+    await db.collection('schedules').doc(project.id).set(
       {
-        projectId: id,
+        projectId: project.id,
         activities: [],
         dependencies: [],
         barChartTasks: [],
@@ -103,13 +547,83 @@ export const seedDemoData = onCall({ invoker: 'public' }, async () => {
         barChartTimeNow: 0,
         projectDuration: 0,
         criticalPath: [],
-        updatedAt: new Date().toISOString(),
+        updatedAt: now,
       },
       { merge: true },
     );
   }
 
-  return { ok: true, users: DEMO_USERS.length, projects: projects.length };
+  const projectsSnap = await db.collection('projects').get();
+  const projectAccessById = new Map<string, { accessUserIds: string[] }>();
+  const projectAccessWrites: Array<Promise<FirebaseFirestore.WriteResult>> = [];
+  projectsSnap.forEach((projectDoc) => {
+    const data = projectDoc.data();
+    const access = buildProjectAccess({
+      contractorId: typeof data.contractorId === 'string' ? data.contractorId : null,
+      assignedUserIds: Array.isArray(data.assignedUserIds) ? data.assignedUserIds : [],
+      involvedUserIds: Array.isArray(data.involvedUserIds) ? data.involvedUserIds : [],
+    });
+    projectAccessById.set(projectDoc.id, { accessUserIds: access.accessUserIds });
+    projectAccessWrites.push(
+      projectDoc.ref.set(
+        {
+          lifecycleState: data.lifecycleState ?? 'active',
+          contractorId: access.contractorId,
+          assignedUserIds: access.assignedUserIds,
+          involvedUserIds: access.involvedUserIds,
+          accessUserIds: access.accessUserIds,
+          updatedAt: now,
+        },
+        { merge: true },
+      ),
+    );
+  });
+  await Promise.all(projectAccessWrites);
+
+  const reportsSnap = await db.collection('reports').get();
+  const reportWrites: Array<Promise<FirebaseFirestore.WriteResult>> = [];
+  const counterNextSuffix = new Map<string, number>();
+  reportsSnap.forEach((reportDoc) => {
+    const data = reportDoc.data();
+    const projectId = String(data.projectId ?? '');
+    const projectAccess = projectAccessById.get(projectId);
+    const reportNumber = String(data.reportNumber ?? '');
+    if (reportNumber) {
+      const parsed = parseReportNumberCounter(reportNumber);
+      const prev = counterNextSuffix.get(parsed.base) ?? 1;
+      counterNextSuffix.set(parsed.base, Math.max(prev, parsed.nextSuffix));
+    }
+    if (!projectAccess) return;
+    reportWrites.push(
+      reportDoc.ref.set(
+        {
+          accessUserIds: projectAccess.accessUserIds,
+          updatedAt: now,
+        },
+        { merge: true },
+      ),
+    );
+  });
+  const counterWrites = [...counterNextSuffix.entries()].map(([base, nextSuffix]) =>
+    db.collection('counters').doc(`reportNumber_${base}`).set(
+      {
+        kind: 'report_number',
+        base,
+        nextSuffix,
+        updatedAt: now,
+      },
+      { merge: true },
+    ),
+  );
+  await Promise.all([...reportWrites, ...counterWrites]);
+
+  return {
+    ok: true,
+    users: ACCOUNTS.length,
+    projects: PROJECT_SPECS.length,
+    reportsUpdated: reportWrites.length,
+    countersUpdated: counterWrites.length,
+  };
 });
 
 export const finalizeReport = onCall(async (request) => {
@@ -121,79 +635,69 @@ export const finalizeReport = onCall(async (request) => {
   const snap = await ref.get();
   if (!snap.exists) throw new HttpsError('not-found', 'Report not found');
   const data = snap.data()!;
+  if (!reportIsFullyApproved(data)) {
+    throw new HttpsError('failed-precondition', 'IAR approvals are incomplete.');
+  }
   const reportNumber = String(data.reportNumber ?? reportId);
   const qrCode = reportNumber;
 
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${reportNumber}</title></head>
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${htmlEscape(reportNumber)}</title></head>
   <body style="font-family:Georgia,serif;padding:48px;color:#111">
     <h1 style="color:#0B3D2E">ConstructFlow</h1>
-    <h2>${String(data.reportType)} — Final Report</h2>
-    <p><strong>Report Number:</strong> ${reportNumber}</p>
-    <p><strong>Project:</strong> ${String(data.projectName ?? data.projectId)}</p>
+    <h2>${htmlEscape(String(data.reportType))} — Final Report</h2>
+    <p><strong>Report Number:</strong> ${htmlEscape(reportNumber)}</p>
+    <p><strong>Project:</strong> ${htmlEscape(String(data.projectName ?? data.projectId))}</p>
     <p><strong>Status:</strong> Generated</p>
-    <p><strong>Verification code:</strong> ${qrCode}</p>
-    <p>Generated at ${new Date().toISOString()}</p>
+    <p><strong>Verification code:</strong> ${htmlEscape(qrCode)}</p>
+    <p>Generated at ${htmlEscape(nowIso())}</p>
   </body></html>`;
 
   const path = `reports/${reportId}/${reportNumber}.html`;
-  const file = bucket.file(path);
-  await file.save(html, { contentType: 'text/html', public: true });
-  const pdfUrl = `https://storage.googleapis.com/${bucket.name}/${path}`;
+  const pdfUrl = await uploadHtmlAttachment(path, html);
 
   await ref.set(
     {
       status: 'generated',
       pdfPath: pdfUrl,
       qrCode,
-      generatedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      generatedAt: nowIso(),
+      updatedAt: nowIso(),
     },
     { merge: true },
   );
 
+  await writeReportAudit(reportId, 'finalized', { pdfUrl, qrCode });
   return { pdf_url: pdfUrl, qr_code: qrCode };
 });
 
 export const sendWorkflowEmail = onCall(async (request) => {
   const reportId = String(request.data?.reportId ?? '');
+  const projectId = String(request.data?.projectId ?? '');
   const event = String(request.data?.event ?? '');
-  if (!reportId) throw new HttpsError('invalid-argument', 'reportId required');
-
-  const queueRef = await db.collection('emailQueue').add({
-    reportId,
-    event,
-    status: 'processing',
-    createdAt: new Date().toISOString(),
-  });
-
-  const smtpHost = process.env.SMTP_HOST;
-  if (!smtpHost) {
-    await queueRef.update({ status: 'skipped', reason: 'SMTP not configured' });
-    return { ok: true, skipped: true };
+  if (!event || (!reportId && !projectId)) {
+    throw new HttpsError('invalid-argument', 'event and reportId/projectId required');
   }
 
+  const queueRef = await db.collection('emailQueue').add({
+    reportId: reportId || null,
+    projectId: projectId || null,
+    event,
+    status: 'processing',
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  });
+
   try {
-    const transporter = nodemailer.createTransport({
-      host: smtpHost,
-      port: Number(process.env.SMTP_PORT || 587),
-      secure: false,
-      auth: process.env.SMTP_USER
-        ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
-        : undefined,
-    });
-    await transporter.sendMail({
-      from: process.env.MAIL_FROM || 'noreply@constructflow.local',
-      to: process.env.MAIL_TO || process.env.SMTP_USER || 'noreply@constructflow.local',
-      subject: `[ConstructFlow] ${event} — report ${reportId}`,
-      text: `Workflow event "${event}" for report ${reportId}.`,
-    });
-    await queueRef.update({ status: 'sent', sentAt: new Date().toISOString() });
-    return { ok: true };
+    return await processQueuedEmail(queueRef, { reportId, projectId, event });
   } catch (err) {
-    await queueRef.update({
-      status: 'failed',
-      error: err instanceof Error ? err.message : String(err),
-    });
+    await queueRef.set(
+      {
+        status: 'failed',
+        error: err instanceof Error ? err.message : String(err),
+        updatedAt: nowIso(),
+      },
+      { merge: true },
+    );
     throw new HttpsError('internal', 'Email send failed');
   }
 });
@@ -201,8 +705,49 @@ export const sendWorkflowEmail = onCall(async (request) => {
 export const onEmailQueueCreated = onDocumentCreated('emailQueue/{id}', async (event) => {
   const data = event.data?.data();
   if (!data || data.status !== 'queued') return;
-  // Marker for extension / future SMTP worker
-  await event.data?.ref.set({ seenByFunction: true }, { merge: true });
+  await event.data?.ref.set({ status: 'processing', updatedAt: nowIso() }, { merge: true });
+  try {
+    await processQueuedEmail(event.data!.ref, data);
+  } catch (err) {
+    await event.data?.ref.set(
+      {
+        status: 'failed',
+        error: err instanceof Error ? err.message : String(err),
+        updatedAt: nowIso(),
+      },
+      { merge: true },
+    );
+  }
+});
+
+export const purgeArchivedProjects = onSchedule({ schedule: 'every day 02:30' }, async () => {
+  const archived = await db.collection('projects').where('lifecycleState', '==', 'archived').get();
+  const now = Date.now();
+  let purged = 0;
+
+  for (const projectDoc of archived.docs) {
+    const data = projectDoc.data();
+    const purgeAfter = String(data.purgeAfter ?? '');
+    if (!purgeAfter || Number.isNaN(Date.parse(purgeAfter)) || Date.parse(purgeAfter) > now) {
+      continue;
+    }
+
+    const reportSnap = await db.collection('reports').where('projectId', '==', projectDoc.id).get();
+    for (const reportDoc of reportSnap.docs) {
+      await db.recursiveDelete(reportDoc.ref);
+    }
+
+    const scheduleRef = db.collection('schedules').doc(projectDoc.id);
+    if ((await scheduleRef.get()).exists) await db.recursiveDelete(scheduleRef);
+    const sCurveRef = db.collection('sCurves').doc(projectDoc.id);
+    if ((await sCurveRef.get()).exists) await db.recursiveDelete(sCurveRef);
+
+    await writeProjectAudit(projectDoc.id, 'lifecycleState', 'archived', 'purged');
+    await db.recursiveDelete(projectDoc.ref);
+    purged += 1;
+  }
+
+  console.log('purgeArchivedProjects', { purged });
 });
 
 export const verifyReport = onCall({ invoker: 'public' }, async (request) => {
