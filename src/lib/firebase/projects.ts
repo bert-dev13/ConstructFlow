@@ -2,6 +2,7 @@ import {
   addDoc,
   collection,
   doc,
+  documentId,
   getDoc,
   getDocs,
   query,
@@ -10,7 +11,8 @@ import {
   where,
 } from 'firebase/firestore';
 import { COLLECTIONS, projectAuditPath, projectContractHistoryPath } from './collections';
-import { buildProjectAccess, getAccessContext, readProjectAccess, uniqueUserIds } from './access';
+import { buildProjectAccess, getAccessContext, getAccessibleProjectIds, readProjectAccess, uniqueUserIds } from './access';
+import { chunkIds, mapPool, readListCache, writeListCache, invalidateListCache } from './listCache';
 import { db } from './config';
 import { asId, nowIso, omitUndefined } from './ids';
 import type {
@@ -64,6 +66,7 @@ async function queueProjectEmail(projectId: string, event: string, extra: Record
 }
 
 function mapProject(id: string, data: Record<string, unknown>): ProjectRow {
+  const access = readProjectAccess(data);
   return {
     id,
     name: String(data.name ?? ''),
@@ -81,9 +84,69 @@ function mapProject(id: string, data: Record<string, unknown>): ProjectRow {
     contractor_id: data.contractorId != null ? asId(data.contractorId as string) : null,
     contractor_name: (data.contractorName as string | null) ?? null,
     contract_amount: data.contractAmount != null ? Number(data.contractAmount) : null,
+    assigned_user_ids: access.assignedUserIds,
+    involved_user_ids: access.involvedUserIds,
     created_at: (data.createdAt as string | null) ?? null,
     updated_at: (data.updatedAt as string | null) ?? null,
   };
+}
+
+async function syncUserProjectMembership(
+  projectId: string,
+  nextAccess: ReturnType<typeof buildProjectAccess>,
+  prevAccess?: ReturnType<typeof readProjectAccess>,
+) {
+  const prevAssigned = new Set(prevAccess?.assignedUserIds ?? []);
+  const prevInvolved = new Set(prevAccess?.involvedUserIds ?? []);
+  const prevAll = new Set([...(prevAccess?.accessUserIds ?? [])]);
+  const nextAssigned = new Set(nextAccess.assignedUserIds);
+  const nextInvolved = new Set(nextAccess.involvedUserIds);
+  const nextAll = new Set(nextAccess.accessUserIds);
+  const touched = uniqueUserIds([...prevAll, ...nextAll]);
+
+  await Promise.all(
+    touched.map(async (uid) => {
+      const userRef = doc(db, COLLECTIONS.users, uid);
+      const snap = await getDoc(userRef);
+      if (!snap.exists()) return;
+      const data = snap.data() as Record<string, unknown>;
+      const role = String(data.role ?? '');
+      if (role === 'engineer_3' || role === 'engineer_4') return;
+
+      const assigned = new Set(
+        Array.isArray(data.assignedProjectIds) ? data.assignedProjectIds.map(String) : [],
+      );
+      const involved = new Set(
+        Array.isArray(data.involvedProjectIds) ? data.involvedProjectIds.map(String) : [],
+      );
+      const accessible = new Set(
+        Array.isArray(data.accessibleProjectIds) ? data.accessibleProjectIds.map(String) : [],
+      );
+
+      if (nextAssigned.has(uid)) assigned.add(projectId);
+      else if (prevAssigned.has(uid)) assigned.delete(projectId);
+
+      if (nextInvolved.has(uid)) involved.add(projectId);
+      else if (prevInvolved.has(uid)) involved.delete(projectId);
+
+      if (nextAll.has(uid)) accessible.add(projectId);
+      else if (prevAll.has(uid)) accessible.delete(projectId);
+
+      // Contractors also keep the project via contractorId membership.
+      if (nextAccess.contractorId === uid) {
+        accessible.add(projectId);
+      }
+
+      await updateDoc(userRef, {
+        assignedProjectIds: [...assigned],
+        involvedProjectIds: [...involved],
+        accessibleProjectIds: [...accessible],
+        updatedAt: nowIso(),
+      });
+      invalidateListCache(`projectIds:${uid}`);
+      invalidateListCache(`projects:${uid}:`);
+    }),
+  );
 }
 
 async function resolveContractorName(contractorId: string | null | undefined) {
@@ -103,28 +166,139 @@ function matchesProjectView(project: ProjectRow, view: ProjectListOptions['view'
 export async function listProjectsFs(options?: ProjectListOptions): Promise<ProjectRow[]> {
   const access = await getAccessContext();
   if (!access) return [];
-  const source = access.hasGlobalProjectAccess
-    ? collection(db, COLLECTIONS.projects)
-    : query(collection(db, COLLECTIONS.projects), where('accessUserIds', 'array-contains', access.uid));
-  const snap = await getDocs(source);
-  const rows = snap.docs
-    .map((d) => mapProject(d.id, d.data() as Record<string, unknown>))
-    .filter((row) => matchesProjectView(row, options?.view ?? 'active'));
-  rows.sort((a, b) => (b.updated_at ?? b.created_at ?? '').localeCompare(a.updated_at ?? a.created_at ?? ''));
-  return rows;
+
+  const view = options?.view ?? 'active';
+  const cacheKey = `projects:${access.uid}:${view}`;
+  const cached = readListCache<ProjectRow[]>(cacheKey);
+  if (cached) return cached;
+
+  // Reuse the unfiltered set when another view was already loaded.
+  const allKey = `projects:${access.uid}:all`;
+  const allCached = readListCache<ProjectRow[]>(allKey);
+  if (allCached) {
+    const filteredFromAll = allCached.filter((row) => matchesProjectView(row, view));
+    filteredFromAll.sort((a, b) =>
+      (b.updated_at ?? b.created_at ?? '').localeCompare(a.updated_at ?? a.created_at ?? ''),
+    );
+    return writeListCache(cacheKey, filteredFromAll, 20_000);
+  }
+
+  const loadByPointers = async () => {
+    const uniqueIds = await getAccessibleProjectIds(access.uid);
+    if (!uniqueIds.length) return [] as ProjectRow[];
+    const chunks = chunkIds(uniqueIds, 30);
+    const snaps = await mapPool(chunks, 4, async (chunk) => {
+      try {
+        return await getDocs(
+          query(collection(db, COLLECTIONS.projects), where(documentId(), 'in', chunk)),
+        );
+      } catch {
+        const perId = await mapPool(chunk, 8, async (projectId) => {
+          try {
+            return await getDoc(doc(db, COLLECTIONS.projects, projectId));
+          } catch {
+            return null;
+          }
+        });
+        return {
+          docs: perId
+            .filter((snap): snap is NonNullable<typeof snap> => Boolean(snap?.exists()))
+            .map((snap) => ({ id: snap.id, data: () => snap.data() })),
+        };
+      }
+    });
+    return snaps.flatMap((snap) =>
+      snap.docs.map((d) => mapProject(d.id, d.data() as Record<string, unknown>)),
+    );
+  };
+
+  let rows: ProjectRow[] = [];
+  if (access.hasGlobalProjectAccess) {
+    try {
+      const snap = await getDocs(collection(db, COLLECTIONS.projects));
+      rows = snap.docs.map((d) => mapProject(d.id, d.data() as Record<string, unknown>));
+    } catch {
+      rows = await loadByPointers();
+    }
+  } else {
+    // Merge profile pointers with live membership so Eng I/II see every
+    // project they are assigned/involved in even if user pointers lag.
+    const byId = new Map<string, ProjectRow>();
+    for (const row of await loadByPointers()) byId.set(row.id, row);
+    try {
+      const snap = await getDocs(
+        query(collection(db, COLLECTIONS.projects), where('accessUserIds', 'array-contains', access.uid)),
+      );
+      for (const d of snap.docs) {
+        byId.set(d.id, mapProject(d.id, d.data() as Record<string, unknown>));
+      }
+    } catch {
+      /* rules or index may block; pointer path still used */
+    }
+    rows = [...byId.values()];
+  }
+
+  // Cache the unfiltered accessible set, then return the requested view.
+  writeListCache(allKey, rows, 20_000);
+  const filtered = rows.filter((row) => matchesProjectView(row, view));
+  filtered.sort((a, b) =>
+    (b.updated_at ?? b.created_at ?? '').localeCompare(a.updated_at ?? a.created_at ?? ''),
+  );
+  return writeListCache(cacheKey, filtered, 20_000);
+}
+
+async function listUsersByRole(role: 'contractor' | 'engineer_1' | 'engineer_2'): Promise<ContractorOption[]> {
+  const q = query(collection(db, COLLECTIONS.users), where('role', '==', role));
+  const snap = await getDocs(q);
+
+  // One entry per email. Skip inactive / incomplete profiles so legacy seed leftovers
+  // do not appear in project assignment dropdowns.
+  const byEmail = new Map<string, ContractorOption>();
+
+  for (const d of snap.docs) {
+    const data = d.data() as Record<string, unknown>;
+    if (data.isActive === false) continue;
+
+    const email = String(data.email ?? '').trim();
+    const emailKey = email.toLowerCase();
+    if (!emailKey || !emailKey.includes('@')) continue;
+
+    const fullName = String(data.fullName ?? data.name ?? '').trim();
+    if (!fullName) continue;
+
+    const option: ContractorOption = {
+      id: d.id,
+      full_name: fullName,
+      email,
+    };
+
+    const existing = byEmail.get(emailKey);
+    if (!existing) {
+      byEmail.set(emailKey, option);
+      continue;
+    }
+
+    // Prefer ConstructFlow demo/official emails when the same address exists twice.
+    const preferNew =
+      emailKey.startsWith('constructflow.') && !existing.email.toLowerCase().startsWith('constructflow.');
+    if (preferNew) byEmail.set(emailKey, option);
+  }
+
+  return [...byEmail.values()].sort((a, b) =>
+    a.full_name.localeCompare(b.full_name, undefined, { sensitivity: 'base' }),
+  );
 }
 
 export async function listContractorsFs(): Promise<ContractorOption[]> {
-  const q = query(collection(db, COLLECTIONS.users), where('role', '==', 'contractor'));
-  const snap = await getDocs(q);
-  return snap.docs.map((d) => {
-    const data = d.data() as Record<string, unknown>;
-    return {
-      id: d.id,
-      full_name: String(data.fullName ?? data.name ?? ''),
-      email: String(data.email ?? ''),
-    };
-  });
+  return listUsersByRole('contractor');
+}
+
+export async function listEngineerOnesFs(): Promise<ContractorOption[]> {
+  return listUsersByRole('engineer_1');
+}
+
+export async function listEngineerTwosFs(): Promise<ContractorOption[]> {
+  return listUsersByRole('engineer_2');
 }
 
 export async function getProjectFs(id: string | number) {
@@ -177,9 +351,16 @@ export async function createProjectFs(input: ProjectInput, actorName?: string) {
   const access = await getAccessContext();
   const contractorId = input.contractor_id != null ? asId(input.contractor_id) : null;
   const contractorName = await resolveContractorName(contractorId);
+  const assignedFromInput = Array.isArray(input.assigned_user_ids)
+    ? input.assigned_user_ids.map((id) => asId(id))
+    : [];
+  const involvedFromInput = Array.isArray(input.involved_user_ids)
+    ? input.involved_user_ids.map((id) => asId(id))
+    : [];
   const projectAccess = buildProjectAccess({
     contractorId,
-    assignedUserIds: access ? [access.uid] : [],
+    assignedUserIds: uniqueUserIds([...(access ? [access.uid] : []), ...assignedFromInput]),
+    involvedUserIds: involvedFromInput,
   });
   const ref = doc(collection(db, COLLECTIONS.projects));
   const payload = omitUndefined({
@@ -199,6 +380,15 @@ export async function createProjectFs(input: ProjectInput, actorName?: string) {
     updatedAt: nowIso(),
   });
   await setDoc(ref, payload);
+  try {
+    await syncUserProjectMembership(ref.id, projectAccess);
+  } catch {
+    /* membership pointers are best-effort; project accessUserIds still gate reads */
+  }
+  invalidateListCache('projects:');
+  invalidateListCache('projectIds:');
+  invalidateListCache('reports:');
+  invalidateListCache('dashboard:');
 
   if (input.contract_amount != null) {
     await addDoc(collection(db, projectContractHistoryPath(ref.id)), {
@@ -231,10 +421,18 @@ export async function updateProjectFs(id: string | number, input: ProjectInput, 
         : null
       : (prev.contractorId as string | null) ?? null;
   const contractorName = await resolveContractorName(contractorId);
+  const assignedUserIds =
+    input.assigned_user_ids !== undefined
+      ? uniqueUserIds(input.assigned_user_ids.map((id) => asId(id)))
+      : prevAccess.assignedUserIds;
+  const involvedUserIds =
+    input.involved_user_ids !== undefined
+      ? uniqueUserIds(input.involved_user_ids.map((id) => asId(id)))
+      : prevAccess.involvedUserIds;
   const projectAccess = buildProjectAccess({
     contractorId,
-    assignedUserIds: prevAccess.assignedUserIds,
-    involvedUserIds: prevAccess.involvedUserIds,
+    assignedUserIds,
+    involvedUserIds,
   });
 
   const updates = omitUndefined({
@@ -262,6 +460,8 @@ export async function updateProjectFs(id: string | number, input: ProjectInput, 
     ['contractAmount', prev.contractAmount, updates.contractAmount],
     ['startDate', prev.startDate, updates.startDate],
     ['plannedEndDate', prev.plannedEndDate, updates.plannedEndDate],
+    ['assignedUserIds', prevAccess.assignedUserIds.join(','), projectAccess.assignedUserIds.join(',')],
+    ['involvedUserIds', prevAccess.involvedUserIds.join(','), projectAccess.involvedUserIds.join(',')],
   ];
   for (const [field, oldVal, newVal] of auditFields) {
     if (String(oldVal ?? '') === String(newVal ?? '')) continue;
@@ -280,8 +480,16 @@ export async function updateProjectFs(id: string | number, input: ProjectInput, 
   }
 
   await updateDoc(ref, updates);
-  const snap = await getDoc(ref);
-  return mapProject(snap.id, snap.data() as Record<string, unknown>);
+  try {
+    await syncUserProjectMembership(projectId, projectAccess, prevAccess);
+  } catch {
+    /* membership pointers are best-effort; project accessUserIds still gate reads */
+  }
+  invalidateListCache('projects:');
+  invalidateListCache('projectIds:');
+  invalidateListCache('reports:');
+  invalidateListCache('dashboard:');
+  return mapProject(projectId, { ...prev, ...updates });
 }
 
 async function archiveProjectRecord(
@@ -322,6 +530,10 @@ async function archiveProjectRecord(
     archiveOwnerRole,
     projectName: data.name ?? null,
   });
+  invalidateListCache('projects:');
+  invalidateListCache('projectIds:');
+  invalidateListCache('reports:');
+  invalidateListCache('dashboard:');
 }
 
 export async function requestProjectArchiveFs(id: string | number, actorName?: string) {
@@ -460,6 +672,10 @@ export async function restoreArchivedProjectFs(id: string | number, actorName?: 
     restoredBy: access.uid,
     restoredRole: access.role,
   });
+  invalidateListCache('projects:');
+  invalidateListCache('projectIds:');
+  invalidateListCache('reports:');
+  invalidateListCache('dashboard:');
   const updated = await getDoc(ref);
   return mapProject(updated.id, updated.data() as Record<string, unknown>);
 }

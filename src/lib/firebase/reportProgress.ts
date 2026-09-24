@@ -30,17 +30,13 @@ function percentFromReportData(
   return null;
 }
 
-/** Approved/generated SWA, STEWA, and IAR progress for a project (newest first). */
-export async function listApprovedProgressForProject(
-  projectId: string | number,
-): Promise<ReportProgressEntry[]> {
-  const id = asId(projectId);
-  const q = query(collection(db, COLLECTIONS.reports), where('projectId', '==', id));
-  const snap = await getDocs(q);
+function mapProgressDocs(
+  docs: { id: string; data: () => Record<string, unknown> }[],
+): ReportProgressEntry[] {
   const entries: ReportProgressEntry[] = [];
 
-  for (const d of snap.docs) {
-    const data = d.data() as Record<string, unknown>;
+  for (const d of docs) {
+    const data = d.data();
     const status = String(data.status ?? '');
     if (!['approved', 'generated'].includes(status)) continue;
 
@@ -72,4 +68,35 @@ export async function listApprovedProgressForProject(
     return d !== 0 ? d : b.reportNumber.localeCompare(a.reportNumber);
   });
   return entries;
+}
+
+/** Approved/generated SWA, STEWA, and IAR progress for a project (newest first). */
+export async function listApprovedProgressForProject(
+  projectId: string | number,
+): Promise<ReportProgressEntry[]> {
+  const id = asId(projectId);
+
+  // Prefer status-constrained query so rules can authorize public finalized reads.
+  try {
+    const snap = await getDocs(
+      query(
+        collection(db, COLLECTIONS.reports),
+        where('projectId', '==', id),
+        where('status', 'in', ['approved', 'generated']),
+      ),
+    );
+    return mapProgressDocs(snap.docs);
+  } catch {
+    /* fall through */
+  }
+
+  // Staff with project access can list all project reports, then filter client-side.
+  try {
+    const snap = await getDocs(
+      query(collection(db, COLLECTIONS.reports), where('projectId', '==', id)),
+    );
+    return mapProgressDocs(snap.docs);
+  } catch {
+    return [];
+  }
 }

@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
+import { Suspense } from 'react';
 import { Providers } from './providers';
 import './globals.css';
 
@@ -15,7 +16,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <body suppressHydrationWarning>
-        <Providers>{children}</Providers>
+        <Providers>
+          <Suspense fallback={null}>{children}</Suspense>
+        </Providers>
       </body>
     </html>
   );

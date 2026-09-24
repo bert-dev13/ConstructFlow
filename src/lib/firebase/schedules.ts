@@ -1,104 +1,48 @@
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import type { BarChartTask, PdmActivity, PdmDependency } from '../../types';
-import type { ReportProgressEntry } from '../../components/ReportProgressFeed';
-import { applyPdmDerivatives, applyReportProgressToBarChart } from '../scheduleSync';
-import { resolveTargetAndActual, compareTargetVsActual } from '../progressStatus';
-import type { ScheduleStatus } from '../sCurveApi';
+import { applyPdmDerivatives } from '../scheduleSync';
 import { COLLECTIONS } from './collections';
 import { db } from './config';
 import { asId, nowIso } from './ids';
+import {
+  applyFeedToSchedule,
+  EMPTY_SCHEDULE,
+  getBarChartFs,
+  invalidateChartCaches,
+  loadProjectChartContext,
+  type ProjectScheduleDoc,
+} from './chartContext';
 import { listApprovedProgressForProject } from './reportProgress';
 import { getProjectFs } from './projects';
 
-export interface ProjectScheduleDoc {
-  project_id: string;
-  activities: PdmActivity[];
-  dependencies: PdmDependency[];
-  barChartTasks: BarChartTask[];
-  barChartTotalDays: number;
-  barChartTimeNow: number;
-  projectDuration: number;
-  criticalPath: string[];
-  pdmError?: string | null;
-  reportFeed?: ReportProgressEntry[];
-  latestReportPercent?: number | null;
-  latestReportDate?: string | null;
-  targetPlanPercent?: number | null;
-  actualPlanPercent?: number | null;
-  progressStatus?: ScheduleStatus | null;
-}
-
-const EMPTY = (projectId: string): ProjectScheduleDoc => ({
-  project_id: projectId,
-  activities: [],
-  dependencies: [],
-  barChartTasks: [],
-  barChartTotalDays: 1,
-  barChartTimeNow: 0,
-  projectDuration: 0,
-  criticalPath: [],
-  pdmError: null,
-  reportFeed: [],
-  latestReportPercent: null,
-  latestReportDate: null,
-  targetPlanPercent: null,
-  actualPlanPercent: null,
-  progressStatus: null,
-});
-
-async function withReportProgress(schedule: ProjectScheduleDoc): Promise<ProjectScheduleDoc> {
-  const feed = await listApprovedProgressForProject(schedule.project_id);
-  const { targetPct, actualPct } = resolveTargetAndActual(feed);
-  const progressStatus = compareTargetVsActual(targetPct, actualPct);
-
-  let projectStart = nowIso().slice(0, 10);
-  try {
-    const { project } = await getProjectFs(schedule.project_id);
-    if (project.start_date) projectStart = project.start_date;
-  } catch {
-    /* use today */
-  }
-
-  const totalDays = Math.max(1, schedule.barChartTotalDays || schedule.projectDuration || 1);
-  const applied = applyReportProgressToBarChart(
-    schedule.barChartTasks,
-    feed,
-    projectStart,
-    totalDays,
-  );
-
-  return {
-    ...schedule,
-    barChartTasks: applied.tasks,
-    barChartTimeNow: applied.timeNow,
-    reportFeed: feed,
-    latestReportPercent: applied.latestPercent ?? actualPct ?? targetPct,
-    latestReportDate: applied.latestReportDate,
-    targetPlanPercent: targetPct,
-    actualPlanPercent: actualPct,
-    progressStatus,
-  };
-}
+export type { ProjectScheduleDoc };
+export { getBarChartFs };
 
 export async function getScheduleFs(projectId: string | number): Promise<ProjectScheduleDoc> {
   const id = asId(projectId);
-  const snap = await getDoc(doc(db, COLLECTIONS.schedules, id));
-  if (!snap.exists()) {
-    return withReportProgress(EMPTY(id));
+  try {
+    // Prefer shared context (deduped with S-curve / bar chart loads).
+    const ctx = await loadProjectChartContext(id);
+    return ctx.schedule;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/permission|insufficient/i.test(message)) {
+      try {
+        const feed = await listApprovedProgressForProject(id).catch(() => []);
+        let projectStart = nowIso().slice(0, 10);
+        try {
+          const { project } = await getProjectFs(id);
+          if (project.start_date) projectStart = project.start_date;
+        } catch {
+          /* ignore */
+        }
+        return applyFeedToSchedule(EMPTY_SCHEDULE(id), feed, projectStart);
+      } catch {
+        return EMPTY_SCHEDULE(id);
+      }
+    }
+    throw err;
   }
-  const data = snap.data() as Record<string, unknown>;
-  const raw: ProjectScheduleDoc = {
-    project_id: id,
-    activities: (data.activities as PdmActivity[]) ?? [],
-    dependencies: (data.dependencies as PdmDependency[]) ?? [],
-    barChartTasks: (data.barChartTasks as BarChartTask[]) ?? [],
-    barChartTotalDays: Number(data.barChartTotalDays ?? 1),
-    barChartTimeNow: Number(data.barChartTimeNow ?? 0),
-    projectDuration: Number(data.projectDuration ?? 0),
-    criticalPath: (data.criticalPath as string[]) ?? [],
-    pdmError: (data.pdmError as string | null) ?? null,
-  };
-  return withReportProgress(applyPdmDerivatives(raw));
 }
 
 export async function saveScheduleFs(payload: {
@@ -129,22 +73,51 @@ export async function saveScheduleFs(payload: {
     },
     { merge: true },
   );
-  return withReportProgress(derived);
+  invalidateChartCaches(id);
+  const ctx = await loadProjectChartContext(id);
+  return ctx.schedule;
 }
 
 export async function clearScheduleFs(projectId: string | number): Promise<ProjectScheduleDoc> {
   const id = asId(projectId);
-  const empty = EMPTY(id);
+  const empty = EMPTY_SCHEDULE(id);
   await setDoc(doc(db, COLLECTIONS.schedules, id), {
     ...empty,
     projectId: id,
     updatedAt: nowIso(),
   });
-  return withReportProgress(empty);
+  invalidateChartCaches(id);
+  return getScheduleFs(id);
 }
 
 export async function loadReferenceScheduleFs(
   projectId: string | number,
 ): Promise<ProjectScheduleDoc> {
-  return getScheduleFs(projectId);
+  const { buildRoadPdmSample } = await import('../../data/roadPdmSample');
+  const id = asId(projectId);
+  const sample = buildRoadPdmSample();
+  return saveScheduleFs({
+    project_id: id,
+    activities: sample.activities,
+    dependencies: sample.dependencies,
+  });
+}
+
+/** @deprecated — prefer loadProjectChartContext; kept for direct schedule doc reads. */
+export async function readRawScheduleDoc(projectId: string | number) {
+  const id = asId(projectId);
+  const snap = await getDoc(doc(db, COLLECTIONS.schedules, id));
+  if (!snap.exists()) return EMPTY_SCHEDULE(id);
+  const data = snap.data() as Record<string, unknown>;
+  return applyPdmDerivatives({
+    project_id: id,
+    activities: (data.activities as PdmActivity[]) ?? [],
+    dependencies: (data.dependencies as PdmDependency[]) ?? [],
+    barChartTasks: (data.barChartTasks as BarChartTask[]) ?? [],
+    barChartTotalDays: Number(data.barChartTotalDays ?? 1),
+    barChartTimeNow: Number(data.barChartTimeNow ?? 0),
+    projectDuration: Number(data.projectDuration ?? 0),
+    criticalPath: (data.criticalPath as string[]) ?? [],
+    pdmError: (data.pdmError as string | null) ?? null,
+  });
 }

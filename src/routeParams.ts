@@ -19,5 +19,7 @@ export function reportIdParams() {
 }
 
 export function projectIdParams() {
-  return [{ projectId: 'demo-capitol-annex' }, { projectId: 'demo-remebella-road' }];
+  // Placeholder for static export; live project IDs come from Firestore at runtime.
+  // On Vercel (non-export), dynamic segments resolve without pre-rendering every id.
+  return [{ projectId: '_' }];
 }

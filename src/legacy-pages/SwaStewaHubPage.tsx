@@ -6,8 +6,11 @@ import { useAuth } from '../context/AuthContext';
 import { listReports, type SwaStewaReport } from '../lib/swaStewaApi';
 import { canUserCreateReportType, reportIsViewOnly } from '../lib/reportPermissions';
 import { ButtonLink } from '../components/ui/Button';
+import { PageHeader } from '../components/ui/PageHeader';
+import { Pagination } from '../components/ui/Pagination';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { NavIcon, type NavIconName } from '../components/NavIcon';
+import { usePagination } from '../hooks/usePagination';
 
 function projectTitleOf(r: SwaStewaReport): string {
   return (
@@ -51,7 +54,7 @@ export function SwaStewaHubPage() {
         user?.id ? String(user.id) : null,
       )
     ) {
-      return `/reports/view?reportNumber=${encodeURIComponent(report.report_number)}`;
+      return `/reports/view?id=${encodeURIComponent(report.id)}`;
     }
     return `/swa-stewa/edit?id=${encodeURIComponent(report.id)}`;
   };
@@ -68,21 +71,37 @@ export function SwaStewaHubPage() {
     const matchesStatus = statusFilter === 'all' || report.status === statusFilter;
     return matchesQuery && matchesStatus;
   });
+  const {
+    page,
+    setPage,
+    pageItems,
+    totalPages,
+    from,
+    to,
+    total,
+    pageSize,
+  } = usePagination(filtered, {
+    resetKey: `${query}|${statusFilter}`,
+  });
   const approvedCount = reports.filter((report) => ['approved', 'generated'].includes(report.status)).length;
   const pendingCount = reports.filter((report) => !['approved', 'generated', 'rejected'].includes(report.status)).length;
   const revisionCount = reports.filter((report) => report.status === 'rejected').length;
 
   return (
     <main className="flex-1 overflow-y-auto">
-      <div className="space-y-6 px-8 pb-10 pt-8">
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <span className="inline-block rounded-full bg-teal-50 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-teal-700">Report workspace</span>
-            <h1 className="mt-3 font-serif text-3xl text-text">Inspection & Acceptance Reports</h1>
-            <p className="mt-2 max-w-3xl text-sm leading-relaxed text-text-muted">Create, track, and access inspection reports for completed and ongoing construction work.</p>
-          </div>
-          {canCreateIar && <ButtonLink to="/swa-stewa/new/IAR" variant="primary">+ New IAR</ButtonLink>}
-        </div>
+      <div className="space-y-5 px-8 pb-10 pt-6">
+        <PageHeader
+          badge="Report workspace"
+          title="Inspection & Acceptance Reports"
+          description="Create, track, and access inspection reports for completed and ongoing construction work."
+          actions={
+            canCreateIar ? (
+              <ButtonLink to="/swa-stewa/new/IAR" variant="primary" className="!rounded-lg !px-2.5 !py-1.5 !text-[11px]">
+                + New IAR
+              </ButtonLink>
+            ) : undefined
+          }
+        />
 
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {[
@@ -128,10 +147,19 @@ export function SwaStewaHubPage() {
               <table className="w-full min-w-[850px] border-collapse text-left text-sm">
                 <thead className="bg-surface-muted/60"><tr className="border-b border-border text-[11px] uppercase tracking-wider text-text-muted"><th className="px-5 py-3 font-semibold">Report</th><th className="px-5 py-3 font-semibold">Project</th><th className="px-5 py-3 font-semibold">Report date</th><th className="px-5 py-3 font-semibold">Status</th><th className="px-5 py-3 text-right font-semibold">Action</th></tr></thead>
                 <tbody className="divide-y divide-border/80">
-                  {filtered.map((report) => <tr key={report.id} className="transition hover:bg-surface-muted/40"><td className="px-5 py-4"><p className="font-semibold text-text">{report.report_number}</p><p className="mt-1 text-xs text-text-muted">{report.created_at ? new Date(report.created_at).toLocaleDateString() : '—'}</p></td><td className="max-w-[360px] px-5 py-4"><p className="truncate font-medium text-text">{projectTitleOf(report)}</p>{report.rejection_reason && <p className="mt-1 truncate text-xs text-warning">Revision: {report.rejection_reason}</p>}</td><td className="px-5 py-4 text-text-muted">{reportDateOf(report).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}</td><td className="px-5 py-4"><StatusBadge status={report.status} /></td><td className="px-5 py-4 text-right"><Link to={reportLink(report)} className="rounded-lg bg-primary-light px-3 py-1.5 text-xs font-semibold text-primary">{reportIsViewOnly(user?.role, report.report_type, report.status, report.edit_user_ids, user?.id ? String(user.id) : null) || report.status === 'generated' || report.status === 'approved' ? 'View report' : 'Open report'}</Link></td></tr>)}
+                  {pageItems.map((report) => <tr key={report.id} className="transition hover:bg-surface-muted/40"><td className="px-5 py-4"><p className="font-semibold text-text">{report.report_number}</p><p className="mt-1 text-xs text-text-muted">{report.created_at ? new Date(report.created_at).toLocaleDateString() : '—'}</p></td><td className="max-w-[360px] px-5 py-4"><p className="truncate font-medium text-text">{projectTitleOf(report)}</p>{report.rejection_reason && <p className="mt-1 truncate text-xs text-warning">Revision: {report.rejection_reason}</p>}</td><td className="px-5 py-4 text-text-muted">{reportDateOf(report).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}</td><td className="px-5 py-4"><StatusBadge status={report.status} /></td><td className="px-5 py-4 text-right"><Link to={reportLink(report)} className="rounded-lg bg-primary-light px-3 py-1.5 text-xs font-semibold text-primary">{reportIsViewOnly(user?.role, report.report_type, report.status, report.edit_user_ids, user?.id ? String(user.id) : null) || report.status === 'generated' || report.status === 'approved' ? 'View report' : 'Open report'}</Link></td></tr>)}
                 </tbody>
               </table>
             </div>
+            <Pagination
+              page={page}
+              totalPages={totalPages}
+              total={total}
+              from={from}
+              to={to}
+              pageSize={pageSize}
+              onPageChange={setPage}
+            />
           </div>
         )}
       </div>

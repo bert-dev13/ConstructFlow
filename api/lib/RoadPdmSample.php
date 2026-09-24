@@ -4,11 +4,13 @@ declare(strict_types=1);
 namespace Peo;
 
 /**
- * Precedence diagram sample — Activities A–F (Start → A→B→C and D→E→F, with D→C cross-link).
+ * Precedence diagram — Construction of Box Culvert along Cato-Conner Road, Tuao.
+ *
+ * Revision: B→E removed (marked MALI). E waits on C and D (FS).
  */
 class RoadPdmSample
 {
-    public const PROJECT_TITLE = 'Precedence Diagram Sample (Activities A–F)';
+    public const PROJECT_TITLE = 'CONSTRUCTION OF BOX CULVERT ALONG CATO-CONNER ROAD, TUAO';
 
     public static function hasReference(): bool
     {
@@ -24,10 +26,10 @@ class RoadPdmSample
 
         return [
             'name' => self::PROJECT_TITLE,
-            'location' => 'Training',
-            'start_date' => '2026-01-01',
-            'planned_end_date' => '2026-01-10',
-            'duration_days' => 10,
+            'location' => 'Cato-Conner Road, Tuao, Cagayan',
+            'start_date' => '2025-07-01',
+            'planned_end_date' => '2025-12-15',
+            'duration_days' => 167,
         ];
     }
 
@@ -35,12 +37,15 @@ class RoadPdmSample
     public static function activities(): array
     {
         return [
-            ['key' => 'a', 'number' => 'A', 'name' => 'Activity A', 'duration' => 3, 'es_override' => 0],
-            ['key' => 'b', 'number' => 'B', 'name' => 'Activity B', 'duration' => 4],
-            ['key' => 'c', 'number' => 'C', 'name' => 'Activity C', 'duration' => 2],
-            ['key' => 'd', 'number' => 'D', 'name' => 'Activity D', 'duration' => 5, 'es_override' => 0],
-            ['key' => 'e', 'number' => 'E', 'name' => 'Activity E', 'duration' => 2],
-            ['key' => 'f', 'number' => 'F', 'name' => 'Activity F', 'duration' => 3],
+            ['key' => 'a', 'number' => 'A', 'name' => 'Mobilization', 'duration' => 5, 'es_override' => 0],
+            ['key' => 'b', 'number' => 'B', 'name' => 'Box Culvert Construction', 'duration' => 23],
+            ['key' => 'c', 'number' => 'C', 'name' => 'Retaining Wall Construction', 'duration' => 10],
+            ['key' => 'd', 'number' => 'D', 'name' => 'RCPC Installation', 'duration' => 9],
+            ['key' => 'e', 'number' => 'E', 'name' => 'Sub-grade Preparation', 'duration' => 28],
+            ['key' => 'f', 'number' => 'F', 'name' => 'Embankment', 'duration' => 27],
+            ['key' => 'g', 'number' => 'G', 'name' => 'Aggregate Base Course', 'duration' => 22],
+            ['key' => 'h', 'number' => 'H', 'name' => 'PCCP', 'duration' => 70],
+            ['key' => 'i', 'number' => 'I', 'name' => 'Demobilization', 'duration' => 5],
         ];
     }
 
@@ -56,10 +61,14 @@ class RoadPdmSample
 
         return [
             $fs('a', 'b'),
-            $fs('b', 'c'),
-            $fs('d', 'c'),
+            $fs('a', 'c'),
+            $fs('a', 'd'),
+            $fs('c', 'e'),
             $fs('d', 'e'),
             $fs('e', 'f'),
+            $fs('f', 'g'),
+            $fs('g', 'h'),
+            $fs('h', 'i'),
         ];
     }
 }

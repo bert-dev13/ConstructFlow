@@ -33,12 +33,13 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.verifyReport = exports.purgeArchivedProjects = exports.onEmailQueueCreated = exports.sendWorkflowEmail = exports.finalizeReport = exports.seedDemoData = void 0;
+exports.verifyReport = exports.purgeArchivedProjects = exports.onEmailQueueCreated = exports.sendWorkflowEmail = exports.finalizeReport = exports.clearDemoData = exports.seedDemoData = void 0;
 const admin = __importStar(require("firebase-admin"));
 const firestore_1 = require("firebase-functions/v2/firestore");
 const https_1 = require("firebase-functions/v2/https");
 const scheduler_1 = require("firebase-functions/v2/scheduler");
 const nodemailer = __importStar(require("nodemailer"));
+const pdf_1 = require("./pdf");
 admin.initializeApp();
 const db = admin.firestore();
 const bucket = admin.storage().bucket();
@@ -127,14 +128,6 @@ function parseReportNumberCounter(reportNumber) {
     }
     return { base: reportNumber, nextSuffix: 2 };
 }
-function htmlEscape(value) {
-    return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-}
 async function writeReportAudit(reportId, action, details = {}) {
     await db.collection(`reports/${reportId}/audit`).add({
         action,
@@ -184,9 +177,9 @@ async function resolveProjectRecipients(projectId, projectData) {
     ]);
     return uniqueIds([...directEmails, ...engineer3Emails, ...engineer4Emails]);
 }
-async function uploadHtmlAttachment(path, html) {
+async function uploadPdfAttachment(path, pdf) {
     const file = bucket.file(path);
-    await file.save(html, { contentType: 'text/html', public: true });
+    await file.save(pdf, { contentType: 'application/pdf', public: true });
     return `https://storage.googleapis.com/${bucket.name}/${path}`;
 }
 async function resolveLatestApprovedReportFile(projectId, reportType) {
@@ -204,64 +197,94 @@ async function resolveLatestApprovedReportFile(projectId, reportType) {
     const pdfPath = String(candidate.data.pdfPath ?? '').trim();
     if (!pdfPath)
         return null;
+    const ext = pdfPath.toLowerCase().includes('.pdf') ? 'pdf' : pdfPath.endsWith('.html') ? 'html' : 'pdf';
     return {
         key: reportType.toLowerCase(),
-        filename: `${String(candidate.data.reportNumber ?? candidate.id)}.${pdfPath.endsWith('.html') ? 'html' : 'pdf'}`,
+        filename: `${String(candidate.data.reportNumber ?? candidate.id)}.${ext}`,
         url: pdfPath,
     };
 }
-async function buildScheduleHtmlAttachment(reportId, projectData, kind) {
+async function buildSchedulePdfAttachment(reportId, projectData, kind) {
+    const projectName = String(projectData.name ?? 'Project');
+    const projectId = String(projectData.projectId ?? projectData.id ?? '');
     if (kind === 's_curve') {
-        const curveSnap = await db.collection('sCurves').doc(String(projectData.projectId ?? projectData.id ?? '')).get();
+        const curveSnap = await db.collection('sCurves').doc(projectId).get();
         if (!curveSnap.exists)
             return null;
         const curve = curveSnap.data() ?? {};
         const points = Array.isArray(curve.points) ? curve.points : [];
-        const html = `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;padding:24px">
-      <h1>S-Curve Summary</h1>
-      <p><strong>Project:</strong> ${htmlEscape(projectData.name)}</p>
-      <table border="1" cellspacing="0" cellpadding="6">
-        <tr><th>Date</th><th>Target Plan</th><th>Actual</th></tr>
-        ${points
-            .map((point) => `<tr><td>${htmlEscape(point.date)}</td><td>${htmlEscape(point.originalPlan)}</td><td>${htmlEscape(point.actual)}</td></tr>`)
-            .join('')}
-      </table>
-    </body></html>`;
-        const url = await uploadHtmlAttachment(`reports/${reportId}/attachments/s-curve.html`, html);
-        return { key: kind, filename: 's-curve.html', url };
+        const pdf = await (0, pdf_1.buildSimplePdf)({
+            title: 'S-Curve Summary',
+            subtitle: projectName,
+            meta: [
+                ['Project', projectName],
+                ['Generated', nowIso()],
+            ],
+            columns: ['Date', 'Target Plan', 'Actual'],
+            rows: points.map((point) => {
+                const row = point;
+                return [
+                    String(row.date ?? ''),
+                    String(row.originalPlan ?? ''),
+                    String(row.actual ?? ''),
+                ];
+            }),
+            footerNote: 'Attached after IAR approval by Engineers II, III, and IV.',
+        });
+        const url = await uploadPdfAttachment(`reports/${reportId}/attachments/s-curve.pdf`, pdf);
+        return { key: kind, filename: 's-curve.pdf', url };
     }
-    const scheduleSnap = await db.collection('schedules').doc(String(projectData.projectId ?? projectData.id ?? '')).get();
+    const scheduleSnap = await db.collection('schedules').doc(projectId).get();
     if (!scheduleSnap.exists)
         return null;
     const schedule = scheduleSnap.data() ?? {};
     if (kind === 'pdm') {
         const activities = Array.isArray(schedule.activities) ? schedule.activities : [];
-        const html = `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;padding:24px">
-      <h1>PDM Schedule Summary</h1>
-      <p><strong>Project:</strong> ${htmlEscape(projectData.name)}</p>
-      <table border="1" cellspacing="0" cellpadding="6">
-        <tr><th>#</th><th>Activity</th><th>Duration</th><th>Critical</th></tr>
-        ${activities
-            .map((activity) => `<tr><td>${htmlEscape(activity.number)}</td><td>${htmlEscape(activity.name)}</td><td>${htmlEscape(activity.duration)}</td><td>${htmlEscape(activity.isCritical ? 'Yes' : 'No')}</td></tr>`)
-            .join('')}
-      </table>
-    </body></html>`;
-        const url = await uploadHtmlAttachment(`reports/${reportId}/attachments/pdm.html`, html);
-        return { key: kind, filename: 'pdm.html', url };
+        const pdf = await (0, pdf_1.buildSimplePdf)({
+            title: 'PDM Schedule Summary',
+            subtitle: projectName,
+            meta: [
+                ['Project', projectName],
+                ['Generated', nowIso()],
+            ],
+            columns: ['Item No.', 'Activity', 'Duration', 'Critical'],
+            rows: activities.map((activity) => {
+                const row = activity;
+                return [
+                    String(row.number ?? ''),
+                    String(row.name ?? ''),
+                    String(row.duration ?? ''),
+                    row.isCritical ? 'Yes' : 'No',
+                ];
+            }),
+            footerNote: 'Attached after IAR approval by Engineers II, III, and IV.',
+        });
+        const url = await uploadPdfAttachment(`reports/${reportId}/attachments/pdm.pdf`, pdf);
+        return { key: kind, filename: 'pdm.pdf', url };
     }
     const tasks = Array.isArray(schedule.barChartTasks) ? schedule.barChartTasks : [];
-    const html = `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;padding:24px">
-    <h1>Bar Chart Summary</h1>
-    <p><strong>Project:</strong> ${htmlEscape(projectData.name)}</p>
-    <table border="1" cellspacing="0" cellpadding="6">
-      <tr><th>#</th><th>Task</th><th>Start</th><th>End</th><th>Actual End</th></tr>
-      ${tasks
-        .map((task) => `<tr><td>${htmlEscape(task.index)}</td><td>${htmlEscape(task.name)}</td><td>${htmlEscape(task.startDay)}</td><td>${htmlEscape(task.endDay)}</td><td>${htmlEscape(task.actualEndDay)}</td></tr>`)
-        .join('')}
-    </table>
-  </body></html>`;
-    const url = await uploadHtmlAttachment(`reports/${reportId}/attachments/bar-chart.html`, html);
-    return { key: kind, filename: 'bar-chart.html', url };
+    const pdf = await (0, pdf_1.buildSimplePdf)({
+        title: 'Bar Chart Summary',
+        subtitle: projectName,
+        meta: [
+            ['Project', projectName],
+            ['Generated', nowIso()],
+        ],
+        columns: ['#', 'Task', 'Start Day', 'End Day', 'Actual End'],
+        rows: tasks.map((task) => {
+            const row = task;
+            return [
+                String(row.index ?? ''),
+                String(row.name ?? ''),
+                String(row.startDay ?? ''),
+                String(row.endDay ?? ''),
+                String(row.actualEndDay ?? ''),
+            ];
+        }),
+        footerNote: 'Attached after IAR approval by Engineers II, III, and IV.',
+    });
+    const url = await uploadPdfAttachment(`reports/${reportId}/attachments/bar-chart.pdf`, pdf);
+    return { key: kind, filename: 'bar-chart.pdf', url };
 }
 async function buildOptionalAttachments(reportId, reportData) {
     const optionalAttachments = stringArray(reportData.releaseState?.optionalAttachments);
@@ -273,7 +296,7 @@ async function buildOptionalAttachments(reportId, reportData) {
             return resolveLatestApprovedReportFile(projectId, 'SWA');
         if (key === 'stewa')
             return resolveLatestApprovedReportFile(projectId, 'STEWA');
-        return buildScheduleHtmlAttachment(reportId, { ...project, projectId }, key);
+        return buildSchedulePdfAttachment(reportId, { ...project, projectId }, key);
     }));
     const attachmentUrls = {};
     const mailAttachments = [];
@@ -314,7 +337,7 @@ async function buildReportEmailPayload(reportId, event) {
         const reportFile = String(data.pdfPath ?? '').trim();
         if (reportFile) {
             attachments.push({
-                filename: `${String(data.reportNumber ?? reportId)}.${reportFile.endsWith('.html') ? 'html' : 'pdf'}`,
+                filename: `${String(data.reportNumber ?? reportId)}.${reportFile.toLowerCase().includes('.pdf') ? 'pdf' : reportFile.endsWith('.html') ? 'html' : 'pdf'}`,
                 path: reportFile,
             });
         }
@@ -579,6 +602,115 @@ exports.seedDemoData = (0, https_1.onCall)({ invoker: 'public' }, async () => {
         countersUpdated: counterWrites.length,
     };
 });
+function isDemoOrSampleProjectId(projectId) {
+    return projectId.startsWith('demo-') || projectId.startsWith('sample-');
+}
+async function purgeProjectTree(projectId) {
+    const reportSnap = await db.collection('reports').where('projectId', '==', projectId).get();
+    for (const reportDoc of reportSnap.docs) {
+        await db.recursiveDelete(reportDoc.ref);
+    }
+    const scheduleRef = db.collection('schedules').doc(projectId);
+    if ((await scheduleRef.get()).exists)
+        await db.recursiveDelete(scheduleRef);
+    const sCurveRef = db.collection('sCurves').doc(projectId);
+    if ((await sCurveRef.get()).exists)
+        await db.recursiveDelete(sCurveRef);
+    const projectRef = db.collection('projects').doc(projectId);
+    if ((await projectRef.get()).exists)
+        await db.recursiveDelete(projectRef);
+}
+/**
+ * Removes seeded demo/sample project data while keeping Auth users and user profile docs.
+ */
+exports.clearDemoData = (0, https_1.onCall)({ invoker: 'public' }, async () => {
+    const now = nowIso();
+    const projectsSnap = await db.collection('projects').get();
+    const demoProjectIds = projectsSnap.docs
+        .map((projectDoc) => projectDoc.id)
+        .filter((id) => isDemoOrSampleProjectId(id));
+    // Also catch known seed ids even if the project doc was already removed.
+    for (const spec of PROJECT_SPECS) {
+        if (!demoProjectIds.includes(spec.id))
+            demoProjectIds.push(spec.id);
+    }
+    let reportsDeleted = 0;
+    const reportsSnap = await db.collection('reports').get();
+    for (const reportDoc of reportsSnap.docs) {
+        const data = reportDoc.data();
+        const projectId = String(data.projectId ?? '');
+        const reportNumber = String(data.reportNumber ?? '');
+        const projectName = String(data.projectName ?? '');
+        const isDemoReport = isDemoOrSampleProjectId(projectId)
+            || reportDoc.id.startsWith('sample-')
+            || reportDoc.id.startsWith('demo-')
+            || /sample/i.test(reportNumber)
+            || /sample/i.test(projectName);
+        if (!isDemoReport)
+            continue;
+        await db.recursiveDelete(reportDoc.ref);
+        reportsDeleted += 1;
+    }
+    let projectsDeleted = 0;
+    for (const projectId of demoProjectIds) {
+        await purgeProjectTree(projectId);
+        projectsDeleted += 1;
+    }
+    let emailQueueDeleted = 0;
+    const emailSnap = await db.collection('emailQueue').get();
+    for (const emailDoc of emailSnap.docs) {
+        const data = emailDoc.data();
+        const projectId = String(data.projectId ?? '');
+        const reportId = String(data.reportId ?? '');
+        if (isDemoOrSampleProjectId(projectId)
+            || reportId.startsWith('sample-')
+            || reportId.startsWith('demo-')
+            || /sample/i.test(String(data.event ?? ''))) {
+            await emailDoc.ref.delete();
+            emailQueueDeleted += 1;
+        }
+    }
+    let countersDeleted = 0;
+    const countersSnap = await db.collection('counters').get();
+    for (const counterDoc of countersSnap.docs) {
+        const base = String(counterDoc.data().base ?? counterDoc.id);
+        if (/sample/i.test(base) || /demo-/i.test(base) || counterDoc.id.includes('sample')) {
+            await counterDoc.ref.delete();
+            countersDeleted += 1;
+        }
+    }
+    const demoIdSet = new Set(demoProjectIds);
+    const stripDemoIds = (value) => stringArray(value).filter((id) => !demoIdSet.has(id) && !isDemoOrSampleProjectId(id));
+    let usersUpdated = 0;
+    const usersSnap = await db.collection('users').get();
+    for (const userDoc of usersSnap.docs) {
+        const data = userDoc.data();
+        const assignedProjectIds = stripDemoIds(data.assignedProjectIds);
+        const involvedProjectIds = stripDemoIds(data.involvedProjectIds);
+        const accessibleProjectIds = stripDemoIds(data.accessibleProjectIds);
+        const changed = JSON.stringify(assignedProjectIds) !== JSON.stringify(stringArray(data.assignedProjectIds))
+            || JSON.stringify(involvedProjectIds) !== JSON.stringify(stringArray(data.involvedProjectIds))
+            || JSON.stringify(accessibleProjectIds) !== JSON.stringify(stringArray(data.accessibleProjectIds));
+        if (!changed)
+            continue;
+        await userDoc.ref.set({
+            assignedProjectIds,
+            involvedProjectIds,
+            accessibleProjectIds,
+            updatedAt: now,
+        }, { merge: true });
+        usersUpdated += 1;
+    }
+    return {
+        ok: true,
+        accountsPreserved: ACCOUNTS.length,
+        projectsDeleted,
+        reportsDeleted,
+        emailQueueDeleted,
+        countersDeleted,
+        usersUpdated,
+    };
+});
 exports.finalizeReport = (0, https_1.onCall)(async (request) => {
     if (!request.auth)
         throw new https_1.HttpsError('unauthenticated', 'Sign in required');
@@ -595,18 +727,20 @@ exports.finalizeReport = (0, https_1.onCall)(async (request) => {
     }
     const reportNumber = String(data.reportNumber ?? reportId);
     const qrCode = reportNumber;
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${htmlEscape(reportNumber)}</title></head>
-  <body style="font-family:Georgia,serif;padding:48px;color:#111">
-    <h1 style="color:#0B3D2E">ConstructFlow</h1>
-    <h2>${htmlEscape(String(data.reportType))} — Final Report</h2>
-    <p><strong>Report Number:</strong> ${htmlEscape(reportNumber)}</p>
-    <p><strong>Project:</strong> ${htmlEscape(String(data.projectName ?? data.projectId))}</p>
-    <p><strong>Status:</strong> Generated</p>
-    <p><strong>Verification code:</strong> ${htmlEscape(qrCode)}</p>
-    <p>Generated at ${htmlEscape(nowIso())}</p>
-  </body></html>`;
-    const path = `reports/${reportId}/${reportNumber}.html`;
-    const pdfUrl = await uploadHtmlAttachment(path, html);
+    const pdfBuffer = await (0, pdf_1.buildSimplePdf)({
+        title: `${String(data.reportType)} — Final Report`,
+        subtitle: 'Approved report certificate',
+        meta: [
+            ['Report Number', reportNumber],
+            ['Project', String(data.projectName ?? data.projectId)],
+            ['Status', 'Generated'],
+            ['Verification code', qrCode],
+            ['Generated at', nowIso()],
+        ],
+        footerNote: 'This PDF is released only after Contractor confirmation and approval by Engineers II, III, and IV.',
+    });
+    const path = `reports/${reportId}/${reportNumber}.pdf`;
+    const pdfUrl = await uploadPdfAttachment(path, pdfBuffer);
     await ref.set({
         status: 'generated',
         pdfPath: pdfUrl,

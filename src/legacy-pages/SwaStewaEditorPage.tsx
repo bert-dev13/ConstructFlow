@@ -31,6 +31,7 @@ import {
   type ContractorChange,
 } from '../lib/swaStewaApi';
 import { trackReportViewed } from '../lib/recentViewed';
+import { downloadReportPreviewPdf } from '../lib/downloadReportPdf';
 import { Button, ButtonLink } from '../components/ui/Button';
 import { FormField, TextArea, TextInput } from '../components/ui/FormField';
 import { FormSection } from '../components/ui/FormSection';
@@ -42,6 +43,7 @@ import { useUndoRedo, useUndoRedoKeyboard } from '../hooks/useUndoRedo';
 import {
   canEditReport,
   reportIsViewOnly,
+  statusLabel,
   type SwaStewaReportKind,
 } from '../lib/reportPermissions';
 
@@ -185,6 +187,7 @@ export function SwaStewaEditorPage() {
   const [reportNumber, setReportNumber] = useState('');
   const [previewHtml, setPreviewHtml] = useState('');
   const [showPreview, setShowPreview] = useState(false);
+  const [downloadingPreview, setDownloadingPreview] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [showSubmittedModal, setShowSubmittedModal] = useState(false);
@@ -193,6 +196,7 @@ export function SwaStewaEditorPage() {
   const [dirty, setDirty] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [contractorChanges, setContractorChanges] = useState<ContractorChange[]>([]);
+  const [activeCommentField, setActiveCommentField] = useState<string | null>(null);
   const [revisionCount, setRevisionCount] = useState(0);
   const [editableUserIds, setEditableUserIds] = useState<string[]>([]);
   const [projectBoqItems, setProjectBoqItems] = useState<ProjectBoqItem[]>([]);
@@ -201,6 +205,7 @@ export function SwaStewaEditorPage() {
   const savingRef = useRef(false);
   const skipNextLoad = useRef(false);
   const contractorBaselineRef = useRef<Record<string, string>>({});
+  const fieldAnchorRefs = useRef<Record<string, HTMLElement | null>>({});
   const contractorDraftCommentMode =
     user?.role === 'contractor' &&
     (reportType === 'IAR' || reportType === 'STEWA') &&
@@ -209,6 +214,21 @@ export function SwaStewaEditorPage() {
     () => new Map(contractorChanges.map((change) => [change.field, change])),
     [contractorChanges],
   );
+  const missingChangeComments = useMemo(
+    () => contractorChanges.filter((change) => !String(change.comment ?? '').trim()),
+    [contractorChanges],
+  );
+  const showChangeCommentsPanel =
+    contractorChanges.length > 0 &&
+    (contractorDraftCommentMode || user?.role === 'engineer_1' || status === 'contractor_confirmed');
+
+  const focusChangeField = useCallback((field: string) => {
+    setActiveCommentField(field);
+    const el = fieldAnchorRefs.current[field];
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, []);
 
   useEffect(() => {
     if (!idParam && isContractor && routeType === 'IAR') {
@@ -271,7 +291,9 @@ export function SwaStewaEditorPage() {
   }, [idParam, projectId, reportType, setEditor]);
 
   useEffect(() => {
-    if (reportType !== 'SWA' || !projectId) {
+    // SWA + IAR line items share the project BOQ as the Item No. source of truth
+    // (same snapshots used by PDM / S-Curve / Bar Chart via mergeBoqIntoActivities).
+    if ((reportType !== 'SWA' && reportType !== 'IAR') || !projectId) {
       setProjectBoqItems([]);
       return;
     }
@@ -388,6 +410,7 @@ export function SwaStewaEditorPage() {
     getReport(idParam)
       .then((res) => {
         const r = res.report;
+        setError('');
         setReportType(r.report_type);
         setReportId(r.id);
         setStatus(r.status);
@@ -504,7 +527,10 @@ export function SwaStewaEditorPage() {
         });
         setDirty(false);
       })
-      .catch(() => setError('Could not load report'))
+      .catch((err) => {
+        console.error('Failed to load report', idParam, err);
+        setError('Could not load report');
+      })
       .finally(() => {
         requestAnimationFrame(() => {
           autoSaveReady.current = true;
@@ -762,6 +788,27 @@ export function SwaStewaEditorPage() {
     }
   };
 
+  const handlePreviewPrint = () => {
+    const frame = document.getElementById('editor-report-preview-frame') as HTMLIFrameElement | null;
+    frame?.contentWindow?.print();
+  };
+
+  const handlePreviewDownloadPdf = async () => {
+    setDownloadingPreview(true);
+    setError('');
+    try {
+      const frame = document.getElementById('editor-report-preview-frame') as HTMLIFrameElement | null;
+      await downloadReportPreviewPdf({
+        fileName: `${reportNumber || reportType || 'report'}-preview.pdf`,
+        frame,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not download PDF.');
+    } finally {
+      setDownloadingPreview(false);
+    }
+  };
+
   const handleSubmit = async () => {
     setLoading(true);
     setError('');
@@ -825,30 +872,55 @@ export function SwaStewaEditorPage() {
     user?.id ? String(user.id) : null,
   );
   const changedFields = new Set(contractorChanges.map((c) => c.field.split('.')[0]));
-  const isFieldChanged = (key: string) => changedFields.has(key);
+  const isFieldChanged = (key: string) => changedFields.has(key) || contractorChangeByField.has(key);
   const renderContractorChangeBox = (field: string) => {
     const change = contractorChangeByField.get(field);
     if (!change) return null;
+    const index = contractorChanges.findIndex((entry) => entry.field === field) + 1;
+    const needsComment = !String(change.comment ?? '').trim();
     return (
-      <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50/70 p-3">
-        <p className="text-xs font-semibold text-amber-900">
-          Original: <span className="line-through">{change.old || '—'}</span>
-          {' '}→ Current: <strong>{change.new || '—'}</strong>
+      <div
+        ref={(node) => {
+          fieldAnchorRefs.current[field] = node;
+        }}
+        className={`mt-2 rounded-lg border-l-4 px-3 py-2.5 ${
+          activeCommentField === field
+            ? 'border-amber-500 bg-amber-100/80 ring-1 ring-amber-400'
+            : 'border-amber-400 bg-amber-50/80'
+        }`}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <p className="text-[11px] font-bold uppercase tracking-wide text-amber-900">
+            Comment {index || '·'} · Edited
+          </p>
+          <button
+            type="button"
+            className="text-[11px] font-semibold text-amber-800 underline-offset-2 hover:underline"
+            onClick={() => setActiveCommentField(field)}
+          >
+            Open in panel
+          </button>
+        </div>
+        <p className="mt-1 text-xs text-amber-950">
+          <span className="line-through opacity-70">{change.old || '—'}</span>
+          <span className="mx-1 text-amber-700">→</span>
+          <strong>{change.new || '—'}</strong>
         </p>
         {contractorDraftCommentMode ? (
           <TextArea
             rows={2}
             value={change.comment ?? ''}
+            onFocus={() => setActiveCommentField(field)}
             onChange={(e) => setContractorChangeComment(field, e.target.value)}
-            placeholder="Add a short reason for this change…"
-            className="mt-2 border-amber-300 bg-white"
+            placeholder="Explain why you changed this (required before confirm)…"
+            className={`mt-2 bg-white ${needsComment ? 'border-amber-500 ring-1 ring-amber-400' : 'border-amber-300'}`}
           />
         ) : change.comment ? (
-          <p className="mt-2 text-xs text-amber-900">
-            Comment: <strong>{change.comment}</strong>
+          <p className="mt-2 rounded-md bg-white/70 px-2 py-1.5 text-xs text-amber-950">
+            <span className="font-semibold">Reason:</span> {change.comment}
           </p>
         ) : (
-          <p className="mt-2 text-xs text-amber-800">No comment added.</p>
+          <p className="mt-2 text-xs text-amber-800">No reason provided for this change.</p>
         )}
       </div>
     );
@@ -889,6 +961,13 @@ export function SwaStewaEditorPage() {
 
   const handleContractorConfirm = async () => {
     if (!reportId) return;
+    if (missingChangeComments.length > 0) {
+      setError(
+        `Add a reason for each edited field before confirming (${missingChangeComments.length} still missing).`,
+      );
+      focusChangeField(missingChangeComments[0]!.field);
+      return;
+    }
     setLoading(true);
     try {
       const res = await contractorConfirm(reportId);
@@ -921,32 +1000,47 @@ export function SwaStewaEditorPage() {
   ) => {
     const changed = isFieldChanged(key);
     const readOnly = computed;
+    const commentIndex = contractorChanges.findIndex((entry) => entry.field === key) + 1;
     return (
       <FormField key={key} label={label} hint={hint} className={span2 ? 'sm:col-span-2' : ''}>
-        {type === 'textarea' ? (
-          <TextArea
-            disabled={!canEditForm}
-            rows={3}
-            value={data[key] ?? ''}
-            onChange={(e) => setField(key, e.target.value, label)}
-            className={changed ? 'border-amber-400 bg-amber-50 ring-1 ring-amber-300' : undefined}
-          />
-        ) : (
-          <TextInput
-            disabled={!canEditForm}
-            readOnly={readOnly}
-            type={type}
-            value={data[key] ?? ''}
-            onChange={(e) => setField(key, e.target.value, label)}
-            className={
-              readOnly
-                ? 'bg-surface-muted'
-                : changed
-                  ? 'border-amber-400 bg-amber-50 ring-1 ring-amber-300'
-                  : undefined
-            }
-          />
-        )}
+        <div className="relative">
+          {changed && commentIndex > 0 && (
+            <button
+              type="button"
+              onClick={() => focusChangeField(key)}
+              className="absolute -right-2 -top-2 z-10 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-bold text-white shadow"
+              title={`Open comment ${commentIndex}`}
+            >
+              {commentIndex}
+            </button>
+          )}
+          {type === 'textarea' ? (
+            <TextArea
+              disabled={!canEditForm}
+              rows={3}
+              value={data[key] ?? ''}
+              onChange={(e) => setField(key, e.target.value, label)}
+              onFocus={() => changed && setActiveCommentField(key)}
+              className={changed ? 'border-amber-400 bg-amber-50 ring-1 ring-amber-300' : undefined}
+            />
+          ) : (
+            <TextInput
+              disabled={!canEditForm}
+              readOnly={readOnly}
+              type={type}
+              value={data[key] ?? ''}
+              onChange={(e) => setField(key, e.target.value, label)}
+              onFocus={() => changed && setActiveCommentField(key)}
+              className={
+                readOnly
+                  ? 'bg-surface-muted'
+                  : changed
+                    ? 'border-amber-400 bg-amber-50 ring-1 ring-amber-300'
+                    : undefined
+              }
+            />
+          )}
+        </div>
         {renderContractorChangeBox(key)}
       </FormField>
     );
@@ -970,10 +1064,14 @@ export function SwaStewaEditorPage() {
         }
       />
 
-      {isViewOnly && user?.role === 'contractor' && reportType === 'IAR' && (
+      {isViewOnly && (
         <div className="w-full px-8">
           <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            View only — this IAR cannot be edited in its current status.
+            View only — this {reportType} cannot be edited while status is{' '}
+            <strong>{statusLabel(status)}</strong>
+            {status === 'approved' || status === 'generated'
+              ? '. Open the official PDF to view the finalized report.'
+              : '. Only draft or revision-requested reports can be changed.'}
           </div>
         </div>
       )}
@@ -982,19 +1080,100 @@ export function SwaStewaEditorPage() {
         <div className="w-full px-8">
           <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
             <p className="font-semibold">Contractor changes ({contractorChanges.length})</p>
+            <p className="mt-1 text-xs text-amber-900">
+              Highlighted fields below include Google Docs–style reasons. Use the comments panel to jump between edits.
+            </p>
             <ul className="mt-2 list-inside list-disc space-y-1">
-              {contractorChanges.map((c) => (
+              {contractorChanges.map((c, index) => (
                 <li key={c.field}>
-                  {c.label}: <span className="line-through">{c.old || '—'}</span> →{' '}
-                  <strong>{c.new || '—'}</strong>
+                  <button
+                    type="button"
+                    className="text-left underline-offset-2 hover:underline"
+                    onClick={() => focusChangeField(c.field)}
+                  >
+                    {index + 1}. {c.label}: <span className="line-through">{c.old || '—'}</span> →{' '}
+                    <strong>{c.new || '—'}</strong>
+                  </button>
                   {c.comment ? (
-                    <span className="block text-xs text-amber-900">Comment: {c.comment}</span>
+                    <span className="block text-xs text-amber-900">Reason: {c.comment}</span>
                   ) : null}
                 </li>
               ))}
             </ul>
           </div>
         </div>
+      )}
+
+      {contractorDraftCommentMode && (
+        <div className="w-full px-8 pt-3">
+          <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
+            <p className="font-semibold">Edit with comments</p>
+            <p className="mt-1 text-xs text-sky-900">
+              Every field you change is highlighted. Add a reason for each edit in the comment box (or the side panel), similar to Google Docs suggestions.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {showChangeCommentsPanel && (
+        <aside className="fixed bottom-4 right-4 z-40 w-[min(100vw-2rem,22rem)] rounded-2xl border border-amber-300 bg-card shadow-2xl">
+          <div className="flex items-center justify-between border-b border-amber-200 px-4 py-3">
+            <div>
+              <p className="text-sm font-semibold text-text">Comments</p>
+              <p className="text-[11px] text-text-muted">
+                {contractorChanges.length} edit{contractorChanges.length === 1 ? '' : 's'}
+                {missingChangeComments.length > 0
+                  ? ` · ${missingChangeComments.length} need a reason`
+                  : ''}
+              </p>
+            </div>
+          </div>
+          <ul className="max-h-72 space-y-2 overflow-y-auto p-3">
+            {contractorChanges.map((change, index) => {
+              const needsComment = !String(change.comment ?? '').trim();
+              const active = activeCommentField === change.field;
+              return (
+                <li
+                  key={change.field}
+                  className={`rounded-xl border p-3 ${
+                    active ? 'border-amber-500 bg-amber-50' : 'border-border bg-surface-muted/40'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    className="w-full text-left"
+                    onClick={() => focusChangeField(change.field)}
+                  >
+                    <p className="text-[11px] font-bold uppercase tracking-wide text-amber-800">
+                      #{index + 1} · {change.label}
+                    </p>
+                    <p className="mt-1 text-xs text-text">
+                      <span className="line-through opacity-60">{change.old || '—'}</span>
+                      <span className="mx-1">→</span>
+                      <strong>{change.new || '—'}</strong>
+                    </p>
+                  </button>
+                  {contractorDraftCommentMode ? (
+                    <TextArea
+                      rows={2}
+                      value={change.comment ?? ''}
+                      onFocus={() => setActiveCommentField(change.field)}
+                      onChange={(e) => setContractorChangeComment(change.field, e.target.value)}
+                      placeholder="Reason for this change…"
+                      className={`mt-2 bg-white text-xs ${
+                        needsComment ? 'border-amber-500 ring-1 ring-amber-400' : 'border-border'
+                      }`}
+                    />
+                  ) : (
+                    <p className="mt-2 text-xs text-text-muted">
+                      {change.comment ? `Reason: ${change.comment}` : 'No reason provided.'}
+                    </p>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </aside>
       )}
 
       {revisionCount > 0 && (
@@ -1137,6 +1316,7 @@ export function SwaStewaEditorPage() {
                 items={iarItems}
                 onChange={setIarItems}
                 readOnly={!canEditForm || contractorDraftCommentMode}
+                projectBoqItems={projectBoqItems}
               />
             </FormSection>
             <FormSection title="For variation order" step={3} description="Contract changes — additive, deductive, or new items.">
@@ -1144,6 +1324,7 @@ export function SwaStewaEditorPage() {
                 items={variationItems}
                 onChange={setVariationItems}
                 readOnly={!canEditForm || contractorDraftCommentMode}
+                projectBoqItems={projectBoqItems}
               />
             </FormSection>
             <FormSection title="Site activities & remarks" step={4}>
@@ -1326,9 +1507,9 @@ export function SwaStewaEditorPage() {
               Submitted — awaiting Engineer II
             </span>
           )}
-          {isViewOnly && reportNumber && (status === 'generated' || status === 'approved') && (
-            <ButtonLink to={`/reports/view?reportNumber=${encodeURIComponent(reportNumber)}`} variant="secondary">
-              Open official PDF
+          {isViewOnly && reportId && (status === 'generated' || status === 'approved') && (
+            <ButtonLink to={`/reports/view?id=${encodeURIComponent(reportId)}`} variant="secondary">
+              View report
             </ButtonLink>
           )}
           {canApproveNow && (
@@ -1352,7 +1533,10 @@ export function SwaStewaEditorPage() {
             </>
           )}
           {status === 'generated' && reportNumber && (
-            <ButtonLink to={`/reports/view?reportNumber=${encodeURIComponent(reportNumber)}`} variant="secondary">
+            <ButtonLink
+              to={`/verify?qr=${encodeURIComponent(reportNumber)}`}
+              variant="secondary"
+            >
               Open QR verification page
             </ButtonLink>
           )}
@@ -1376,13 +1560,31 @@ export function SwaStewaEditorPage() {
       {showPreview && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
           <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
-            <div className="flex items-center justify-between border-b border-border bg-surface-muted/50 px-5 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-surface-muted/50 px-5 py-4">
               <h3 className="font-semibold text-text">Report preview</h3>
-              <Button type="button" variant="ghost" onClick={() => setShowPreview(false)}>
-                Close
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={downloadingPreview}
+                  onClick={() => void handlePreviewDownloadPdf()}
+                >
+                  {downloadingPreview ? 'Preparing PDF…' : 'Download PDF'}
+                </Button>
+                <Button type="button" variant="ghost" onClick={handlePreviewPrint}>
+                  Print
+                </Button>
+                <Button type="button" variant="ghost" onClick={() => setShowPreview(false)}>
+                  Close
+                </Button>
+              </div>
             </div>
-            <iframe title="Preview" srcDoc={previewHtml} className="min-h-[60vh] flex-1 w-full border-0 bg-white" />
+            <iframe
+              id="editor-report-preview-frame"
+              title="Preview"
+              srcDoc={previewHtml}
+              className="min-h-[60vh] flex-1 w-full border-0 bg-white"
+            />
           </div>
         </div>
       )}

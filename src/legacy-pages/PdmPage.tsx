@@ -8,9 +8,12 @@ import { ProjectSelect } from '../components/ProjectSelect';
 import { DocumentsBackLink } from '../components/DocumentsBackLink';
 import { getSchedule } from '../lib/scheduleApi';
 import { DEPENDENCY_LABELS, activityIncomingLink, formatDependencyLag, getCriticalPath, isIndependentActivity } from '../lib/pdm';
-import { dependencyEdge, diagramBounds, endActivityBranchPath, layoutPaperNetwork, layoutProjectEndNode, layoutProjectStartNode, PDM_BUS_STUB, PDM_END_HALF_W, PDM_START_HALF_W } from '../lib/pdmLayout';
+import { dependencyEdge, dependencyLaneOffsets, diagramBounds, endActivityBranchPath, layoutPaperNetwork, layoutProjectEndNode, layoutProjectStartNode, PDM_BUS_STUB, PDM_END_HALF_W, roundedOrthoPath, startActivityBranchPath } from '../lib/pdmLayout';
 import { PdmNode, PdmStartNode, PdmEndNode, PDM_NODE_HALF_H, PDM_NODE_HALF_W } from '../components/PdmNode';
 import { NavIcon, type NavIconName } from '../components/NavIcon';
+import { PageHeader } from '../components/ui/PageHeader';
+import { Pagination } from '../components/ui/Pagination';
+import { usePagination } from '../hooks/usePagination';
 import type { PdmActivity, PdmDependency } from '../types';
 
 export function PdmPage() {
@@ -22,6 +25,7 @@ export function PdmPage() {
   const [criticalPath, setCriticalPath] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const activityPaging = usePagination(activities, { resetKey: projectId });
 
   useEffect(() => {
     let cancelled = false;
@@ -91,29 +95,27 @@ export function PdmPage() {
   return (
     <main className="flex-1 overflow-y-auto">
       <DocumentsBackLink />
-      <div className="space-y-6 px-8 pb-10 pt-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <span className="inline-block rounded-full bg-primary-light px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-primary">
-            Schedule workspace
-          </span>
-          <h1 className="mt-3 font-serif text-3xl text-text">PDM schedule</h1>
-          <p className="mt-2 max-w-3xl text-sm text-text-muted">
-            Review activity sequencing, durations, dependencies, and the critical path for the selected project.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <ProjectSelect value={projectId} onChange={setProjectId} className="min-w-[240px]" />
-          {user?.role === 'contractor' && (
-            <Link
-              to="/schedule"
-              className="rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90"
-            >
-              Prepare schedule
-            </Link>
-          )}
-        </div>
-      </div>
+      <div className="space-y-5 px-8 pb-10 pt-6">
+      <PageHeader
+        badge="Schedule"
+        title="PDM schedule"
+        description="Review activity sequencing, durations, dependencies, and the critical path for the selected project."
+        actions={
+          <>
+            <div className="min-w-[160px] flex-1 sm:max-w-[220px]">
+              <ProjectSelect value={projectId} onChange={setProjectId} />
+            </div>
+            {user?.role === 'contractor' && (
+              <Link
+                to="/schedule"
+                className="shrink-0 rounded-lg bg-primary px-2.5 py-1.5 text-[11px] font-semibold text-white shadow-sm transition hover:bg-primary/90"
+              >
+                Prepare schedule
+              </Link>
+            )}
+          </>
+        }
+      />
 
       {error && <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-600">{error}</div>}
       {loading ? (
@@ -150,53 +152,81 @@ export function PdmPage() {
             ))}
           </div>
 
-          <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="schedule-panel-in overflow-hidden rounded-2xl border border-border/80 bg-card shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 px-5 py-4">
               <div>
                 <h2 className="text-lg font-semibold text-text">Network diagram</h2>
-                <p className="mt-1 text-sm text-text-muted">Activity flow and dependency relationships across the project.</p>
+                <p className="mt-1 text-sm text-text-muted">
+                  Activity flow with rounded elbows and flush arrow docking.
+                </p>
               </div>
               <span className="rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-semibold text-red-600">
                 {criticalActivityCount} critical {criticalActivityCount === 1 ? 'activity' : 'activities'}
               </span>
             </div>
-            <div className="mt-5 overflow-x-auto">
+            <div className="pdm-diagram-canvas overflow-x-auto p-4 sm:p-5">
             <svg
               viewBox={`${bounds.x} ${bounds.y} ${bounds.w} ${bounds.h}`}
-              className="min-h-[280px]"
-              style={{ width: Math.max(bounds.w, 640), height: Math.max(bounds.h, 280) }}
+              className="min-h-[300px] overflow-visible"
+              style={{ width: Math.max(bounds.w, 640), height: Math.max(bounds.h, 300) }}
               preserveAspectRatio="xMinYMin meet"
             >
 
               <defs>
-                <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="4.5" orient="auto">
-                  <path d="M0,0 L9,4.5 L0,9" fill="#8a958e" />
+                <marker
+                  id="arrow"
+                  markerUnits="userSpaceOnUse"
+                  markerWidth="18"
+                  markerHeight="18"
+                  refX="15"
+                  refY="9"
+                  orient="auto"
+                >
+                  <path d="M2,2 L15,9 L2,16 Z" fill="#334155" />
                 </marker>
-                <marker id="arrow-critical" markerWidth="12" markerHeight="12" refX="9" refY="4.5" orient="auto">
-                  <path d="M0,0 L9,4.5 L0,9" fill="#dc2626" />
+                <marker
+                  id="arrow-critical"
+                  markerUnits="userSpaceOnUse"
+                  markerWidth="18"
+                  markerHeight="18"
+                  refX="15"
+                  refY="9"
+                  orient="auto"
+                >
+                  <path d="M2,2 L15,9 L2,16 Z" fill="#dc2626" />
+                </marker>
+                <marker
+                  id="arrow-structure"
+                  markerUnits="userSpaceOnUse"
+                  markerWidth="16"
+                  markerHeight="16"
+                  refX="13"
+                  refY="8"
+                  orient="auto"
+                >
+                  <path d="M2,2 L13,8 L2,14 Z" fill="#0b3a5c" />
                 </marker>
               </defs>
 
               {startNode && startActivities.length > 0 && (
                 <g key="project-start">
-                  {startActivities.map((a) => {
+                  {startActivities.map((a, index) => {
                     const pos = positions[a.id];
                     if (!pos) return null;
-                    const x1 = startNode.x + PDM_START_HALF_W;
-                    const y1 = startNode.y;
-                    const x2 = pos.x - PDM_NODE_HALF_W;
-                    const y2 = pos.y;
+                    const branch = startActivityBranchPath(startNode, pos);
                     return (
                       <path
                         key={`branch-${a.id}`}
-                        d={
-                          Math.abs(y1 - y2) < 8
-                            ? `M ${x1} ${y1} L ${x2} ${y2}`
-                            : `M ${x1} ${y1} L ${x1 + PDM_BUS_STUB} ${y1} L ${x1 + PDM_BUS_STUB} ${y2} L ${x2} ${y2}`
-                        }
+                        className="pdm-edge-draw"
+                        style={{ animationDelay: `${80 + index * 40}ms` }}
+                        pathLength={1}
+                        d={branch.d}
                         fill="none"
-                        stroke="#2c2c2a"
-                        strokeWidth={1.75}
+                        stroke="#0b3a5c"
+                        strokeWidth={3}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        markerEnd="url(#arrow-structure)"
                       />
                     );
                   })}
@@ -232,35 +262,59 @@ export function PdmPage() {
                     const busY1 = Math.min(...attachYs);
                     const busY2 = Math.max(...attachYs);
                     const joinY = (busY1 + busY2) / 2;
+                    const endJoin = roundedOrthoPath(
+                      Math.abs(joinY - endNode.y) < 1
+                        ? [
+                            { x: endNode.busX, y: joinY },
+                            { x: endNode.x - PDM_END_HALF_W, y: endNode.y },
+                          ]
+                        : [
+                            { x: endNode.busX, y: joinY },
+                            { x: endNode.busX + PDM_BUS_STUB, y: joinY },
+                            { x: endNode.busX + PDM_BUS_STUB, y: endNode.y },
+                            { x: endNode.x - PDM_END_HALF_W, y: endNode.y },
+                          ],
+                      8,
+                    );
 
                     return (
                       <>
                         <line
+                          className="pdm-edge-draw"
+                          pathLength={1}
                           x1={endNode.busX}
                           y1={busY1}
                           x2={endNode.busX}
                           y2={busY2}
-                          stroke="#2c2c2a"
-                          strokeWidth={2.5}
+                          stroke="#0b3a5c"
+                          strokeWidth={3}
+                          strokeLinecap="round"
                         />
-                        {feeders.map((f) => (
+                        {feeders.map((f, index) => (
                           <path
                             key={`end-branch-${f.id}`}
+                            className="pdm-edge-draw"
+                            style={{ animationDelay: `${120 + index * 35}ms` }}
+                            pathLength={1}
                             d={f.d}
                             fill="none"
-                            stroke="#2c2c2a"
-                            strokeWidth={1.75}
+                            stroke="#0b3a5c"
+                            strokeWidth={3}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
                           />
                         ))}
                         <path
-                          d={
-                            Math.abs(joinY - endNode.y) < 1
-                              ? `M ${endNode.busX} ${joinY} L ${endNode.x - PDM_END_HALF_W} ${endNode.y}`
-                              : `M ${endNode.busX} ${joinY} L ${endNode.busX + PDM_BUS_STUB} ${joinY} L ${endNode.busX + PDM_BUS_STUB} ${endNode.y} L ${endNode.x - PDM_END_HALF_W} ${endNode.y}`
-                          }
+                          className="pdm-edge-draw"
+                          style={{ animationDelay: '220ms' }}
+                          pathLength={1}
+                          d={endJoin}
                           fill="none"
-                          stroke="#2c2c2a"
-                          strokeWidth={1.75}
+                          stroke="#0b3a5c"
+                          strokeWidth={3}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          markerEnd="url(#arrow-structure)"
                         />
                         <PdmEndNode x={endNode.x} y={endNode.y} />
                       </>
@@ -269,24 +323,199 @@ export function PdmPage() {
                 </g>
               )}
 
-              {dependencies.map((dep) => {
-                const fromAct = activities.find((a) => a.id === dep.fromId);
-                const toAct = activities.find((a) => a.id === dep.toId);
-                const from = positions[dep.fromId];
-                const to = positions[dep.toId];
-                if (!from || !to) return null;
-                const isCritical =
-                  mainChainIds.has(dep.fromId) && mainChainIds.has(dep.toId);
-                const stroke = isCritical ? '#dc2626' : '#8a958e';
-                const edge = dependencyEdge(from, to, PDM_NODE_HALF_W);
-                const lagText = formatDependencyLag(dep.lag);
-                return (
+              {(() => {
+                const offsetsByDepId = new Map<
+                  string,
+                  { attachOffsetY: number; laneOffsetX: number; startOffsetY: number }
+                >();
+                const depsByTarget = new Map<string, typeof dependencies>();
+                const depsBySource = new Map<string, typeof dependencies>();
+                for (const dep of dependencies) {
+                  const toList = depsByTarget.get(dep.toId) ?? [];
+                  toList.push(dep);
+                  depsByTarget.set(dep.toId, toList);
+                  const fromList = depsBySource.get(dep.fromId) ?? [];
+                  fromList.push(dep);
+                  depsBySource.set(dep.fromId, fromList);
+                }
+
+                for (const [toId, deps] of depsByTarget) {
+                  const to = positions[toId];
+                  if (!to || deps.length <= 1) {
+                    for (const dep of deps) {
+                      const prev = offsetsByDepId.get(dep.id) ?? {
+                        attachOffsetY: 0,
+                        laneOffsetX: 0,
+                        startOffsetY: 0,
+                      };
+                      offsetsByDepId.set(dep.id, { ...prev, attachOffsetY: 0, laneOffsetX: 0 });
+                    }
+                    continue;
+                  }
+                  const critical = deps.filter(
+                    (dep) => mainChainIds.has(dep.fromId) && mainChainIds.has(dep.toId),
+                  );
+                  const others = deps
+                    .filter((dep) => !critical.includes(dep))
+                    .sort(
+                      (a, b) =>
+                        (positions[a.fromId]?.y ?? 0) - (positions[b.fromId]?.y ?? 0) ||
+                        a.id.localeCompare(b.id),
+                    );
+
+                  if (critical.length === 1) {
+                    const prev = offsetsByDepId.get(critical[0].id) ?? {
+                      attachOffsetY: 0,
+                      laneOffsetX: 0,
+                      startOffsetY: 0,
+                    };
+                    offsetsByDepId.set(critical[0].id, { ...prev, attachOffsetY: 0, laneOffsetX: 0 });
+                    others.forEach((dep, index) => {
+                      const fromY = positions[dep.fromId]?.y ?? to.y;
+                      const sign = fromY >= to.y ? 1 : -1;
+                      const rank = index + 1;
+                      const existing = offsetsByDepId.get(dep.id) ?? {
+                        attachOffsetY: 0,
+                        laneOffsetX: 0,
+                        startOffsetY: 0,
+                      };
+                      offsetsByDepId.set(dep.id, {
+                        ...existing,
+                        attachOffsetY: sign * rank * 24,
+                        laneOffsetX: sign * rank * 10,
+                      });
+                    });
+                  } else {
+                    const sorted = [...deps].sort(
+                      (a, b) =>
+                        (positions[a.fromId]?.y ?? 0) - (positions[b.fromId]?.y ?? 0) ||
+                        a.id.localeCompare(b.id),
+                    );
+                    const lanes = dependencyLaneOffsets(sorted.length);
+                    sorted.forEach((dep, index) => {
+                      const lane = lanes[index] ?? { attachOffsetY: 0, laneOffsetX: 0 };
+                      const existing = offsetsByDepId.get(dep.id) ?? {
+                        attachOffsetY: 0,
+                        laneOffsetX: 0,
+                        startOffsetY: 0,
+                      };
+                      offsetsByDepId.set(dep.id, { ...existing, ...lane });
+                    });
+                  }
+                }
+
+                for (const [fromId, deps] of depsBySource) {
+                  const from = positions[fromId];
+                  if (!from || deps.length <= 1) {
+                    for (const dep of deps) {
+                      const prev = offsetsByDepId.get(dep.id) ?? {
+                        attachOffsetY: 0,
+                        laneOffsetX: 0,
+                        startOffsetY: 0,
+                      };
+                      offsetsByDepId.set(dep.id, { ...prev, startOffsetY: 0 });
+                    }
+                    continue;
+                  }
+                  const critical = deps.filter(
+                    (dep) => mainChainIds.has(dep.fromId) && mainChainIds.has(dep.toId),
+                  );
+                  const others = deps
+                    .filter((dep) => !critical.includes(dep))
+                    .sort(
+                      (a, b) =>
+                        (positions[a.toId]?.y ?? 0) - (positions[b.toId]?.y ?? 0) ||
+                        a.id.localeCompare(b.id),
+                    );
+
+                  if (critical.length === 1) {
+                    const prev = offsetsByDepId.get(critical[0].id) ?? {
+                      attachOffsetY: 0,
+                      laneOffsetX: 0,
+                      startOffsetY: 0,
+                    };
+                    offsetsByDepId.set(critical[0].id, { ...prev, startOffsetY: 0 });
+                    others.forEach((dep, index) => {
+                      const toY = positions[dep.toId]?.y ?? from.y;
+                      const sign = toY >= from.y ? 1 : -1;
+                      const rank = index + 1;
+                      const existing = offsetsByDepId.get(dep.id) ?? {
+                        attachOffsetY: 0,
+                        laneOffsetX: 0,
+                        startOffsetY: 0,
+                      };
+                      offsetsByDepId.set(dep.id, {
+                        ...existing,
+                        startOffsetY: sign * rank * 20,
+                      });
+                    });
+                  } else {
+                    const sorted = [...deps].sort(
+                      (a, b) =>
+                        (positions[a.toId]?.y ?? 0) - (positions[b.toId]?.y ?? 0) ||
+                        a.id.localeCompare(b.id),
+                    );
+                    const lanes = dependencyLaneOffsets(sorted.length, 20);
+                    sorted.forEach((dep, index) => {
+                      const existing = offsetsByDepId.get(dep.id) ?? {
+                        attachOffsetY: 0,
+                        laneOffsetX: 0,
+                        startOffsetY: 0,
+                      };
+                      offsetsByDepId.set(dep.id, {
+                        ...existing,
+                        startOffsetY: lanes[index]?.attachOffsetY ?? 0,
+                      });
+                    });
+                  }
+                }
+
+                const rendered = dependencies
+                  .map((dep) => {
+                    const fromAct = activities.find((a) => a.id === dep.fromId);
+                    const toAct = activities.find((a) => a.id === dep.toId);
+                    const from = positions[dep.fromId];
+                    const to = positions[dep.toId];
+                    if (!from || !to) return null;
+                    const isCritical =
+                      mainChainIds.has(dep.fromId) && mainChainIds.has(dep.toId);
+                    const stroke = isCritical ? '#dc2626' : '#334155';
+                    const lane = offsetsByDepId.get(dep.id) ?? {
+                      attachOffsetY: 0,
+                      laneOffsetX: 0,
+                      startOffsetY: 0,
+                    };
+                    const edge = dependencyEdge(from, to, PDM_NODE_HALF_W, {
+                      attachOffsetY: lane.attachOffsetY,
+                      laneOffsetX: lane.laneOffsetX,
+                      startOffsetY: lane.startOffsetY,
+                      nodeHalfH: PDM_NODE_HALF_H,
+                    });
+                    const lagText = formatDependencyLag(dep.lag);
+                    return {
+                      dep,
+                      fromAct,
+                      toAct,
+                      isCritical,
+                      stroke,
+                      edge,
+                      lagText,
+                    };
+                  })
+                  .filter((item): item is NonNullable<typeof item> => item != null);
+
+                rendered.sort((a, b) => Number(a.isCritical) - Number(b.isCritical));
+
+                return rendered.map(({ dep, fromAct, toAct, isCritical, stroke, edge, lagText }, index) => (
                   <g key={dep.id}>
                     <path
+                      className={`pdm-edge-draw ${isCritical ? 'pdm-edge-critical' : ''}`}
+                      style={{ animationDelay: `${160 + index * 45}ms` }}
+                      pathLength={1}
                       d={edge.d}
                       fill="none"
                       stroke={stroke}
-                      strokeWidth={isCritical ? 3.75 : 2.75}
+                      strokeWidth={isCritical ? 3.5 : 3}
                       strokeLinecap="round"
                       strokeLinejoin="round"
                       markerEnd={isCritical ? 'url(#arrow-critical)' : 'url(#arrow)'}
@@ -296,22 +525,20 @@ export function PdmPage() {
                         {lagText || ', lag 0'})
                       </title>
                     </path>
-                    {lagText ? (
-                      <text
-                        x={(from.x + to.x) / 2}
-                        y={(from.y + to.y) / 2 - 8}
-                        textAnchor="middle"
-                        className="fill-text-muted text-[9px] font-semibold"
-                      >
-                        {dep.type}
-                        {lagText}
-                      </text>
-                    ) : null}
+                    <text
+                      className="pdm-label-in fill-slate-700 text-[10px] font-bold"
+                      x={edge.labelX}
+                      y={edge.labelY}
+                      textAnchor="middle"
+                    >
+                      {dep.type}
+                      {lagText}
+                    </text>
                   </g>
-                );
-              })}
+                ));
+              })()}
 
-              {activities.map((act) => {
+              {activities.map((act, index) => {
                 const pos = positions[act.id];
                 if (!pos) return null;
                 return (
@@ -321,134 +548,229 @@ export function PdmPage() {
                     x={pos.x}
                     y={pos.y}
                     onMainCriticalPath={mainChainIds.has(act.id)}
+                    style={{ animationDelay: `${220 + index * 50}ms` }}
                   />
                 );
               })}
             </svg>
-            <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-text-muted">
+            <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-border/70 bg-card/90 px-3 py-2.5 text-xs text-text-muted">
               <span className="flex items-center gap-2">
-                <span className="inline-block h-0.5 w-6 bg-red-600" />
-                Critical path (LF−EF = 0 and LS−ES = 0)
+                <span className="inline-block h-0.5 w-6 rounded bg-red-600" />
+                Critical path
               </span>
               <span className="flex items-center gap-2">
-                <span className="inline-block h-0.5 w-6 bg-[#9ca89f]" />
-                Non-critical dependency
+                <span className="inline-block h-0.5 w-6 rounded bg-[#5a6b7d]" />
+                Dependency
               </span>
               <span className="flex items-center gap-2">
-                <span className="inline-block h-6 w-10 rounded border-2 border-text bg-white" />
-                Project start / end (day 0 / finish)
+                <span className="inline-block h-5 w-9 rounded border-2 border-primary bg-white" />
+                Start / end
               </span>
               <span className="flex items-center gap-2">
-                <span className="inline-block h-6 w-0.5 border-l-2 border-dashed border-text" />
-                Same ES = same column (stacked vertically)
+                <span className="inline-block h-5 w-9 rounded border border-dashed border-[#6b7c72] bg-[#f8faf8]" />
+                Until project end
               </span>
-              <span>
-                Diagram arrows are only from Dependencies (no auto links). Lines to{' '}
-                <em>end</em> are for activities with no successor — not a link between those activities.
-              </span>
-              <span className="flex items-center gap-2">
-                <span className="inline-block h-6 w-10 rounded border border-dashed border-[#6b7c72] bg-[#f8faf8]" />
-                Until project end (branch: Predecessor → Activity → End)
+              <span className="text-[11px]">
+                Arrows dock flush on node edges · same ES shares a column
               </span>
             </div>
             </div>
           </div>
 
-            <div className="mt-6 space-y-6">
-              <div className="space-y-6">
-                <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-                  <h3 className="font-semibold text-text">Node legend</h3>
-                  <ul className="mt-3 space-y-2 text-sm text-text-muted">
-                    <li><strong className="text-text">D</strong> — Duration</li>
-                    <li><strong className="text-text">ES</strong> — Early Start</li>
-                    <li><strong className="text-text">EF</strong> — Early Finish</li>
-                    <li><strong className="text-text">LS</strong> — Latest Start</li>
-                    <li><strong className="text-text">LF</strong> — Latest Finish</li>
-                    <li>
-                      <strong className="text-text">Total float</strong> — LS − ES (same as LF − EF).
-                      Float = 0 is critical
-                    </li>
-                  </ul>
+            <div className="mt-6 overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+              <div className="border-b border-border bg-surface-muted/40 px-5 py-4">
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-muted">
+                      Precedence network
+                    </p>
+                    <h2 className="mt-0.5 text-lg font-semibold text-text">Activity schedule</h2>
+                    <p className="mt-1 text-sm text-text-muted">
+                      Early and late dates from the PDM network. Float = 0 marks the critical path.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    <span className="rounded-full border border-border bg-card px-2.5 py-1 font-semibold text-text">
+                      {activities.length} activities
+                    </span>
+                    <span className="rounded-full border border-border bg-card px-2.5 py-1 font-semibold text-text">
+                      {dependencies.length} dependencies
+                    </span>
+                    <span className="rounded-full border border-red-200 bg-red-50 px-2.5 py-1 font-semibold text-red-700">
+                      {activities.filter((a) => a.isCritical).length} critical
+                    </span>
+                  </div>
                 </div>
-                <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-                  <h3 className="font-semibold text-text">Dependency types</h3>
-                  <ul className="mt-3 space-y-2 text-sm text-text-muted">
-                    {Object.entries(DEPENDENCY_LABELS).map(([key, label]) => (
-                      <li key={key}>
-                        <strong className="text-text">{key}</strong> — {label}
-                      </li>
+              </div>
+
+              <div className="grid gap-4 border-b border-border p-4 lg:grid-cols-2">
+                <div className="rounded-xl border border-border/80 bg-surface/50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-text-muted">
+                    Node fields
+                  </p>
+                  <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                    {(
+                      [
+                        ['D', 'Duration'],
+                        ['ES', 'Early Start'],
+                        ['EF', 'Early Finish'],
+                        ['LS', 'Latest Start'],
+                        ['LF', 'Latest Finish'],
+                        ['TF', 'Total float (LS−ES)'],
+                      ] as const
+                    ).map(([code, label]) => (
+                      <div
+                        key={code}
+                        className="flex items-center gap-2 rounded-lg border border-border/70 bg-card px-2.5 py-2"
+                      >
+                        <span className="inline-flex h-7 min-w-[2rem] items-center justify-center rounded-md bg-primary-light px-1.5 text-[11px] font-bold text-primary">
+                          {code}
+                        </span>
+                        <span className="text-xs leading-tight text-text-muted">{label}</span>
+                      </div>
                     ))}
-                    <li>
-                      Lag defaults to 0. A lead is a negative lag. Multiple predecessors use the
-                      latest required date.
-                    </li>
-                  </ul>
+                  </div>
+                  <p className="mt-3 text-[11px] leading-relaxed text-text-muted">
+                    Total float is LS − ES (same as LF − EF). Activities with float = 0 are critical.
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-border/80 bg-surface/50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-text-muted">
+                    Dependency types
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {Object.entries(DEPENDENCY_LABELS).map(([key, label]) => (
+                      <div
+                        key={key}
+                        className="inline-flex items-center gap-2 rounded-lg border border-border/70 bg-card px-2.5 py-2"
+                        title={label}
+                      >
+                        <span className="inline-flex h-7 min-w-[2rem] items-center justify-center rounded-md bg-slate-800 px-1.5 text-[11px] font-bold text-white">
+                          {key}
+                        </span>
+                        <span className="text-xs text-text-muted">{label}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-3 text-[11px] leading-relaxed text-text-muted">
+                    Lag defaults to 0. A lead is a negative lag. With multiple predecessors, the
+                    latest required date governs.
+                  </p>
                 </div>
               </div>
-            <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-              <div className="flex flex-wrap items-end justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-semibold text-text">Activity schedule</h2>
-                  <p className="mt-1 text-sm text-text-muted">Early and late dates calculated from the precedence network.</p>
-                </div>
-                <span className="text-xs text-text-muted">{activities.length} activities · {dependencies.length} dependencies</span>
-              </div>
-              <div className="mt-4 overflow-x-auto">
-              <table className="data-table w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-border text-xs uppercase text-text-muted">
-                    <th className="py-2">No.</th>
-                    <th>Activity</th>
-                    <th>D</th>
-                    <th>ES</th>
-                    <th>EF</th>
-                    <th>Type</th>
-                    <th>TO</th>
-                    <th>LS</th>
-                    <th>LF</th>
-                    <th>LF−EF</th>
-                    <th>LS−ES</th>
-                    <th>Critical</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {activities.map((a) => {
-                    const floatEf = (a.lf ?? 0) - (a.ef ?? 0);
-                    const floatEs = (a.ls ?? 0) - (a.es ?? 0);
-                    const link = activityIncomingLink(a.id, activities, dependencies);
-                    return (
-                    <tr
-                      key={a.id}
-                      className={`border-b border-border/50 ${a.isCritical ? 'bg-red-50' : ''}`}
-                    >
-                      <td className="py-2 font-medium">{a.number}</td>
-                      <td>{a.name}</td>
-                      <td>{a.duration}</td>
-                      <td>{a.es == null ? '—' : a.es}</td>
-                      <td>{a.ef}</td>
-                      <td>
-                        {link.type}
-                        {link.type !== 'Independent' ? formatDependencyLag(link.lag) : ''}
-                      </td>
-                      <td>{link.to}</td>
-                      <td>{a.ls == null ? '—' : a.ls}</td>
-                      <td>{a.lf}</td>
-                      <td>{floatEf}</td>
-                      <td>{floatEs}</td>
-                      <td className={a.isCritical ? 'font-semibold text-red-600' : ''}>
-                        {a.isCritical ? 'Yes' : '—'}
-                      </td>
+
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[920px] border-collapse text-left text-sm">
+                  <thead className="bg-surface-muted/60">
+                    <tr className="border-b border-border text-[11px] uppercase tracking-wider text-text-muted">
+                      <th className="px-4 py-3 font-semibold">No.</th>
+                      <th className="px-4 py-3 font-semibold">Activity</th>
+                      <th className="px-4 py-3 font-semibold" title="Duration">
+                        D
+                      </th>
+                      <th className="px-4 py-3 font-semibold" title="Early Start">
+                        ES
+                      </th>
+                      <th className="px-4 py-3 font-semibold" title="Early Finish">
+                        EF
+                      </th>
+                      <th className="px-4 py-3 font-semibold">Link</th>
+                      <th className="px-4 py-3 font-semibold" title="Latest Start">
+                        LS
+                      </th>
+                      <th className="px-4 py-3 font-semibold" title="Latest Finish">
+                        LF
+                      </th>
+                      <th className="px-4 py-3 font-semibold" title="Total float (LS − ES)">
+                        Float
+                      </th>
+                      <th className="px-4 py-3 font-semibold">Path</th>
                     </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-border/80">
+                    {activityPaging.pageItems.map((a) => {
+                      const floatEs = (a.ls ?? 0) - (a.es ?? 0);
+                      const link = activityIncomingLink(a.id, activities, dependencies);
+                      const isIndependent = link.type === 'Independent';
+                      return (
+                        <tr
+                          key={a.id}
+                          className={`transition hover:bg-surface-muted/40 ${
+                            a.isCritical ? 'bg-red-50/70' : ''
+                          }`}
+                        >
+                          <td className="px-4 py-3 font-semibold text-text">{a.number}</td>
+                          <td className="max-w-[280px] px-4 py-3">
+                            <p className="font-medium text-text">{a.name}</p>
+                          </td>
+                          <td className="px-4 py-3 tabular-nums text-text">{a.duration}</td>
+                          <td className="px-4 py-3 tabular-nums text-text-muted">
+                            {a.es == null ? '—' : a.es}
+                          </td>
+                          <td className="px-4 py-3 tabular-nums text-text-muted">
+                            {a.ef == null ? '—' : a.ef}
+                          </td>
+                          <td className="px-4 py-3">
+                            {isIndependent ? (
+                              <span className="text-xs text-text-muted">Independent</span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1.5">
+                                <span className="rounded-md bg-slate-800 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                                  {link.type}
+                                  {formatDependencyLag(link.lag)}
+                                </span>
+                                <span className="text-xs text-text-muted">→ {link.to}</span>
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 tabular-nums text-text-muted">
+                            {a.ls == null ? '—' : a.ls}
+                          </td>
+                          <td className="px-4 py-3 tabular-nums text-text-muted">
+                            {a.lf == null ? '—' : a.lf}
+                          </td>
+                          <td className="px-4 py-3 tabular-nums">
+                            <span
+                              className={
+                                floatEs === 0
+                                  ? 'font-semibold text-red-600'
+                                  : 'text-text-muted'
+                              }
+                            >
+                              {floatEs}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            {a.isCritical ? (
+                              <span className="inline-flex rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-red-700">
+                                Critical
+                              </span>
+                            ) : (
+                              <span className="inline-flex rounded-full border border-border bg-surface-muted px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                                Float
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
+              <Pagination
+                page={activityPaging.page}
+                totalPages={activityPaging.totalPages}
+                total={activityPaging.total}
+                from={activityPaging.from}
+                to={activityPaging.to}
+                pageSize={activityPaging.pageSize}
+                onPageChange={activityPaging.setPage}
+              />
             </div>
-          </div>
         </>
       )}
-      </div>
+    </div>
     </main>
   );
 }

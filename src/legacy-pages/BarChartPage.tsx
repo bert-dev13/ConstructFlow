@@ -8,10 +8,10 @@ import { ProjectSelect } from '../components/ProjectSelect';
 import { DocumentsBackLink } from '../components/DocumentsBackLink';
 import { ReportProgressFeed, type ReportProgressEntry } from '../components/ReportProgressFeed';
 import { NavIcon, type NavIconName } from '../components/NavIcon';
-import { getSchedule } from '../lib/scheduleApi';
+import { getBarChart } from '../lib/scheduleApi';
 import type { BarChartTask } from '../types';
 import { exportBarChartPdf } from '../lib/chartPdfExport';
-import { getSCurve, saveSCurveSettings, type SCurveReportingInterval, type SCurveType, type ScheduleStatus } from '../lib/sCurveApi';
+import { saveSCurveSettings, type SCurveReportingInterval, type SCurveType, type ScheduleStatus } from '../lib/sCurveApi';
 import { applyReportProgressToBarChart } from '../lib/scheduleSync';
 import { buildTheoreticalBarChartTasks } from '../lib/sCurvePeriods';
 
@@ -111,41 +111,43 @@ export function BarChartPage() {
     (async () => {
       setLoading(true);
       try {
-        const [data, curve] = await Promise.all([getSchedule(projectId), getSCurve(projectId)]);
+        // Lightweight load: schedule + settings + progress for the selected project only.
+        const payload = await getBarChart(projectId);
+        const data = payload.schedule;
         if (!cancelled) {
-          setCurveType(curve.curve_type);
-          setReportingInterval(curve.reporting_interval);
-          setTheoreticalTotalPeriods(curve.theoretical_total_periods);
-          if (curve.curve_type === 'ideal_theoretical' && curve.project_start_date) {
+          setCurveType(payload.curve_type);
+          setReportingInterval(payload.reporting_interval);
+          setTheoreticalTotalPeriods(payload.theoretical_total_periods);
+          if (payload.curve_type === 'ideal_theoretical' && payload.project_start_date) {
             const theoretical = buildTheoreticalBarChartTasks({
-              totalPeriods: curve.theoretical_total_periods,
-              reportingInterval: curve.reporting_interval,
+              totalPeriods: payload.theoretical_total_periods,
+              reportingInterval: payload.reporting_interval,
             });
             const applied = applyReportProgressToBarChart(
               theoretical.tasks,
-              curve.report_feed ?? [],
-              curve.project_start_date,
+              payload.report_feed ?? [],
+              payload.project_start_date,
               theoretical.totalDays,
             );
             setTasks(applied.tasks);
             setTotalDays(theoretical.totalDays);
             setTimeNow(applied.timeNow);
-            setReportFeed(curve.report_feed ?? []);
+            setReportFeed(payload.report_feed ?? []);
             setLatestReportPercent(applied.latestPercent);
             setLatestReportDate(applied.latestReportDate);
-            setTargetPlanPercent(curve.target_plan_percent ?? null);
-            setActualPlanPercent(curve.actual_plan_percent ?? null);
-            setProgressStatus(curve.schedule_status ?? null);
+            setTargetPlanPercent(payload.target_plan_percent ?? null);
+            setActualPlanPercent(payload.actual_plan_percent ?? null);
+            setProgressStatus(payload.schedule_status ?? null);
           } else {
             setTasks(data.barChartTasks);
             setTotalDays(data.barChartTotalDays);
             setTimeNow(data.barChartTimeNow);
-            setReportFeed(data.reportFeed ?? []);
+            setReportFeed(data.reportFeed ?? payload.report_feed ?? []);
             setLatestReportPercent(data.latestReportPercent ?? null);
             setLatestReportDate(data.latestReportDate ?? null);
-            setTargetPlanPercent(curve.target_plan_percent ?? data.targetPlanPercent ?? null);
-            setActualPlanPercent(curve.actual_plan_percent ?? data.actualPlanPercent ?? null);
-            setProgressStatus(curve.schedule_status ?? data.progressStatus ?? null);
+            setTargetPlanPercent(payload.target_plan_percent ?? data.targetPlanPercent ?? null);
+            setActualPlanPercent(payload.actual_plan_percent ?? data.actualPlanPercent ?? null);
+            setProgressStatus(payload.schedule_status ?? data.progressStatus ?? null);
           }
         }
       } catch (e) {
@@ -167,150 +169,189 @@ export function BarChartPage() {
   );
   const groups = useMemo(() => buildGroups(totalDays, reportingInterval), [reportingInterval, totalDays]);
   const hasReportActuals = timeNow >= 1 && latestReportPercent != null;
-  const behindTaskCount = tasks.filter(
-    (task) => getScheduleStatus(task.endDay, hasReportActuals ? task.actualEndDay : null, timeNow) === 'behind',
-  ).length;
-  const criticalTaskCount = tasks.filter((task) => task.isCritical).length;
-  const plannedTaskCount = tasks.filter((task) => !task.actualEndDay).length;
+  const { behindTaskCount, criticalTaskCount, plannedTaskCount } = useMemo(() => {
+    let behind = 0;
+    let critical = 0;
+    let planned = 0;
+    for (const task of tasks) {
+      if (task.isCritical) critical += 1;
+      if (!task.actualEndDay) planned += 1;
+      if (
+        getScheduleStatus(task.endDay, hasReportActuals ? task.actualEndDay : null, timeNow) ===
+        'behind'
+      ) {
+        behind += 1;
+      }
+    }
+    return {
+      behindTaskCount: behind,
+      criticalTaskCount: critical,
+      plannedTaskCount: planned,
+    };
+  }, [tasks, hasReportActuals, timeNow]);
   const latestProgressLabel = latestReportPercent != null ? `${latestReportPercent}%` : 'Not reported';
 
   return (
     <main className="flex-1 overflow-y-auto">
       <DocumentsBackLink />
-      <div className="space-y-6 px-8 pb-10 pt-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <span className="inline-block rounded-full bg-primary-light px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-primary">
-            Schedule workspace
-          </span>
-          <h1 className="mt-3 font-serif text-3xl text-text">Bar chart schedule</h1>
-          <p className="mt-2 max-w-3xl text-sm text-text-muted">
-            Compare the target plan with reported progress and quickly identify critical or delayed work.
-          </p>
+      <div className="space-y-5 px-8 pb-10 pt-6">
+      <header className="page-header-in relative z-20 overflow-visible rounded-xl border border-border/80 bg-card/90 px-4 py-3 shadow-sm sm:px-5">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 h-0.5 overflow-hidden rounded-t-xl"
+        >
+          <div className="page-accent-sweep h-full bg-gradient-to-r from-primary via-accent to-transparent" />
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          {progressStatus && (
-            <div
-              className={`rounded-xl px-4 py-2 text-right text-sm ${
-                progressStatus.status === 'ahead'
-                  ? 'bg-emerald-50 text-emerald-800'
-                  : progressStatus.status === 'behind'
-                    ? 'bg-red-50 text-red-800'
-                    : progressStatus.status === 'on_schedule'
-                      ? 'bg-primary-light text-primary'
-                      : 'bg-blue-50 text-blue-800'
-              }`}
-            >
-              <p className="text-[10px] font-bold uppercase tracking-wide">Schedule health</p>
-              <p className="font-semibold">{progressStatus.label}</p>
-              {progressStatus.planned_pct != null && (
-                <p className="text-xs opacity-80">
-                  Target {progressStatus.planned_pct}%
-                  {progressStatus.actual_pct != null
-                    ? ` · Actual ${progressStatus.actual_pct}%`
-                    : ''}
-                </p>
-              )}
-            </div>
-          )}
-          <div className="flex rounded-xl bg-surface-muted p-1">
-            <button
-              type="button"
-              onClick={() => void persistScheduleSettings({ curveType: 'pdm_based' })}
-              disabled={settingsSaving}
-              className={`rounded-lg px-3 py-2 text-sm font-semibold ${
-                curveType === 'pdm_based'
-                  ? 'bg-primary text-white shadow-sm'
-                  : 'text-text-muted'
-              }`}
-            >
-              PDM-Based Target
-            </button>
-            <button
-              type="button"
-              onClick={() => void persistScheduleSettings({ curveType: 'ideal_theoretical' })}
-              disabled={settingsSaving}
-              className={`rounded-lg px-3 py-2 text-sm font-semibold ${
-                curveType === 'ideal_theoretical'
-                  ? 'bg-primary text-white shadow-sm'
-                  : 'text-text-muted'
-              }`}
-            >
-              Ideal/Theoretical
-            </button>
+
+        <div className="page-toolbar-in flex flex-wrap items-center justify-between gap-x-4 gap-y-2.5">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-muted">
+              Schedule
+            </p>
+            <h1 className="font-[family-name:var(--font-display)] text-xl font-semibold leading-tight tracking-tight text-text sm:text-2xl">
+              Bar chart
+            </h1>
           </div>
-          <label className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-sm text-text">
-            <span className="font-semibold text-text-muted">Interval</span>
-            <select
-              value={reportingInterval}
-              disabled={settingsSaving}
-              onChange={(e) =>
-                void persistScheduleSettings({
-                  reportingInterval: e.target.value as SCurveReportingInterval,
-                })
-              }
-              className="bg-transparent text-sm font-semibold text-text outline-none"
+
+          <div className="relative z-30 flex flex-wrap items-center justify-end gap-2">
+            {progressStatus && (
+              <div
+                className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${
+                  progressStatus.status === 'ahead'
+                    ? 'bg-emerald-50 text-emerald-800'
+                    : progressStatus.status === 'behind'
+                      ? 'bg-red-50 text-red-800'
+                      : progressStatus.status === 'on_schedule'
+                        ? 'bg-primary-light text-primary'
+                        : 'bg-blue-50 text-blue-800'
+                }`}
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80" />
+                {progressStatus.label}
+                {progressStatus.planned_pct != null && (
+                  <span className="font-medium opacity-70">
+                    {progressStatus.planned_pct}%
+                    {progressStatus.actual_pct != null ? ` · ${progressStatus.actual_pct}%` : ''}
+                  </span>
+                )}
+              </div>
+            )}
+
+            <div
+              role="group"
+              aria-label="Schedule basis"
+              className="flex shrink-0 rounded-lg bg-surface-muted p-0.5"
             >
-              <option value="10_day">10-Day Interval</option>
-              <option value="30_day">30-Day / Monthly</option>
-            </select>
-          </label>
-          {curveType === 'ideal_theoretical' && (
-            <label className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-sm text-text">
-              <span className="font-semibold text-text-muted">Theoretical periods</span>
-              <input
-                type="number"
-                min={1}
-                value={theoreticalTotalPeriods}
+              <button
+                type="button"
+                onClick={() => void persistScheduleSettings({ curveType: 'pdm_based' })}
                 disabled={settingsSaving}
-                onChange={(e) => setTheoreticalTotalPeriods(Math.max(1, Number(e.target.value || 1)))}
-                onBlur={(e) =>
+                className={`rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors duration-200 ${
+                  curveType === 'pdm_based'
+                    ? 'bg-primary text-white shadow-sm'
+                    : 'text-text-muted hover:text-text'
+                }`}
+              >
+                PDM target
+              </button>
+              <button
+                type="button"
+                onClick={() => void persistScheduleSettings({ curveType: 'ideal_theoretical' })}
+                disabled={settingsSaving}
+                className={`rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors duration-200 ${
+                  curveType === 'ideal_theoretical'
+                    ? 'bg-primary text-white shadow-sm'
+                    : 'text-text-muted hover:text-text'
+                }`}
+              >
+                Theoretical
+              </button>
+            </div>
+
+            <label className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs transition focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/20">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                Interval
+              </span>
+              <select
+                value={reportingInterval}
+                disabled={settingsSaving}
+                onChange={(e) =>
                   void persistScheduleSettings({
-                    theoreticalTotalPeriods: Math.max(1, Number(e.currentTarget.value || 1)),
+                    reportingInterval: e.target.value as SCurveReportingInterval,
                   })
                 }
-                className="w-20 bg-transparent text-sm font-semibold text-text outline-none"
-              />
+                className="bg-transparent text-xs font-semibold text-text outline-none"
+              >
+                <option value="10_day">10-day</option>
+                <option value="30_day">30-day</option>
+              </select>
             </label>
-          )}
-          <ProjectSelect value={projectId} onChange={setProjectId} className="min-w-[240px]" />
-          <button
-            type="button"
-            disabled={exporting || tasks.length === 0}
-            onClick={() => {
-              setExporting(true);
-              try {
-                exportBarChartPdf({
-                  projectLabel: `Project ${projectId}`,
-                  tasks,
-                  totalDays,
-                  timeNow,
-                  status: progressStatus,
-                  targetPlanPercent,
-                  actualPlanPercent,
-                });
-              } finally {
-                setExporting(false);
-              }
-            }}
-              className="rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-semibold text-text transition hover:bg-surface-muted disabled:opacity-50"
-          >
-            {exporting ? 'Exporting…' : 'Export Bar Chart PDF'}
-          </button>
-          {user?.role === 'contractor' && (
-            <Link
-              to="/schedule"
-              className="rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90"
+
+            {curveType === 'ideal_theoretical' && (
+              <label className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs transition focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/20">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                  Periods
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  value={theoreticalTotalPeriods}
+                  disabled={settingsSaving}
+                  onChange={(e) =>
+                    setTheoreticalTotalPeriods(Math.max(1, Number(e.target.value || 1)))
+                  }
+                  onBlur={(e) =>
+                    void persistScheduleSettings({
+                      theoreticalTotalPeriods: Math.max(1, Number(e.currentTarget.value || 1)),
+                    })
+                  }
+                  className="w-10 bg-transparent text-xs font-semibold text-text outline-none"
+                />
+              </label>
+            )}
+
+            <div className="relative z-30 min-w-[180px] sm:w-[220px]">
+              <ProjectSelect value={projectId} onChange={setProjectId} />
+            </div>
+
+            <button
+              type="button"
+              disabled={exporting || tasks.length === 0}
+              onClick={() => {
+                setExporting(true);
+                try {
+                  exportBarChartPdf({
+                    projectLabel: `Project ${projectId}`,
+                    tasks,
+                    totalDays,
+                    timeNow,
+                    status: progressStatus,
+                    targetPlanPercent,
+                    actualPlanPercent,
+                  });
+                } finally {
+                  setExporting(false);
+                }
+              }}
+              className="shrink-0 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-text transition hover:border-primary/30 hover:bg-primary-light/40 disabled:opacity-50"
             >
-              Prepare schedule
-            </Link>
-          )}
+              {exporting ? 'Exporting…' : 'Export PDF'}
+            </button>
+            {user?.role === 'contractor' && (
+              <Link
+                to="/schedule"
+                className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-primary-dark"
+              >
+                Prepare schedule
+              </Link>
+            )}
+          </div>
         </div>
-      </div>
+      </header>
 
       {error && <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-600">{error}</div>}
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="relative z-0 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {([
           ['Schedule duration', `${totalDays} days`, 'Total planned timeline', 'schedule'],
           ['Activities', tasks.length, `${plannedTaskCount} awaiting actual progress · ${behindTaskCount} delayed`, 'projects'],

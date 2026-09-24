@@ -1,8 +1,12 @@
-/** App base path for Apache/XAMPP. Empty in local `next dev`; `/ConstructFlow/` in production builds. */
-const configuredBasePath =
-  process.env.NODE_ENV === 'development'
-    ? ''
-    : (process.env.NEXT_PUBLIC_BASE_PATH ?? '/ConstructFlow');
+/**
+ * App base path — must use NEXT_PUBLIC_* only so server and client agree.
+ * - local `next dev` → empty
+ * - Vercel → empty (do not set NEXT_PUBLIC_BASE_PATH)
+ * - Apache/XAMPP → set NEXT_PUBLIC_BASE_PATH=/ConstructFlow
+ */
+import { publicBasePath } from './publicAsset';
+
+const configuredBasePath = publicBasePath();
 
 export const BASE_URL = configuredBasePath
   ? `${configuredBasePath.replace(/\/$/, '')}/`

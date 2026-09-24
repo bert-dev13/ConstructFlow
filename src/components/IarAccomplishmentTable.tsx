@@ -9,9 +9,10 @@ interface Props {
   items: IarAccomplishmentItem[];
   onChange: (items: IarAccomplishmentItem[]) => void;
   readOnly?: boolean;
+  projectBoqItems?: import('../lib/projectBoqApi').ProjectBoqItem[];
 }
 
-export function IarAccomplishmentTable({ items, onChange, readOnly }: Props) {
+export function IarAccomplishmentTable({ items, onChange, readOnly, projectBoqItems }: Props) {
   const inputCls = `${fieldInputClass()} !mt-0 !py-2 text-xs`;
 
   const update = (id: string, patch: Partial<IarAccomplishmentItem>) => {
@@ -19,7 +20,22 @@ export function IarAccomplishmentTable({ items, onChange, readOnly }: Props) {
   };
 
   const selectPayItem = (id: string, item: PayItem | null) => {
-    if (!item) return;
+    if (!item) {
+      update(id, {
+        payItemId: '',
+        payItemVersion: undefined,
+        snapshotItemNo: '',
+        snapshotDescription: '',
+        snapshotUnit: '',
+        itemNo: '',
+        description: '',
+        unit: '',
+      });
+      return;
+    }
+    const boqItem = (projectBoqItems ?? []).find(
+      (boq) => boq.payItemId === item.id && boq.active,
+    );
     update(id, {
       payItemId: item.id,
       payItemVersion: item.version,
@@ -29,6 +45,17 @@ export function IarAccomplishmentTable({ items, onChange, readOnly }: Props) {
       itemNo: item.itemNo,
       description: item.description,
       unit: item.unit,
+      // Keep location/qty as entered; item identity always mirrors project BOQ.
+      ...(boqItem
+        ? {
+            itemNo: boqItem.itemNo,
+            description: boqItem.description,
+            unit: boqItem.unit,
+            snapshotItemNo: boqItem.itemNo,
+            snapshotDescription: boqItem.description,
+            snapshotUnit: boqItem.unit,
+          }
+        : {}),
     });
   };
 
@@ -74,6 +101,7 @@ export function IarAccomplishmentTable({ items, onChange, readOnly }: Props) {
                       value={item.payItemId ?? ''}
                       onChange={(selected) => selectPayItem(item.id, selected)}
                       fallbackLabel={item.itemNo || undefined}
+                      projectBoqItems={projectBoqItems}
                     />
                   )}
                 </td>
@@ -146,6 +174,10 @@ export function IarAccomplishmentTable({ items, onChange, readOnly }: Props) {
           >
             + Add accomplishment row
           </button>
+          <p className="mt-2 text-[11px] text-text-muted">
+            Type an Item No. to search this project&apos;s BOQ items (same list used by PDM / S-Curve).
+            Description and unit fill automatically.
+          </p>
         </div>
       )}
     </div>

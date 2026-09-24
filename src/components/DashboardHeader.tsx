@@ -5,6 +5,7 @@ import type { Role } from '../types';
 import { ROLE_LABELS } from '../types';
 import { AGENCY_NAME, OFFICE_NAME, SYSTEM_NAME } from '../lib/branding';
 import { CURRENT_PERIOD } from '../data/mockData';
+import { PageHeader } from './ui/PageHeader';
 
 const isReviewer = (role: Role) =>
   role === 'engineer_2' || role === 'engineer_3' || role === 'engineer_4';
@@ -60,64 +61,45 @@ export function DashboardHeader({ role, period }: DashboardHeaderProps) {
   const hideBadge = isReviewer(role);
 
   return (
-    <>
-      <header className="border-b border-border bg-card/80 px-8 py-4 backdrop-blur">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-text-muted">
-              {SYSTEM_NAME} · {OFFICE_NAME}
-            </p>
-            <p className="text-xs text-text-muted">
-              {AGENCY_NAME} — Email-based Progress Monitoring
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="flex items-center gap-2 rounded-full border border-border bg-surface-muted px-3 py-1.5 text-xs text-text-muted">
-              <span className="h-1.5 w-1.5 rounded-full bg-primary" />
-              {SYSTEM_NAME}
-            </span>
-            <span className="rounded-lg border border-border bg-surface-muted px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-text-muted">
-              Signed in
-            </span>
-          </div>
-        </div>
-      </header>
-
-      <div className="px-8 py-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            {!hideBadge && (
-              <span className="inline-block rounded-full bg-primary-light px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-primary">
-                Dashboard
-              </span>
-            )}
-            <h1 className={`${hideBadge ? '' : 'mt-3 '}text-2xl font-bold text-text`}>{cfg.title}</h1>
-            {cfg.description && (
-              <p className="mt-2 max-w-2xl text-sm text-text-muted">{cfg.description}</p>
-            )}
-            {period && !isReviewer(role) && (
-              <p className="mt-1 text-xs font-medium text-primary">Reporting period: {period}</p>
-            )}
-          </div>
-          {cfg.primaryAction && cfg.primaryLink && (
-            cfg.primaryLink.startsWith('#') ? (
-              <a
-                href={cfg.primaryLink}
-                className="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-dark"
-              >
-                {cfg.primaryAction}
-              </a>
-            ) : (
-              <Link
-                to={cfg.primaryLink}
-                className="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-dark"
-              >
-                {cfg.primaryAction}
-              </Link>
-            )
-          )}
-        </div>
+    <div className="space-y-3 px-8 pb-2 pt-6">
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/80 bg-card/80 px-3 py-2 text-[11px] text-text-muted shadow-sm">
+        <p className="font-semibold uppercase tracking-widest">
+          {SYSTEM_NAME} · {OFFICE_NAME}
+        </p>
+        <p className="truncate">{AGENCY_NAME}</p>
       </div>
-    </>
+
+      <PageHeader
+        badge={hideBadge ? undefined : 'Dashboard'}
+        title={cfg.title}
+        description={cfg.description ?? undefined}
+        actions={
+          <>
+            {period && !isReviewer(role) ? (
+              <span className="rounded-lg border border-border bg-surface-muted px-2.5 py-1.5 text-[11px] font-medium text-text">
+                Period: <span className="font-semibold text-primary">{period}</span>
+              </span>
+            ) : null}
+            {cfg.primaryAction && cfg.primaryLink ? (
+              cfg.primaryLink.startsWith('#') ? (
+                <a
+                  href={cfg.primaryLink}
+                  className="shrink-0 rounded-lg bg-primary px-2.5 py-1.5 text-[11px] font-semibold text-white shadow-sm transition hover:bg-primary-dark"
+                >
+                  {cfg.primaryAction}
+                </a>
+              ) : (
+                <Link
+                  to={cfg.primaryLink}
+                  className="shrink-0 rounded-lg bg-primary px-2.5 py-1.5 text-[11px] font-semibold text-white shadow-sm transition hover:bg-primary-dark"
+                >
+                  {cfg.primaryAction}
+                </Link>
+              )
+            ) : null}
+          </>
+        }
+      />
+    </div>
   );
 }

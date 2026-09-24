@@ -1,5 +1,6 @@
 'use client';
 
+import type { CSSProperties } from 'react';
 import type { PdmActivity } from '../types';
 import { PDM_START_NODE_H, PDM_START_NODE_W, PDM_END_NODE_H, PDM_END_NODE_W } from '../lib/pdmLayout';
 
@@ -13,9 +14,10 @@ interface PdmNodeProps {
   x: number;
   y: number;
   onMainCriticalPath?: boolean;
+  style?: CSSProperties;
 }
 
-export function PdmNode({ activity, x, y, onMainCriticalPath = false }: PdmNodeProps) {
+export function PdmNode({ activity, x, y, onMainCriticalPath = false, style }: PdmNodeProps) {
   const w = PDM_NODE_W;
   const h = PDM_NODE_H;
   const row1 = 28;
@@ -23,18 +25,26 @@ export function PdmNode({ activity, x, y, onMainCriticalPath = false }: PdmNodeP
   const displayName = activity.name?.trim() || `Activity ${activity.number}`;
 
   return (
-    <g transform={`translate(${x - w / 2}, ${y - h / 2})`}>
+    <g className="pdm-node-in" style={style} transform={`translate(${x - w / 2}, ${y - h / 2})`}>
       <title>
         {displayName}
         {activity.extendToEnd ? ' (until project end)' : ''}
       </title>
       <rect
+        x={1.5}
+        y={2.5}
         width={w}
         height={h}
-        rx={4}
+        rx={5}
+        fill="rgba(15, 28, 46, 0.06)"
+      />
+      <rect
+        width={w}
+        height={h}
+        rx={5}
         fill={onMainCriticalPath ? '#fef2f2' : activity.extendToEnd ? '#f8faf8' : '#fff'}
-        stroke={onMainCriticalPath ? '#dc2626' : activity.extendToEnd ? '#6b7c72' : '#4a6353'}
-        strokeWidth={onMainCriticalPath ? 2.75 : 1.5}
+        stroke={onMainCriticalPath ? '#dc2626' : activity.extendToEnd ? '#6b7c72' : '#0b3a5c'}
+        strokeWidth={onMainCriticalPath ? 2.5 : 1.5}
         strokeDasharray={activity.extendToEnd && !onMainCriticalPath ? '4 3' : undefined}
       />
 
@@ -107,13 +117,14 @@ export function PdmStartNode({ x, y }: PdmStartNodeProps) {
   const w = PDM_START_NODE_W;
   const h = PDM_START_NODE_H;
   return (
-    <g transform={`translate(${x - w / 2}, ${y - h / 2})`}>
+    <g className="pdm-node-in" transform={`translate(${x - w / 2}, ${y - h / 2})`}>
+      <rect x={1.5} y={2} width={w} height={h} rx={6} fill="rgba(15, 28, 46, 0.06)" />
       <rect
         width={w}
         height={h}
-        rx={4}
+        rx={6}
         fill="#fff"
-        stroke="#2c2c2a"
+        stroke="#0b3a5c"
         strokeWidth={2}
       />
       <text
@@ -133,13 +144,14 @@ export function PdmEndNode({ x, y }: PdmStartNodeProps) {
   const w = PDM_END_NODE_W;
   const h = PDM_END_NODE_H;
   return (
-    <g transform={`translate(${x - w / 2}, ${y - h / 2})`}>
+    <g className="pdm-node-in" transform={`translate(${x - w / 2}, ${y - h / 2})`}>
+      <rect x={1.5} y={2} width={w} height={h} rx={6} fill="rgba(15, 28, 46, 0.06)" />
       <rect
         width={w}
         height={h}
-        rx={4}
+        rx={6}
         fill="#fff"
-        stroke="#2c2c2a"
+        stroke="#0b3a5c"
         strokeWidth={2}
       />
       <text

@@ -5,44 +5,102 @@ import { Link, useParams, usePathname, useSearchParams } from '../lib/nextRouter
 import { Logo } from '../components/Logo';
 import { NavIcon } from '../components/NavIcon';
 import { useAuth } from '../context/AuthContext';
+import { downloadReportPreviewPdf } from '../lib/downloadReportPdf';
+import { buildOfficialReportHtml } from '../lib/officialReportHtml';
 import { trackReportViewed } from '../lib/recentViewed';
-import { getReport } from '../lib/swaStewaApi';
+import { buildReportPreviewHtml } from '../lib/reportVerification';
+import { getReport, type SwaStewaReport } from '../lib/swaStewaApi';
+
+function decodeKey(raw: string | null | undefined): string {
+  const value = String(raw ?? '').trim();
+  if (!value) return '';
+  try {
+    return decodeURIComponent(value.replace(/\+/g, ' ')).trim();
+  } catch {
+    return value;
+  }
+}
 
 export function PublicReportViewPage() {
   const { reportNumber: routeReportNumber } = useParams<{ reportNumber: string }>();
   const pathname = usePathname();
   const [searchParams] = useSearchParams();
-  const reportNumber =
+  const reportId = decodeKey(searchParams.get('id'));
+  const reportNumber = decodeKey(
     routeReportNumber
-    || searchParams.get('reportNumber')
-    || pathname.match(/\/reports\/view\/([^/]+)/)?.[1]
-    || '';
-  const { user } = useAuth();
+      || searchParams.get('reportNumber')
+      || pathname.match(/\/reports\/view\/([^/?#]+)/)?.[1]
+      || '',
+  );
+  const lookupKey = reportId || reportNumber;
+  const { user, loading: authLoading } = useAuth();
   const [loading, setLoading] = useState(true);
   const [valid, setValid] = useState(false);
-  const [verified, setVerified] = useState(false);
-  const [pdfUrl, setPdfUrl] = useState('');
-  const [report, setReport] = useState<Record<string, unknown> | null>(null);
+  const [previewHtml, setPreviewHtml] = useState('');
+  const [report, setReport] = useState<SwaStewaReport | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState('');
 
   useEffect(() => {
-    if (!reportNumber) {
+    if (authLoading) return;
+
+    if (!lookupKey) {
       setLoading(false);
+      setValid(false);
+      setReport(null);
       return;
     }
-    getReport(reportNumber)
-      .then((res) => {
-        setValid(res.valid !== false);
-        setVerified(!!res.verified);
-        setPdfUrl(res.pdf_url || res.report.pdf_file || '');
-        setReport(res.report as unknown as Record<string, unknown>);
-        const id = (res.report as { id?: string } | undefined)?.id;
-        if (id) trackReportViewed(id);
-      })
-      .catch(() => setValid(false))
-      .finally(() => setLoading(false));
-  }, [reportNumber]);
 
-  if (loading) {
+    let cancelled = false;
+    setLoading(true);
+    getReport(lookupKey)
+      .then((res) => {
+        if (cancelled) return;
+        const loaded = res.report as SwaStewaReport;
+        setValid(res.valid !== false);
+        setReport(loaded);
+        const official = buildOfficialReportHtml(loaded);
+        setPreviewHtml(official || buildReportPreviewHtml(loaded));
+        if (loaded.id) trackReportViewed(loaded.id);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setValid(false);
+        setReport(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [lookupKey, authLoading]);
+
+  const handlePrint = () => {
+    const frame = document.getElementById('official-report-frame') as HTMLIFrameElement | null;
+    frame?.contentWindow?.print();
+  };
+
+  const handleDownloadPdf = async () => {
+    if (!report) return;
+    setDownloadError('');
+    setDownloading(true);
+    try {
+      const frame = document.getElementById('official-report-frame') as HTMLIFrameElement | null;
+      await downloadReportPreviewPdf({
+        fileName: `${report.report_number || report.report_type || 'report'}.pdf`,
+        pdfUrl: report.pdf_file,
+        frame,
+      });
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : 'Could not download PDF.');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  if (authLoading || loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-surface">
         <p className="text-text-muted">Loading report…</p>
@@ -65,114 +123,56 @@ export function PublicReportViewPage() {
     );
   }
 
-  const data = (report.report_data ?? {}) as Record<string, string>;
-  const status = String(report.status ?? '');
   const backTo = user ? '/reports' : '/';
-  const backLabel = user ? 'Reports Hub' : 'Return to home';
+  const backLabel = user ? 'Back to Documents' : 'Return to home';
 
   return (
     <div className="min-h-screen bg-surface">
-      <header className="border-b border-border bg-card px-6 py-4">
-        <Logo size="sm" showText={false} />
+      <header className="border-b border-border bg-card px-6 py-3">
+        <div className="mx-auto flex max-w-[1400px] flex-wrap items-center justify-between gap-3">
+          <Logo size="sm" showText={false} />
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              to={backTo}
+              className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2 text-sm font-semibold text-text shadow-sm transition hover:bg-surface-muted"
+            >
+              <NavIcon name="arrow-left" className="h-4 w-4" />
+              {backLabel}
+            </Link>
+            <button
+              type="button"
+              onClick={() => void handleDownloadPdf()}
+              disabled={downloading}
+              className="rounded-xl border border-border bg-card px-4 py-2 text-sm font-semibold text-text shadow-sm transition hover:bg-surface-muted disabled:opacity-50"
+            >
+              {downloading ? 'Preparing PDF…' : 'Download PDF'}
+            </button>
+            <button
+              type="button"
+              onClick={handlePrint}
+              className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark"
+            >
+              Print
+            </button>
+          </div>
+        </div>
+        {downloadError ? (
+          <p className="mx-auto mt-2 max-w-[1400px] text-sm text-red-600">{downloadError}</p>
+        ) : null}
       </header>
 
-      <div className="mx-auto max-w-4xl px-6 py-8">
-        <Link
-          to={backTo}
-          className="mb-6 inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-base font-semibold text-text shadow-sm transition hover:border-primary/50 hover:bg-primary-light hover:text-primary"
-        >
-          <NavIcon name="arrow-left" className="h-4 w-4" />
-          {backLabel}
-        </Link>
-
-        <div
-          className={`mb-6 rounded-2xl p-4 text-center ${
-            verified ? 'bg-primary-light text-primary' : 'bg-warning-bg text-warning'
-          }`}
-        >
-          <p className="text-lg font-bold">
-            {verified ? 'VERIFIED OFFICIAL REPORT' : 'Report pending verification'}
-          </p>
-          <p className="text-sm">Generated by the Project Monitoring System</p>
-        </div>
-
-        <div className="grid gap-6 md:grid-cols-2">
-          <section className="rounded-2xl border border-border bg-card p-5 shadow-sm">
-            <h2 className="font-semibold text-text">Project information</h2>
-            <dl className="mt-3 space-y-2 text-sm">
-              <div className="flex justify-between gap-4">
-                <dt className="text-text-muted">Project name</dt>
-                <dd className="text-right font-medium">{data.project_name}</dd>
-              </div>
-              <div className="flex justify-between gap-4">
-                <dt className="text-text-muted">Location</dt>
-                <dd>{data.location}</dd>
-              </div>
-              <div className="flex justify-between gap-4">
-                <dt className="text-text-muted">Contractor</dt>
-                <dd>{data.contractor}</dd>
-              </div>
-              <div className="flex justify-between gap-4">
-                <dt className="text-text-muted">Contract amount</dt>
-                <dd>{data.contract_amount}</dd>
-              </div>
-            </dl>
-          </section>
-
-          <section className="rounded-2xl border border-border bg-card p-5 shadow-sm">
-            <h2 className="font-semibold text-text">Report information</h2>
-            <dl className="mt-3 space-y-2 text-sm">
-              <div className="flex justify-between gap-4">
-                <dt className="text-text-muted">Report number</dt>
-                <dd className="font-mono font-medium">{String(report.report_number)}</dd>
-              </div>
-              <div className="flex justify-between gap-4">
-                <dt className="text-text-muted">Report type</dt>
-                <dd>{String(report.report_type)}</dd>
-              </div>
-              <div className="flex justify-between gap-4">
-                <dt className="text-text-muted">Date generated</dt>
-                <dd>{report.generated_at ? String(report.generated_at).slice(0, 10) : '—'}</dd>
-              </div>
-              <div className="flex justify-between gap-4">
-                <dt className="text-text-muted">Status</dt>
-                <dd className="capitalize">{status.replace('_', ' ')}</dd>
-              </div>
-            </dl>
-          </section>
-        </div>
-
-        {pdfUrl && (
-          <section className="mt-8 rounded-2xl border border-border bg-card p-5 shadow-sm">
-            <div className="mb-4 flex flex-wrap gap-3">
-              <a
-                href={pdfUrl}
-                download
-                className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark"
-              >
-                Download PDF
-              </a>
-              <button
-                type="button"
-                onClick={() => window.open(pdfUrl, '_blank')?.print()}
-                className="rounded-xl border border-border px-4 py-2 text-sm font-medium hover:bg-surface-muted"
-              >
-                Print PDF
-              </button>
-            </div>
-            <iframe
-              title="Official PDF"
-              src={pdfUrl}
-              className="h-[70vh] w-full rounded-xl border border-border"
-            />
-          </section>
-        )}
-
-        {!pdfUrl && verified === false && (
-          <p className="mt-6 text-center text-sm text-text-muted">
-            Official PDF is available after approval.
-          </p>
-        )}
+      <div className="mx-auto max-w-[1400px] px-3 py-4 sm:px-6">
+        <p className="mb-3 text-center text-sm text-text-muted">
+          {report.report_type} · {report.report_number}
+        </p>
+        <section className="overflow-hidden rounded-2xl border border-border bg-white shadow-sm">
+          <iframe
+            id="official-report-frame"
+            title={`${report.report_number} official report`}
+            srcDoc={previewHtml}
+            className="h-[calc(100vh-140px)] min-h-[640px] w-full border-0 bg-white"
+          />
+        </section>
       </div>
     </div>
   );

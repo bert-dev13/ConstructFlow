@@ -16,29 +16,185 @@ export const PDM_END_NODE_W = PDM_START_NODE_W;
 export const PDM_END_NODE_H = PDM_START_NODE_H;
 export const PDM_END_HALF_W = PDM_START_HALF_W;
 export const PDM_END_HALF_H = PDM_START_HALF_H;
-export const PDM_BUS_STUB = 14;
+export const PDM_BUS_STUB = 16;
+/** Marker tip sits on the node edge; keep last segment long enough for clean orientation. */
+export const PDM_ARROW_INSET = 0;
+
+/**
+ * Orthogonal polyline with rounded elbows so arrow approaches stay horizontal
+ * into the successor and leave horizontally from the predecessor.
+ */
+export function roundedOrthoPath(
+  points: Array<{ x: number; y: number }>,
+  radius = 10,
+): string {
+  if (points.length < 2) return '';
+  if (points.length === 2) {
+    return `M ${points[0].x} ${points[0].y} L ${points[1].x} ${points[1].y}`;
+  }
+
+  let d = `M ${points[0].x} ${points[0].y}`;
+  for (let i = 1; i < points.length - 1; i += 1) {
+    const prev = points[i - 1];
+    const curr = points[i];
+    const next = points[i + 1];
+    const dx1 = curr.x - prev.x;
+    const dy1 = curr.y - prev.y;
+    const dx2 = next.x - curr.x;
+    const dy2 = next.y - curr.y;
+    const len1 = Math.hypot(dx1, dy1);
+    const len2 = Math.hypot(dx2, dy2);
+    const r = Math.min(radius, len1 / 2, len2 / 2);
+
+    if (r < 0.75 || len1 < 1 || len2 < 1) {
+      d += ` L ${curr.x} ${curr.y}`;
+      continue;
+    }
+
+    const x1 = curr.x - (dx1 / len1) * r;
+    const y1 = curr.y - (dy1 / len1) * r;
+    const x2 = curr.x + (dx2 / len2) * r;
+    const y2 = curr.y + (dy2 / len2) * r;
+    d += ` L ${x1} ${y1} Q ${curr.x} ${curr.y} ${x2} ${y2}`;
+  }
+  const last = points[points.length - 1];
+  d += ` L ${last.x} ${last.y}`;
+  return d;
+}
 
 /**
  * Elbow from predecessor → successor.
- * Same row: straight. Successor to the right: run along the predecessor row,
- * then turn up/down beside the successor (do not cut vertically through other nodes).
- * Successor left/below: short stub, then vertical near the predecessor.
+ * Always finishes with a horizontal approach into the left edge of the target
+ * so arrowheads stay level and dock flush against the node.
  */
 export function dependencyEdge(
   from: { x: number; y: number },
   to: { x: number; y: number },
   nodeHalfW: number = PDM_ACTIVITY_HALF_W,
-): { d: string } {
+  options?: {
+    attachOffsetY?: number;
+    laneOffsetX?: number;
+    startOffsetY?: number;
+    nodeHalfH?: number;
+    cornerRadius?: number;
+  },
+): { d: string; endX: number; endY: number; labelX: number; labelY: number } {
+  const attachOffsetY = options?.attachOffsetY ?? 0;
+  const laneOffsetX = options?.laneOffsetX ?? 0;
+  const startOffsetY = options?.startOffsetY ?? 0;
+  const nodeHalfH = options?.nodeHalfH ?? 48;
+  const cornerRadius = options?.cornerRadius ?? 10;
+  const maxAttach = Math.max(8, nodeHalfH - 16);
+  const yAttach = to.y + Math.max(-maxAttach, Math.min(maxAttach, attachOffsetY));
+  const yStart = from.y + Math.max(-maxAttach, Math.min(maxAttach, startOffsetY));
+
   const x1 = from.x + nodeHalfW;
-  const y1 = from.y;
-  const x2 = to.x - nodeHalfW;
-  const y2 = to.y;
-  if (Math.abs(y1 - y2) < 8 && x2 > x1) {
-    return { d: `M ${x1} ${y1} L ${x2} ${y2}` };
+  const y1 = yStart;
+  // Dock exactly on the left edge so the marker tip sits flush.
+  const x2 = to.x - nodeHalfW - PDM_ARROW_INSET;
+  const y2 = yAttach;
+  const sameRow = Math.abs(from.y - to.y) < 8;
+  const gap = x2 - x1;
+
+  let points: Array<{ x: number; y: number }>;
+
+  if (sameRow && gap > 24) {
+    if (Math.abs(y1 - y2) < 0.5) {
+      points = [
+        { x: x1, y: y1 },
+        { x: x2, y: y2 },
+      ];
+    } else {
+      // Keep the vertical jog near the target, with enough final horizontal run
+      // for the arrowhead to orient correctly.
+      const turnX = Math.max(x1 + 20, x2 - Math.max(22, Math.min(36, gap * 0.28)));
+      points = [
+        { x: x1, y: y1 },
+        { x: turnX, y: y1 },
+        { x: turnX, y: y2 },
+        { x: x2, y: y2 },
+      ];
+    }
+  } else if (gap > 40) {
+    // Place the vertical corridor in the open column gap, then approach horizontally.
+    const midX = x1 + Math.max(28, Math.min(gap * 0.42, gap - 28)) + laneOffsetX;
+    points = [
+      { x: x1, y: y1 },
+      { x: midX, y: y1 },
+      { x: midX, y: y2 },
+      { x: x2, y: y2 },
+    ];
+  } else {
+    // Tight / reverse gaps: short outbound stub, then vertical, then into target.
+    const stub = Math.max(14, Math.min(22, Math.abs(gap) * 0.35 || 14));
+    const midX = (gap > 0 ? x1 + stub : x1 + stub) + laneOffsetX;
+    points = [
+      { x: x1, y: y1 },
+      { x: midX, y: y1 },
+      { x: midX, y: y2 },
+      { x: x2, y: y2 },
+    ];
   }
-  const stub = 18;
-  const midX = x2 > x1 + stub ? x2 - stub : x1 + stub;
-  return { d: `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}` };
+
+  const labelX = (points[0].x + points[points.length - 1].x) / 2;
+  const labelY =
+    points.length >= 3
+      ? (points[1].y + points[points.length - 2].y) / 2
+      : (y1 + y2) / 2;
+
+  return {
+    d: roundedOrthoPath(points, cornerRadius),
+    endX: x2,
+    endY: y2,
+    labelX,
+    labelY: labelY - 10,
+  };
+}
+
+/** Branch from project start into a first-column activity. */
+export function startActivityBranchPath(
+  start: { x: number; y: number },
+  activity: { x: number; y: number },
+  startHalfW: number = PDM_START_HALF_W,
+  nodeHalfW: number = PDM_ACTIVITY_HALF_W,
+): { d: string; endX: number; endY: number } {
+  const x1 = start.x + startHalfW;
+  const y1 = start.y;
+  const x2 = activity.x - nodeHalfW;
+  const y2 = activity.y;
+  const points =
+    Math.abs(y1 - y2) < 1
+      ? [
+          { x: x1, y: y1 },
+          { x: x2, y: y2 },
+        ]
+      : [
+          { x: x1, y: y1 },
+          { x: x1 + PDM_BUS_STUB, y: y1 },
+          { x: x1 + PDM_BUS_STUB, y: y2 },
+          { x: x2, y: y2 },
+        ];
+  return {
+    d: roundedOrthoPath(points, 8),
+    endX: x2,
+    endY: y2,
+  };
+}
+
+/** Spread incoming dependency lanes so edges do not share one attach point. */
+export function dependencyLaneOffsets(
+  count: number,
+  spacing = 28,
+): { attachOffsetY: number; laneOffsetX: number }[] {
+  if (count <= 1) return [{ attachOffsetY: 0, laneOffsetX: 0 }];
+  const mid = (count - 1) / 2;
+  return Array.from({ length: count }, (_, index) => {
+    const slot = index - mid;
+    return {
+      attachOffsetY: slot * spacing,
+      laneOffsetX: slot * 12,
+    };
+  });
 }
 
 /** Column x — index 0 is first ES column after the Start node. */
@@ -95,18 +251,27 @@ export function layoutPaperNetwork(
     return fallback;
   }
 
-  for (const es of uniqueEs) {
+    for (const es of uniqueEs) {
     const col = colByEs.get(es) ?? 0;
     const group = core
       .filter((activity) => (activity.es ?? 0) === es)
       .map((activity, index) => {
-        const predecessorYs = (incomingById.get(activity.id) ?? [])
-          .map((dep) => map[dep.fromId]?.y)
-          .filter((y): y is number => y != null);
-        const idealY =
-          predecessorYs.length > 0
-            ? predecessorYs.reduce((sum, y) => sum + y, 0) / predecessorYs.length
-            : PDM_ORIGIN_Y + index * PDM_ROW_H;
+        const incoming = incomingById.get(activity.id) ?? [];
+        let idealY = PDM_ORIGIN_Y + index * PDM_ROW_H;
+        if (incoming.length > 0) {
+          // With multiple predecessors, center the box on the average predecessor Y
+          // so feeders align cleanly around the activity (REVISIONS visual rule).
+          const predYs: number[] = [];
+          for (const dep of incoming) {
+            const predPos = map[dep.fromId];
+            if (predPos) predYs.push(predPos.y);
+          }
+          if (predYs.length === 1) {
+            idealY = predYs[0]!;
+          } else if (predYs.length > 1) {
+            idealY = predYs.reduce((sum, y) => sum + y, 0) / predYs.length;
+          }
+        }
         return { activity, idealY };
       })
       .sort(
@@ -264,14 +429,28 @@ export function endActivityBranchPath(
 
   if (isRightmost || aloneOnRow) {
     return {
-      d: `M ${x1} ${y} L ${busX} ${y}`,
+      d: roundedOrthoPath(
+        [
+          { x: x1, y },
+          { x: busX, y },
+        ],
+        8,
+      ),
       attachY: y,
     };
   }
 
   const laneY = y + nodeHalfH + 12;
   return {
-    d: `M ${x1} ${y} L ${stubX} ${y} L ${stubX} ${laneY} L ${busX} ${laneY}`,
+    d: roundedOrthoPath(
+      [
+        { x: x1, y },
+        { x: stubX, y },
+        { x: stubX, y: laneY },
+        { x: busX, y: laneY },
+      ],
+      8,
+    ),
     attachY: laneY,
   };
 }

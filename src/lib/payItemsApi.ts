@@ -1,5 +1,7 @@
 import {
   createPayItem as createPayItemFs,
+  deletePayItem as deletePayItemFs,
+  getPayItem as getPayItemFs,
   listPayItems as listPayItemsFs,
   setPayItemActive as setPayItemActiveFs,
   updatePayItem as updatePayItemFs,
@@ -13,6 +15,10 @@ export function listPayItems(includeInactive = true) {
   return listPayItemsFs(includeInactive);
 }
 
+export function getPayItem(id: string) {
+  return getPayItemFs(id);
+}
+
 export function createPayItem(input: PayItemInput, actorId: string) {
   return createPayItemFs(input, actorId);
 }
@@ -23,4 +29,8 @@ export function updatePayItem(id: string, input: PayItemInput, actorId: string) 
 
 export function setPayItemActive(id: string, active: boolean) {
   return setPayItemActiveFs(id, active);
+}
+
+export function deletePayItem(id: string) {
+  return deletePayItemFs(id);
 }

@@ -4,6 +4,8 @@ import {
   directArchiveProjectFs,
   getProjectFs,
   listContractorsFs,
+  listEngineerOnesFs,
+  listEngineerTwosFs,
   listProjectsFs,
   requestProjectArchiveFs,
   restoreArchivedProjectFs,
@@ -26,6 +28,8 @@ export interface ProjectRow {
   contractor_id?: string | null;
   contractor_name?: string | null;
   contract_amount?: number | null;
+  assigned_user_ids?: string[];
+  involved_user_ids?: string[];
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -71,6 +75,8 @@ export interface ProjectInput {
   status?: string;
   contractor_id?: string | null;
   contract_amount?: number | null;
+  assigned_user_ids?: string[];
+  involved_user_ids?: string[];
 }
 
 export interface ProjectListOptions {
@@ -85,6 +91,16 @@ export async function listProjects(options?: ProjectListOptions) {
 export async function listContractors() {
   const contractors = await listContractorsFs();
   return { contractors };
+}
+
+export async function listEngineerOnes() {
+  const engineers = await listEngineerOnesFs();
+  return { engineers };
+}
+
+export async function listEngineerTwos() {
+  const engineers = await listEngineerTwosFs();
+  return { engineers };
 }
 
 export async function getProject(id: string | number) {

@@ -1,6 +1,13 @@
 'use client';
 
-import { AGENCY_NAME, OFFICE_NAME, SYSTEM_LOGO, SYSTEM_NAME } from '../lib/branding';
+import { useState } from 'react';
+import {
+  AGENCY_NAME,
+  OFFICE_NAME,
+  SYSTEM_LOGO,
+  SYSTEM_LOGO_FALLBACK,
+  SYSTEM_NAME,
+} from '../lib/branding';
 
 interface LogoProps {
   size?: 'sm' | 'md' | 'lg' | 'xl';
@@ -17,13 +24,20 @@ const HEIGHT: Record<NonNullable<LogoProps['size']>, string> = {
 };
 
 export function Logo({ size = 'md', showText = true, className = '' }: LogoProps) {
+  const [src, setSrc] = useState(SYSTEM_LOGO);
+
   return (
     <div className={`flex flex-col gap-1.5 ${className}`.trim()}>
       <img
-        src={SYSTEM_LOGO}
+        src={src}
         alt={SYSTEM_NAME}
         title={`${SYSTEM_NAME} - ${OFFICE_NAME}`}
         className={`${HEIGHT[size]} w-auto max-w-full object-contain`}
+        decoding="async"
+        loading="eager"
+        onError={() => {
+          if (src !== SYSTEM_LOGO_FALLBACK) setSrc(SYSTEM_LOGO_FALLBACK);
+        }}
       />
       {showText && (
         <p className="text-[10px] font-medium uppercase tracking-wider text-text-muted">

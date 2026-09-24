@@ -6,12 +6,15 @@ import { useAuth } from '../context/AuthContext';
 import { useSelectedProject } from '../context/SelectedProjectContext';
 import { ProjectSelect } from './ProjectSelect';
 import { ReportTypeBadge, StatusBadge } from './ui/StatusBadge';
+import { PageHeader } from './ui/PageHeader';
+import { Pagination } from './ui/Pagination';
 import { NavIcon } from './NavIcon';
 import { AGENCY_NAME, OFFICE_NAME, SYSTEM_NAME } from '../lib/branding';
 import { getDashboardStats, type DashboardData } from '../lib/dashboardApi';
 import { listProjects, type ProjectRow } from '../lib/projectsApi';
 import { listReports, type SwaStewaReport } from '../lib/swaStewaApi';
 import { canEditReport } from '../lib/reportPermissions';
+import { usePagination } from '../hooks/usePagination';
 
 const ACTIONABLE_STATUSES = new Set([
   'draft',
@@ -63,7 +66,7 @@ function reportHref(report: SwaStewaReport) {
   if (canEditReport('engineer_1', report.report_type, report.status)) {
     return `/swa-stewa/edit?id=${encodeURIComponent(report.id)}`;
   }
-  return `/reports/view/${encodeURIComponent(report.report_number)}`;
+  return `/reports/view?id=${encodeURIComponent(report.id)}`;
 }
 
 export function EngineerIDashboard() {
@@ -78,12 +81,15 @@ export function EngineerIDashboard() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    Promise.all([getDashboardStats(), listProjects(), listReports()])
-      .then(([dashboard, projectRes, reportRes]) => {
+    // Avoid triple-fetch: dashboard stats already loads projects + reports internally.
+    Promise.all([listProjects(), listReports()])
+      .then(async ([projectRes, reportRes]) => {
         if (cancelled) return;
-        setStats(dashboard);
         setProjects(projectRes.projects);
         setReports(reportRes.reports);
+        // Stats reuse the same short-lived list cache, so this is cheap.
+        const dashboard = await getDashboardStats();
+        if (!cancelled) setStats(dashboard);
       })
       .catch(() => {
         if (cancelled) return;
@@ -122,6 +128,7 @@ export function EngineerIDashboard() {
   );
 
   const delayedProjects = useMemo(() => projects.filter(isDelayed), [projects]);
+  const projectPaging = usePagination(projects);
 
   const draftCount =
     stats?.counts.my_drafts ?? workQueue.filter((r) => r.status === 'draft').length;
@@ -136,55 +143,46 @@ export function EngineerIDashboard() {
 
   return (
     <main className="flex-1 overflow-y-auto bg-surface">
-      <header className="border-b border-border bg-card px-8 py-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-text-muted">
-              {SYSTEM_NAME} · {OFFICE_NAME}
-            </p>
-            <p className="text-xs text-text-muted">{AGENCY_NAME}</p>
-          </div>
-          <p className="rounded border border-border bg-surface-muted px-3 py-1.5 text-xs font-medium text-text">
-            Reporting period:{' '}
-            <span className="font-semibold text-primary">
-              {loading ? '…' : (stats?.period ?? '—')}
-            </span>
+      <div className="space-y-3 px-8 pb-2 pt-6">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/80 bg-card px-3 py-2 text-[11px] text-text-muted shadow-sm">
+          <p className="font-semibold uppercase tracking-widest">
+            {SYSTEM_NAME} · {OFFICE_NAME}
           </p>
+          <p className="truncate">{AGENCY_NAME}</p>
         </div>
-      </header>
 
-      <div className="border-b border-border px-8 py-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-wider text-primary">
-              Engineer I workspace
-            </p>
-            <h1 className="mt-2 text-2xl font-bold text-text">Project monitoring & reporting</h1>
-            <p className="mt-2 max-w-2xl text-sm text-text-muted">
-              Track projects, open schedules, and prepare SWA, STEWA, and IAR reports for Engineer II
-              review.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Link
-              to="/reports"
-              className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-white hover:bg-primary-dark"
-            >
-              <NavIcon name="reports" className="h-4 w-4" />
-              Prepare report
-            </Link>
-            <Link
-              to="/workflow"
-              className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-semibold text-text hover:bg-surface-muted"
-            >
-              <NavIcon name="submissions" className="h-4 w-4" />
-              My submissions
-            </Link>
-          </div>
-        </div>
+        <PageHeader
+          badge="Engineer I workspace"
+          title="Project monitoring & reporting"
+          description="Track projects, open schedules, and prepare SWA, STEWA, and IAR reports for Engineer II review."
+          actions={
+            <>
+              <span className="rounded-lg border border-border bg-surface-muted px-2.5 py-1.5 text-[11px] font-medium text-text">
+                Period:{' '}
+                <span className="font-semibold text-primary">
+                  {loading ? '…' : (stats?.period ?? '—')}
+                </span>
+              </span>
+              <Link
+                to="/reports"
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-primary-dark"
+              >
+                <NavIcon name="reports" className="h-3.5 w-3.5" />
+                Prepare report
+              </Link>
+              <Link
+                to="/workflow"
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[11px] font-semibold text-text hover:bg-surface-muted"
+              >
+                <NavIcon name="submissions" className="h-3.5 w-3.5" />
+                My submissions
+              </Link>
+            </>
+          }
+        />
       </div>
 
-      <div className="space-y-8 px-8 py-8">
+      <div className="space-y-8 px-8 py-6">
         <section aria-labelledby="attention-heading">
           <h2
             id="attention-heading"
@@ -242,7 +240,8 @@ export function EngineerIDashboard() {
               Manage projects
             </Link>
           </div>
-          <div className="mt-3 overflow-x-auto border border-border bg-card">
+          <div className="mt-3 overflow-hidden border border-border bg-card">
+            <div className="overflow-x-auto">
             <table className="w-full min-w-[640px] text-left text-sm">
               <thead className="border-b border-border bg-surface-muted/60 text-xs uppercase tracking-wide text-text-muted">
                 <tr>
@@ -271,7 +270,7 @@ export function EngineerIDashboard() {
                     </td>
                   </tr>
                 ) : (
-                  projects.map((project) => {
+                  projectPaging.pageItems.map((project) => {
                     const delayed = isDelayed(project);
                     return (
                       <tr key={project.id} className="border-b border-border/70 last:border-0">
@@ -307,6 +306,16 @@ export function EngineerIDashboard() {
                 )}
               </tbody>
             </table>
+            </div>
+            <Pagination
+              page={projectPaging.page}
+              totalPages={projectPaging.totalPages}
+              total={projectPaging.total}
+              from={projectPaging.from}
+              to={projectPaging.to}
+              pageSize={projectPaging.pageSize}
+              onPageChange={projectPaging.setPage}
+            />
           </div>
         </section>
 

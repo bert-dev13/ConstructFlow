@@ -59,7 +59,11 @@ export const REFERENCE_TARGET_CUMULATIVE: Record<number, number> = {
 
 export function isReferenceProject(name: string | undefined | null): boolean {
   if (!name) return false;
-  return name.includes('Remebella') || name.includes(REFERENCE_PDM_TITLE.slice(0, 24));
+  return (
+    name.includes('Remebella') ||
+    name.includes('CATO-CONNER') ||
+    name.includes(REFERENCE_PDM_TITLE.slice(0, 24))
+  );
 }
 
 export function buildReferenceWorkItems(): WorkItem[] {

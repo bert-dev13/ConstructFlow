@@ -27,7 +27,8 @@ import type {
   SwaStewaStatus,
 } from '../swaStewaApi';
 import { COLLECTIONS, reportAuditPath, reportRevisionsPath } from './collections';
-import { getAccessContext, readProjectAccess } from './access';
+import { getAccessContext, getAccessibleProjectIds, readProjectAccess } from './access';
+import { chunkIds, mapPool, readListCache, writeListCache, invalidateListCache } from './listCache';
 import { db, functions, storage } from './config';
 import { asId, nowIso, omitUndefined } from './ids';
 import { syncProgressCharts } from './sCurves';
@@ -55,8 +56,13 @@ function enrichReportData(
   return data;
 }
 
-function publicReportUrl(reportNumber: string) {
-  return `${typeof window !== 'undefined' ? window.location.origin : ''}${BASE_URL}reports/view/${encodeURIComponent(reportNumber)}`;
+function publicReportUrl(reportNumber: string, reportId?: string) {
+  // Static export has no /reports/view/[slug] route — use query params on the
+  // existing /reports/view page. Prefer document id when available.
+  const qs = reportId
+    ? `id=${encodeURIComponent(reportId)}`
+    : `reportNumber=${encodeURIComponent(reportNumber)}`;
+  return `${typeof window !== 'undefined' ? window.location.origin : ''}${BASE_URL}reports/view/?${qs}`;
 }
 
 function stringArray(value: unknown): string[] {
@@ -265,6 +271,14 @@ async function writeAudit(
   });
 }
 
+function bumpReportsCache() {
+  invalidateListCache('reports:');
+  invalidateListCache('dashboard:');
+  // Progress feed powers Bar Chart / S-Curve — clear so charts refetch.
+  invalidateListCache('reportProgress:');
+  invalidateListCache('chartContext:');
+}
+
 async function nextReportNumber(type: string, reportDate?: string | null): Promise<string> {
   const ts = reportDate ? new Date(`${reportDate}T00:00:00`) : new Date();
   const year = ts.getFullYear();
@@ -296,63 +310,192 @@ export async function listReportsFs(params?: Record<string, string>) {
   const access = await getAccessContext();
   if (!access) return { reports: [] as SwaStewaReport[] };
   const reportType = params?.report_type ?? params?.type;
-  let qRef = query(collection(db, COLLECTIONS.reports));
-  if (access?.hasGlobalProjectAccess) {
-    if (params?.project_id) {
-      qRef = query(collection(db, COLLECTIONS.reports), where('projectId', '==', asId(params.project_id)));
+  const projectFilter = params?.project_id ? asId(params.project_id) : '';
+  const statusFilter = params?.status ?? '';
+  const cacheKey = `reports:${access.uid}:${projectFilter || 'all'}:${reportType || 'all'}:${statusFilter || 'all'}`;
+  const cached = readListCache<SwaStewaReport[]>(cacheKey);
+  if (cached) return { reports: cached };
+
+  const baseKey = `reports:${access.uid}:${projectFilter || 'all'}:all:all`;
+  const applyFilters = (rows: SwaStewaReport[]) => {
+    let reports = rows;
+    if (projectFilter) reports = reports.filter((r) => r.project_id === projectFilter);
+    if (statusFilter) reports = reports.filter((r) => r.status === statusFilter);
+    if (reportType) reports = reports.filter((r) => r.report_type === reportType);
+    return reports;
+  };
+
+  // Reuse the unfiltered (or project-scoped) set when type/status filters change.
+  if (reportType || statusFilter) {
+    const baseCached = readListCache<SwaStewaReport[]>(baseKey);
+    if (baseCached) {
+      const filtered = applyFilters(baseCached);
+      writeListCache(cacheKey, filtered, 20_000);
+      return { reports: filtered };
     }
-  } else if (access?.uid) {
-    if (params?.project_id) {
-      qRef = query(collection(db, COLLECTIONS.reports), where('projectId', '==', asId(params.project_id)));
-    } else {
-      qRef = query(
-        collection(db, COLLECTIONS.reports),
-        where('accessUserIds', 'array-contains', access.uid),
+  }
+
+  const loadByProjectIds = async (projectIds: string[]) => {
+    if (!projectIds.length) return [] as SwaStewaReport[];
+    // Firestore `in` supports ≤30 values — far fewer round-trips than one query per project.
+    const chunks = chunkIds(projectIds, 30);
+    const snaps = await mapPool(chunks, 4, async (chunk) => {
+      try {
+        if (chunk.length === 1) {
+          return await getDocs(
+            query(collection(db, COLLECTIONS.reports), where('projectId', '==', chunk[0])),
+          );
+        }
+        return await getDocs(
+          query(collection(db, COLLECTIONS.reports), where('projectId', 'in', chunk)),
+        );
+      } catch {
+        // Fallback: per-id queries if `in` is denied by rules.
+        const perId = await mapPool(chunk, 6, async (projectId) => {
+          try {
+            return await getDocs(
+              query(collection(db, COLLECTIONS.reports), where('projectId', '==', projectId)),
+            );
+          } catch {
+            return null;
+          }
+        });
+        return { docs: perId.flatMap((s) => (s ? s.docs : [])) };
+      }
+    });
+    const byId = new Map<string, SwaStewaReport>();
+    for (const snap of snaps) {
+      for (const reportDoc of snap.docs) {
+        byId.set(reportDoc.id, mapReport(reportDoc.id, reportDoc.data() as Record<string, unknown>));
+      }
+    }
+    return [...byId.values()];
+  };
+
+  let reports: SwaStewaReport[] = [];
+
+  if (access.hasGlobalProjectAccess) {
+    try {
+      const qRef = projectFilter
+        ? query(collection(db, COLLECTIONS.reports), where('projectId', '==', projectFilter))
+        : query(collection(db, COLLECTIONS.reports));
+      const snap = await getDocs(qRef);
+      reports = snap.docs.map((d) => mapReport(d.id, d.data() as Record<string, unknown>));
+    } catch {
+      reports = await loadByProjectIds(
+        projectFilter ? [projectFilter] : await getAccessibleProjectIds(access.uid),
       );
     }
+  } else if (access.uid) {
+    if (projectFilter) {
+      reports = await loadByProjectIds([projectFilter]);
+    } else {
+      reports = await loadByProjectIds(await getAccessibleProjectIds(access.uid));
+      if (!reports.length) {
+        try {
+          const snap = await getDocs(
+            query(collection(db, COLLECTIONS.reports), where('accessUserIds', 'array-contains', access.uid)),
+          );
+          reports = snap.docs.map((d) => mapReport(d.id, d.data() as Record<string, unknown>));
+        } catch {
+          reports = [];
+        }
+      }
+    }
   }
-  const snap = await getDocs(qRef);
-  let reports = snap.docs.map((d) => mapReport(d.id, d.data() as Record<string, unknown>));
-  if (params?.project_id) {
-    reports = reports.filter((r) => r.project_id === asId(params.project_id));
-  }
-  if (params?.status) {
-    reports = reports.filter((r) => r.status === params.status);
-  }
-  if (reportType) {
-    reports = reports.filter((r) => r.report_type === reportType);
-  }
+
   reports.sort((a, b) => b.created_at.localeCompare(a.created_at));
-  return { reports };
+  writeListCache(baseKey, reports, 20_000);
+  const filtered = applyFilters(reports);
+  writeListCache(cacheKey, filtered, 20_000);
+  return { reports: filtered };
+}
+
+function decodeReportKey(raw: string): string {
+  const trimmed = String(raw || '').trim();
+  if (!trimmed) return '';
+  try {
+    return decodeURIComponent(trimmed.replace(/\+/g, ' ')).trim();
+  } catch {
+    return trimmed;
+  }
 }
 
 export async function getReportFs(idOrNumber: string) {
-  if (idOrNumber.includes('-') && !/^[A-Za-z0-9]{20,}$/.test(idOrNumber)) {
-    const q = query(
-      collection(db, COLLECTIONS.reports),
-      where('reportNumber', '==', idOrNumber),
-    );
-    const snap = await getDocs(q);
-    if (snap.empty) throw new Error('Report not found');
-    const d = snap.docs[0];
-    const report = mapReport(d.id, d.data() as Record<string, unknown>);
-    const verified = ['approved', 'generated'].includes(report.status);
-    return {
-      report,
-      valid: true,
-      verified,
-      pdf_url: report.pdf_file,
-    };
-  }
-  const snap = await getDoc(doc(db, COLLECTIONS.reports, idOrNumber));
-  if (!snap.exists()) throw new Error('Report not found');
-  const report = mapReport(snap.id, snap.data() as Record<string, unknown>);
-  return {
+  const key = decodeReportKey(idOrNumber);
+  if (!key) throw new Error('Report not found');
+
+  const wrap = (report: SwaStewaReport) => ({
     report,
     valid: true,
     verified: ['approved', 'generated'].includes(report.status),
     pdf_url: report.pdf_file,
-  };
+  });
+
+  // Prefer document ID lookup first. Seeded sample reports use hyphenated IDs
+  // (e.g. sample-18-pamplona-clinic-iar) that look like report numbers but are
+  // not — the old heuristic treated any hyphenated string as a reportNumber.
+  const byId = await getDoc(doc(db, COLLECTIONS.reports, key));
+  if (byId.exists()) {
+    return wrap(mapReport(byId.id, byId.data() as Record<string, unknown>));
+  }
+
+  // Rules-friendly path: resolve from reports the caller can already list
+  // (project-scoped / accessUserIds). Avoids a bare reportNumber collection
+  // query, which Firestore rejects when rules also check project membership.
+  try {
+    const { reports } = await listReportsFs();
+    const match = reports.find(
+      (report) => report.id === key || report.report_number === key,
+    );
+    if (match) {
+      const fresh = await getDoc(doc(db, COLLECTIONS.reports, match.id));
+      if (fresh.exists()) {
+        return wrap(mapReport(fresh.id, fresh.data() as Record<string, unknown>));
+      }
+      return wrap(match);
+    }
+  } catch {
+    /* fall through to public finalized lookup */
+  }
+
+  // Public finalized reports: constrain status so rules can authorize the query.
+  // Prefer equality on reportNumber (+ status). If that needs a missing composite
+  // index, or returns empty, fall back to a status-only query and match client-side.
+  const isMatch = (data: Record<string, unknown>) =>
+    String(data.reportNumber ?? '') === key || String(data.report_number ?? '') === key;
+
+  try {
+    const q = query(
+      collection(db, COLLECTIONS.reports),
+      where('reportNumber', '==', key),
+      where('status', 'in', ['approved', 'generated']),
+    );
+    const snap = await getDocs(q);
+    if (!snap.empty) {
+      const d = snap.docs[0];
+      return wrap(mapReport(d.id, d.data() as Record<string, unknown>));
+    }
+  } catch {
+    /* try status-only fallback below */
+  }
+
+  try {
+    const snap = await getDocs(
+      query(
+        collection(db, COLLECTIONS.reports),
+        where('status', 'in', ['approved', 'generated']),
+      ),
+    );
+    const d = snap.docs.find((docSnap) => isMatch(docSnap.data() as Record<string, unknown>));
+    if (d) {
+      return wrap(mapReport(d.id, d.data() as Record<string, unknown>));
+    }
+  } catch {
+    /* ignore — surface a clear not-found below */
+  }
+
+  throw new Error('Report not found');
 }
 
 export async function markReportViewedFs(reportId: string | number) {
@@ -375,7 +518,7 @@ export async function verifyReportQrFs(qr: string) {
       const byNumber = await getReportFs(qr);
       const verified = ['approved', 'generated'].includes(byNumber.report.status);
       return {
-        valid: verified,
+        valid: true,
         verified,
         report: byNumber.report,
         message: verified ? 'Report verified' : 'Report found but not yet approved',
@@ -387,7 +530,7 @@ export async function verifyReportQrFs(qr: string) {
   const report = mapReport(snap.docs[0].id, snap.docs[0].data() as Record<string, unknown>);
   const verified = ['approved', 'generated'].includes(report.status);
   return {
-    valid: verified,
+    valid: true,
     verified,
     report,
     message: verified ? 'Report verified' : 'Report found but not yet approved',
@@ -552,6 +695,7 @@ export async function saveReportFs(payload: {
       }
     }
     const snap = await getDoc(ref);
+    bumpReportsCache();
     return { report: mapReport(snap.id, snap.data() as Record<string, unknown>) };
   }
 
@@ -574,13 +718,14 @@ export async function saveReportFs(payload: {
     status: 'draft' as SwaStewaStatus,
     approvalFlow: initialApprovalFlow(payload.report_type) ?? null,
     releaseState: null,
-    publicUrl: publicReportUrl(reportNumber),
+    publicUrl: publicReportUrl(reportNumber, ref.id),
     createdBy: payload.created_by != null ? asId(payload.created_by) : null,
     createdAt: nowIso(),
     updatedAt: nowIso(),
   });
   await setDoc(ref, docData);
   await writeAudit(ref.id, 'created', { reportNumber }, payload.actor_name);
+  bumpReportsCache();
   return { report: mapReport(ref.id, docData as Record<string, unknown>) };
 }
 
@@ -652,6 +797,7 @@ export async function sendToContractorFs(reportId: string | number, actorName?: 
   });
   await writeAudit(id, 'sent_to_contractor', {}, actorName);
   await queueEmail(id, 'sent_to_contractor');
+  bumpReportsCache();
   return { status: 'pending_contractor' };
 }
 
@@ -696,6 +842,7 @@ export async function contractorConfirmFs(reportId: string | number, actorName?:
   });
   await writeAudit(id, 'contractor_confirmed', {}, actorName);
   const updated = await getDoc(ref);
+  bumpReportsCache();
   return {
     status: 'contractor_confirmed',
     report: mapReport(updated.id, updated.data() as Record<string, unknown>),
@@ -737,6 +884,7 @@ export async function submitReportFs(
   });
   await writeAudit(id, 'submitted', {}, actorName);
   await queueEmail(id, 'submitted_for_review');
+  bumpReportsCache();
   return { status: 'pending_review' };
 }
 
@@ -758,19 +906,26 @@ async function finalizeGenerated(reportId: string, actorName?: string) {
       await updateDoc(reportRef, { qrCode: payload.qr_code });
     }
   } catch {
-    // Client-side fallback: upload a simple HTML "certificate" as the report artifact
-    const html = `<!DOCTYPE html><html><body style="font-family:Georgia,serif;padding:40px">
-      <h1>ConstructFlow — ${String(data.reportType)} Report</h1>
-      <p><strong>Report Number:</strong> ${reportNumber}</p>
-      <p><strong>Project:</strong> ${String(data.projectName ?? data.projectId)}</p>
-      <p><strong>Status:</strong> Approved / Generated</p>
-      <p><strong>QR / Verify code:</strong> ${qrCode}</p>
-      <p>Generated at ${nowIso()}</p>
-    </body></html>`;
-    const fileRef = storageRef(storage, `reports/${reportId}/${reportNumber}.html`);
-    await uploadBytes(fileRef, new Blob([html], { type: 'text/html' }), {
-      contentType: 'text/html',
-    });
+    // Client-side fallback: generate a real PDF certificate with jsPDF.
+    const { jsPDF } = await import('jspdf');
+    const doc = new jsPDF();
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(16);
+    doc.setTextColor(11, 61, 46);
+    doc.text('ConstructFlow', 14, 22);
+    doc.setTextColor(0);
+    doc.setFontSize(13);
+    doc.text(`${String(data.reportType)} — Final Report`, 14, 32);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(11);
+    doc.text(`Report Number: ${reportNumber}`, 14, 44);
+    doc.text(`Project: ${String(data.projectName ?? data.projectId)}`, 14, 52);
+    doc.text('Status: Approved / Generated', 14, 60);
+    doc.text(`Verification code: ${qrCode}`, 14, 68);
+    doc.text(`Generated at ${nowIso()}`, 14, 76);
+    const blob = doc.output('blob');
+    const fileRef = storageRef(storage, `reports/${reportId}/${reportNumber}.pdf`);
+    await uploadBytes(fileRef, blob, { contentType: 'application/pdf' });
     pdfUrl = await getDownloadURL(fileRef);
   }
 
@@ -778,7 +933,7 @@ async function finalizeGenerated(reportId: string, actorName?: string) {
     status: 'generated',
     pdfPath: pdfUrl ?? null,
     qrCode,
-    publicUrl: publicReportUrl(reportNumber),
+    publicUrl: publicReportUrl(reportNumber, reportId),
     approvalFlow:
       String(data.reportType) === 'IAR'
         ? {
@@ -805,10 +960,11 @@ async function finalizeGenerated(reportId: string, actorName?: string) {
     /* schedule/s-curve optional */
   }
 
+  bumpReportsCache();
   return {
     status: 'generated',
     pdf_url: pdfUrl,
-    public_url: publicReportUrl(reportNumber),
+    public_url: publicReportUrl(reportNumber, reportId),
   };
 }
 
@@ -857,6 +1013,7 @@ export async function approveReportFs(
     });
     await writeAudit(id, 'approved_forwarded_e3', {}, actorName);
     await queueEmail(id, 'forwarded_e3');
+    bumpReportsCache();
     return { status: 'with_engineer_3', message: 'Forwarded to Engineer III for checking' };
   }
 
@@ -878,6 +1035,7 @@ export async function approveReportFs(
     });
     await writeAudit(id, 'approved_forwarded_e4', {}, actorName);
     await queueEmail(id, 'forwarded_e4');
+    bumpReportsCache();
     return { status: 'with_engineer_4', message: 'Forwarded to Engineer IV for final approval' };
   }
 
@@ -969,6 +1127,7 @@ export async function rejectReportFs(
   });
   await writeAudit(id, 'rejected', { reason }, actorName);
   await queueEmail(id, 'revision_requested', { reason });
+  bumpReportsCache();
   return { status: 'rejected' };
 }
 
@@ -1011,6 +1170,7 @@ export async function regeneratePdfFs(reportIdOrNumber: string | number, actorNa
 
 export async function deleteReportFs(reportId: string | number) {
   await deleteDoc(doc(db, COLLECTIONS.reports, asId(reportId)));
+  bumpReportsCache();
   return { ok: true };
 }
 

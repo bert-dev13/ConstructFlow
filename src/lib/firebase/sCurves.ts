@@ -2,7 +2,6 @@ import {
   collection,
   doc,
   getDoc,
-  getDocs,
   setDoc,
 } from 'firebase/firestore';
 import type { SCurvePoint } from '../../types';
@@ -33,9 +32,13 @@ import {
 import { COLLECTIONS, sCurveSnapshotsPath } from './collections';
 import { db } from './config';
 import { asId, nowIso } from './ids';
-import { listApprovedProgressForProject } from './reportProgress';
-import { getScheduleFs } from './schedules';
-import { getProjectFs } from './projects';
+import {
+  invalidateChartCaches,
+  loadProjectChartContext,
+  loadSCurveVersions,
+} from './chartContext';
+import { listProjectBoq } from './projectBoq';
+import { normalizePayItemNo } from './payItems';
 
 interface StoredSCurveCostItem {
   activityId: string;
@@ -186,21 +189,35 @@ export async function getSCurveFs(
   reportingInterval?: SCurveReportingInterval,
 ) {
   const id = asId(projectId);
-  const { project } = await getProjectFs(id);
-  const schedule = await getScheduleFs(id);
-  const feed = await listApprovedProgressForProject(id);
-  const { actualPct, latestReport, chronological } = resolveTargetAndActual(feed);
 
-  const start = project.start_date || nowIso().slice(0, 10);
+  // One shared context for the selected project + versions in parallel.
+  const [ctx, versions, snapshotPoints] = await Promise.all([
+    loadProjectChartContext(id),
+    loadSCurveVersions(id),
+    snapshotId != null && asId(snapshotId)
+      ? getDoc(doc(db, sCurveSnapshotsPath(id), asId(snapshotId)))
+          .then((snap) =>
+            snap.exists()
+              ? ((snap.data() as Record<string, unknown>).points as SCurvePoint[] | undefined) ??
+                null
+              : null,
+          )
+          .catch(() => null)
+      : Promise.resolve(null),
+  ]);
+
+  const schedule = ctx.schedule;
+  const feed = ctx.feed;
+  const { actualPct, latestReport, chronological } = resolveTargetAndActual(feed);
+  const start = ctx.projectStart;
   const duration = Math.max(1, schedule.projectDuration || 110);
 
-  // Persist live curve so all clients stay in sync
-  const curveRef = doc(db, COLLECTIONS.sCurves, id);
-  const existingCurve = await getDoc(curveRef);
-  const curveData = existingCurve.exists()
-    ? (existingCurve.data() as Record<string, unknown>)
-    : null;
-  const settingsBase = normalizeSCurveSettings(curveData, duration);
+  const settingsBase: SCurveSettingsState = {
+    curveType: ctx.settings.curveType,
+    reportingInterval: ctx.settings.reportingInterval,
+    theoreticalTotalPeriods: ctx.settings.theoreticalTotalPeriods,
+    theoreticalDurationDays: ctx.settings.theoreticalDurationDays,
+  };
   const settings =
     reportingInterval == null
       ? settingsBase
@@ -210,21 +227,47 @@ export async function getSCurveFs(
           theoreticalDurationDays:
             settingsBase.theoreticalTotalPeriods * intervalDays(reportingInterval),
         };
-  const storedCostItems = ((curveData?.costItems as StoredSCurveCostItem[] | undefined) ?? []).filter(
-    (item) => item && typeof item.activityId === 'string',
-  );
+
+  const storedCostItems = ctx.settings.costItems as StoredSCurveCostItem[];
   const storedCostByActivityId = new Map(storedCostItems.map((item) => [item.activityId, item]));
 
+  // Only hit BOQ when cost rows are missing for PDM activities (keeps full seeding intact).
+  const needsBoq =
+    schedule.activities.length > 0 &&
+    schedule.activities.some((activity) => !storedCostByActivityId.has(activity.id));
+
+  let boqByPayItemId = new Map<string, { programmedQty: number; unitPrice: number }>();
+  let boqByItemNo = new Map<string, { programmedQty: number; unitPrice: number }>();
+  if (needsBoq) {
+    try {
+      const boqRows = await listProjectBoq(id);
+      for (const row of boqRows) {
+        if (!row.active) continue;
+        const qty =
+          row.revisedQty != null && row.revisedQty > 0 ? row.revisedQty : row.programmedQty;
+        const values = { programmedQty: qty, unitPrice: row.unitPrice };
+        if (row.payItemId) boqByPayItemId.set(row.payItemId, values);
+        if (row.itemNo) boqByItemNo.set(normalizePayItemNo(row.itemNo), values);
+      }
+    } catch {
+      /* leave empty maps */
+    }
+  }
+
   const costSummary = computeSCurveCostSummary(
-    schedule.activities.map(
-      (activity): SCurveCostItemInput => ({
+    schedule.activities.map((activity): SCurveCostItemInput => {
+      const stored = storedCostByActivityId.get(activity.id);
+      const fromBoq =
+        (activity.payItemId ? boqByPayItemId.get(activity.payItemId) : undefined) ??
+        boqByItemNo.get(normalizePayItemNo(activity.number));
+      return {
         activityId: activity.id,
         itemNo: activity.number,
         description: activity.name,
-        quantity: Number(storedCostByActivityId.get(activity.id)?.quantity ?? 0),
-        unitCost: Number(storedCostByActivityId.get(activity.id)?.unitCost ?? 0),
-      }),
-    ),
+        quantity: Number(stored?.quantity ?? fromBoq?.programmedQty ?? 0),
+        unitCost: Number(stored?.unitCost ?? fromBoq?.unitPrice ?? 0),
+      };
+    }),
   );
   const periods =
     settings.curveType === 'ideal_theoretical'
@@ -272,15 +315,12 @@ export async function getSCurveFs(
   const effectiveTarget = latestTargetPeriod ? round2(latestTargetPeriod.cumulativePct) : null;
   const effectiveTargetPhp = latestTargetPeriod ? round2(latestTargetPeriod.cumulativePhp) : null;
 
-  if (snapshotId != null && asId(snapshotId)) {
-    const snapDoc = await getDoc(doc(db, sCurveSnapshotsPath(id), asId(snapshotId)));
-    if (snapDoc.exists()) {
-      const data = snapDoc.data() as Record<string, unknown>;
-      points = (data.points as SCurvePoint[]) ?? points;
-    }
+  if (snapshotPoints) {
+    points = snapshotPoints;
   } else {
-    await setDoc(
-      curveRef,
+    // Persist in the background — do not block the page render on Firestore write.
+    void setDoc(
+      doc(db, COLLECTIONS.sCurves, id),
       {
         projectId: id,
         points,
@@ -299,7 +339,9 @@ export async function getSCurveFs(
         updatedAt: nowIso(),
       },
       { merge: true },
-    );
+    ).catch(() => {
+      /* reviewers cannot write; ignore */
+    });
   }
 
   const status = compareTargetVsActual(effectiveTarget, actualPct);
@@ -355,22 +397,8 @@ export async function getSCurveFs(
           ]
         : [];
 
-  const versionsSnap = await getDocs(collection(db, sCurveSnapshotsPath(id)));
-  const versions: SCurveSnapshotSummary[] = versionsSnap.docs.map((d) => {
-    const data = d.data() as Record<string, unknown>;
-    return {
-      id: d.id,
-      captured_at: String(data.capturedAt ?? ''),
-      trigger_type: String(data.triggerType ?? 'manual'),
-      trigger_label: (data.triggerLabel as string | null) ?? null,
-      schedule_status: (data.scheduleStatus as string | null) ?? null,
-      slippage_pct: data.slippagePct != null ? Number(data.slippagePct) : null,
-      planned_pct: data.plannedPct != null ? Number(data.plannedPct) : null,
-      actual_pct: data.actualPct != null ? Number(data.actualPct) : null,
-    };
-  });
-  versions.sort((a, b) => b.captured_at.localeCompare(a.captured_at));
-  const projectEndDate = project.planned_end_date || periods[periods.length - 1]?.endDate || addDays(start, duration);
+  const projectEndDate =
+    ctx.projectPlannedEnd || periods[periods.length - 1]?.endDate || addDays(start, duration);
 
   return {
     project_id: id,
@@ -401,7 +429,7 @@ export async function getSCurveFs(
     target_plan_percent: effectiveTarget,
     target_plan_php: effectiveTargetPhp,
     actual_plan_percent: actualPct,
-    versions,
+    versions: versions as SCurveSnapshotSummary[],
     viewing_snapshot_id: snapshotId != null ? asId(snapshotId) : null,
     viewing_snapshot_label: null as string | null,
     viewing_snapshot_at: null as string | null,
@@ -410,6 +438,7 @@ export async function getSCurveFs(
 
 /** Rebuild and persist S-Curve after SWA/STEWA approve/update. */
 export async function syncProgressCharts(projectId: string) {
+  invalidateChartCaches(projectId);
   const curve = await getSCurveFs(projectId);
   const ref = doc(collection(db, sCurveSnapshotsPath(projectId)));
   await setDoc(ref, {
@@ -422,6 +451,7 @@ export async function syncProgressCharts(projectId: string) {
     plannedPct: curve.schedule_status.planned_pct,
     actualPct: curve.schedule_status.actual_pct,
   });
+  invalidateChartCaches(projectId);
   return curve;
 }
 
@@ -448,6 +478,7 @@ export async function recordSCurveSnapshot(
     plannedPct: meta.plannedPct ?? curve.schedule_status.planned_pct,
     actualPct: meta.actualPct ?? curve.schedule_status.actual_pct,
   });
+  invalidateChartCaches(projectId);
   return ref.id;
 }
 
@@ -456,7 +487,8 @@ export async function saveSCurveCostItemsFs(payload: {
   items: Array<{ activityId: string; quantity: number; unitCost: number }>;
 }) {
   const id = asId(payload.project_id);
-  const schedule = await getScheduleFs(id);
+  const ctx = await loadProjectChartContext(id);
+  const schedule = ctx.schedule;
   const incomingByActivityId = new Map(payload.items.map((item) => [item.activityId, item]));
   const summary = computeSCurveCostSummary(
     schedule.activities.map(
@@ -483,6 +515,7 @@ export async function saveSCurveCostItemsFs(payload: {
     },
     { merge: true },
   );
+  invalidateChartCaches(id);
 
   return {
     cost_items: summary.items as SCurveCostItem[],
@@ -498,14 +531,18 @@ export async function saveSCurveSettingsFs(payload: {
   theoretical_total_periods?: number;
 }) {
   const id = asId(payload.project_id);
-  const schedule = await getScheduleFs(id);
+  const ctx = await loadProjectChartContext(id);
+  const schedule = ctx.schedule;
   const normalized = normalizeSCurveSettings(
     {
       activeCurveType: payload.curve_type,
       reportingInterval: payload.reporting_interval,
       theoreticalTotalPeriods:
         payload.theoretical_total_periods ??
-        Math.max(1, Math.ceil(Math.max(1, schedule.projectDuration) / intervalDays(payload.reporting_interval))),
+        Math.max(
+          1,
+          Math.ceil(Math.max(1, schedule.projectDuration) / intervalDays(payload.reporting_interval)),
+        ),
     },
     schedule.projectDuration,
   );
@@ -521,6 +558,7 @@ export async function saveSCurveSettingsFs(payload: {
     },
     { merge: true },
   );
+  invalidateChartCaches(id);
 
   return {
     curve_type: normalized.curveType,

@@ -6,6 +6,7 @@ import {
 } from 'firebase/auth';
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -207,26 +208,26 @@ const ACTIVITY_LIBRARY = {
 } as const satisfies Record<string, ActivityTemplate[]>;
 
 const PROJECT_BLUEPRINTS: ProjectBlueprint[] = [
-  { index: 1, id: 'sample-01-san-vicente-fmr', name: 'SAMPLE - San Vicente Farm-to-Market Road Phase 2', location: 'San Vicente, Alcala, Cagayan', status: 'active', startDate: '2026-01-06', category: 'road', quantityScale: 1.05, unitCostScale: 1.02, contractorEmail: LOGIN_ACCOUNTS.contractor1.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_1.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_1.email], reportingInterval: '10_day', curveType: 'pdm_based', firstProgressPct: 18, secondProgressPct: 41, iarStatus: 'approved' },
-  { index: 2, id: 'sample-02-buguey-seawall', name: 'SAMPLE - Buguey Coastal Seawall Rehabilitation', location: 'Sta. Maria, Buguey, Cagayan', status: 'active', startDate: '2026-02-03', category: 'drainage', quantityScale: 1.12, unitCostScale: 1.08, contractorEmail: LOGIN_ACCOUNTS.contractor2.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_2.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_2.email], reportingInterval: '30_day', curveType: 'ideal_theoretical', firstProgressPct: 15, secondProgressPct: 33, iarStatus: 'pending_review' },
-  { index: 3, id: 'sample-03-amulung-waterline', name: 'SAMPLE - Amulung Cluster Waterline Expansion', location: 'Centro, Amulung, Cagayan', status: 'active', startDate: '2026-01-20', category: 'water', quantityScale: 1.08, unitCostScale: 1.11, contractorEmail: LOGIN_ACCOUNTS.contractor3.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_3.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_3.email], reportingInterval: '10_day', curveType: 'pdm_based', firstProgressPct: 20, secondProgressPct: 48, iarStatus: 'with_engineer_3' },
-  { index: 4, id: 'sample-04-aparri-evacuation', name: 'SAMPLE - Aparri Evacuation Center Annex', location: 'Macanaya, Aparri, Cagayan', status: 'active', startDate: '2026-03-02', category: 'building', quantityScale: 1.0, unitCostScale: 1.16, contractorEmail: LOGIN_ACCOUNTS.contractor1.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_1.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_2.email], reportingInterval: '30_day', curveType: 'ideal_theoretical', firstProgressPct: 12, secondProgressPct: 28, iarStatus: 'with_engineer_4' },
-  { index: 5, id: 'sample-05-lasam-bridge', name: 'SAMPLE - Lasam River Bridge Strengthening', location: 'Centro East, Lasam, Cagayan', status: 'active', startDate: '2026-02-16', category: 'bridge', quantityScale: 1.1, unitCostScale: 1.09, contractorEmail: LOGIN_ACCOUNTS.contractor2.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_2.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_1.email], reportingInterval: '10_day', curveType: 'pdm_based', firstProgressPct: 14, secondProgressPct: 36, iarStatus: 'rejected' },
-  { index: 6, id: 'sample-06-tuao-drainage', name: 'SAMPLE - Tuao Poblacion Drainage Upgrade', location: 'Poblacion East, Tuao, Cagayan', status: 'active', startDate: '2026-01-13', category: 'drainage', quantityScale: 0.94, unitCostScale: 1.04, contractorEmail: LOGIN_ACCOUNTS.contractor3.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_3.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_3.email], reportingInterval: '30_day', curveType: 'pdm_based', firstProgressPct: 17, secondProgressPct: 39, iarStatus: 'draft' },
-  { index: 7, id: 'sample-07-penablanca-road', name: 'SAMPLE - Peñablanca Upland Access Road', location: 'Manga, Peñablanca, Cagayan', status: 'active', startDate: '2026-04-07', category: 'road', quantityScale: 1.21, unitCostScale: 1.07, contractorEmail: LOGIN_ACCOUNTS.contractor1.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_1.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_1.email, LOGIN_ACCOUNTS.engineer2_2.email], reportingInterval: '10_day', curveType: 'ideal_theoretical', firstProgressPct: 10, secondProgressPct: 26, iarStatus: 'approved' },
-  { index: 8, id: 'sample-08-sanchez-mira-school', name: 'SAMPLE - Sanchez Mira Public School Workshop Building', location: 'Masisit, Sanchez Mira, Cagayan', status: 'active', startDate: '2026-03-18', category: 'building', quantityScale: 1.07, unitCostScale: 1.13, contractorEmail: LOGIN_ACCOUNTS.contractor2.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_2.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_2.email], reportingInterval: '30_day', curveType: 'pdm_based', firstProgressPct: 16, secondProgressPct: 31, iarStatus: 'pending_review' },
-  { index: 9, id: 'sample-09-claveria-water', name: 'SAMPLE - Claveria Potable Water Supply Looping', location: 'Taggat Norte, Claveria, Cagayan', status: 'active', startDate: '2026-02-24', category: 'water', quantityScale: 1.16, unitCostScale: 1.05, contractorEmail: LOGIN_ACCOUNTS.contractor3.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_3.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_3.email], reportingInterval: '10_day', curveType: 'ideal_theoretical', firstProgressPct: 22, secondProgressPct: 52, iarStatus: 'with_engineer_3' },
-  { index: 10, id: 'sample-10-ballesteros-bridge', name: 'SAMPLE - Ballesteros Creek Bridge Widening', location: 'Santa Cruz, Ballesteros, Cagayan', status: 'active', startDate: '2026-01-27', category: 'bridge', quantityScale: 0.98, unitCostScale: 1.18, contractorEmail: LOGIN_ACCOUNTS.contractor1.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_1.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_1.email], reportingInterval: '30_day', curveType: 'pdm_based', firstProgressPct: 13, secondProgressPct: 27, iarStatus: 'with_engineer_4' },
-  { index: 11, id: 'sample-11-allacapan-riprap', name: 'SAMPLE - Allacapan Riverbank Riprap Protection', location: 'Bessang, Allacapan, Cagayan', status: 'on_hold', startDate: '2025-11-05', category: 'drainage', quantityScale: 1.14, unitCostScale: 1.06, contractorEmail: LOGIN_ACCOUNTS.contractor2.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_2.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_2.email], reportingInterval: '10_day', curveType: 'pdm_based', firstProgressPct: 24, secondProgressPct: 47, iarStatus: 'rejected' },
-  { index: 12, id: 'sample-12-gattaran-road', name: 'SAMPLE - Gattaran Diversion Road Concrete Overlay', location: 'Poblacion, Gattaran, Cagayan', status: 'on_hold', startDate: '2025-12-01', category: 'road', quantityScale: 0.97, unitCostScale: 1.02, contractorEmail: LOGIN_ACCOUNTS.contractor3.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_3.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_3.email], reportingInterval: '30_day', curveType: 'ideal_theoretical', firstProgressPct: 19, secondProgressPct: 38, iarStatus: 'draft' },
-  { index: 13, id: 'sample-13-lal-lo-water', name: 'SAMPLE - Lal-lo Municipal Water Reservoir Rehab', location: 'Magapit, Lal-lo, Cagayan', status: 'completed', startDate: '2025-08-04', category: 'water', quantityScale: 0.88, unitCostScale: 1.09, contractorEmail: LOGIN_ACCOUNTS.contractor1.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_1.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_1.email], reportingInterval: '10_day', curveType: 'pdm_based', firstProgressPct: 30, secondProgressPct: 100, iarStatus: 'approved' },
-  { index: 14, id: 'sample-14-rizal-multipurpose', name: 'SAMPLE - Rizal Multi-Purpose Hall Completion', location: 'Mauanan, Rizal, Cagayan', status: 'completed', startDate: '2025-07-21', category: 'building', quantityScale: 0.92, unitCostScale: 1.14, contractorEmail: LOGIN_ACCOUNTS.contractor2.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_2.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_2.email], reportingInterval: '30_day', curveType: 'ideal_theoretical', firstProgressPct: 35, secondProgressPct: 100, iarStatus: 'pending_review' },
-  { index: 15, id: 'sample-15-piat-bridge', name: 'SAMPLE - Piat Floodway Bridge Rehabilitation', location: 'Baung, Piat, Cagayan', status: 'completed', startDate: '2025-06-17', category: 'bridge', quantityScale: 0.91, unitCostScale: 1.2, contractorEmail: LOGIN_ACCOUNTS.contractor3.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_3.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_3.email], reportingInterval: '10_day', curveType: 'pdm_based', firstProgressPct: 28, secondProgressPct: 100, iarStatus: 'with_engineer_3' },
-  { index: 16, id: 'sample-16-solana-drainage', name: 'SAMPLE - Solana Market Drainage Rehabilitation', location: 'Centro, Solana, Cagayan', status: 'completed', startDate: '2025-05-12', category: 'drainage', quantityScale: 0.9, unitCostScale: 1.01, contractorEmail: LOGIN_ACCOUNTS.contractor1.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_1.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_1.email], reportingInterval: '30_day', curveType: 'pdm_based', firstProgressPct: 32, secondProgressPct: 100, iarStatus: 'with_engineer_4' },
-  { index: 17, id: 'sample-17-baggao-road', name: 'SAMPLE - Baggao Mountain Barangay Access Road', location: 'Carupian, Baggao, Cagayan', status: 'active', startDate: '2026-04-28', category: 'road', quantityScale: 1.24, unitCostScale: 1.15, contractorEmail: LOGIN_ACCOUNTS.contractor2.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_2.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_2.email, LOGIN_ACCOUNTS.engineer2_3.email], reportingInterval: '10_day', curveType: 'ideal_theoretical', firstProgressPct: 8, secondProgressPct: 21, iarStatus: 'rejected' },
-  { index: 18, id: 'sample-18-pamplona-clinic', name: 'SAMPLE - Pamplona Rural Health Unit Annex', location: 'Buluan, Pamplona, Cagayan', status: 'active', startDate: '2026-05-14', category: 'building', quantityScale: 1.03, unitCostScale: 1.09, contractorEmail: LOGIN_ACCOUNTS.contractor3.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_3.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_1.email], reportingInterval: '30_day', curveType: 'pdm_based', firstProgressPct: 9, secondProgressPct: 24, iarStatus: 'draft' },
-  { index: 19, id: 'sample-19-santa-praxedes-water', name: 'SAMPLE - Santa Praxedes Water Distribution Extension', location: 'Capinatan, Santa Praxedes, Cagayan', status: 'active', startDate: '2026-03-31', category: 'water', quantityScale: 1.19, unitCostScale: 1.08, contractorEmail: LOGIN_ACCOUNTS.contractor1.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_1.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_2.email], reportingInterval: '10_day', curveType: 'ideal_theoretical', firstProgressPct: 11, secondProgressPct: 29, iarStatus: 'approved' },
-  { index: 20, id: 'sample-debug-project', name: 'SAMPLE - Abulug Floodwall and Outfall Improvement', location: 'Banguian, Abulug, Cagayan', status: 'active', startDate: '2026-05-05', category: 'drainage', quantityScale: 1.18, unitCostScale: 1.1, contractorEmail: LOGIN_ACCOUNTS.contractor2.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_2.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_3.email], reportingInterval: '30_day', curveType: 'pdm_based', firstProgressPct: 7, secondProgressPct: 19, iarStatus: 'pending_review' },
+  { index: 1, id: 'sample-01-san-vicente-fmr', name: 'San Vicente Farm-to-Market Road Phase 2', location: 'San Vicente, Alcala, Cagayan', status: 'active', startDate: '2026-01-06', category: 'road', quantityScale: 1.05, unitCostScale: 1.02, contractorEmail: LOGIN_ACCOUNTS.contractor1.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_1.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_1.email], reportingInterval: '10_day', curveType: 'pdm_based', firstProgressPct: 18, secondProgressPct: 41, iarStatus: 'approved' },
+  { index: 2, id: 'sample-02-buguey-seawall', name: 'Buguey Coastal Seawall Rehabilitation', location: 'Sta. Maria, Buguey, Cagayan', status: 'active', startDate: '2026-02-03', category: 'drainage', quantityScale: 1.12, unitCostScale: 1.08, contractorEmail: LOGIN_ACCOUNTS.contractor2.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_2.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_2.email], reportingInterval: '30_day', curveType: 'ideal_theoretical', firstProgressPct: 15, secondProgressPct: 33, iarStatus: 'pending_review' },
+  { index: 3, id: 'sample-03-amulung-waterline', name: 'Amulung Cluster Waterline Expansion', location: 'Centro, Amulung, Cagayan', status: 'active', startDate: '2026-01-20', category: 'water', quantityScale: 1.08, unitCostScale: 1.11, contractorEmail: LOGIN_ACCOUNTS.contractor3.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_3.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_3.email], reportingInterval: '10_day', curveType: 'pdm_based', firstProgressPct: 20, secondProgressPct: 48, iarStatus: 'with_engineer_3' },
+  { index: 4, id: 'sample-04-aparri-evacuation', name: 'Aparri Evacuation Center Annex', location: 'Macanaya, Aparri, Cagayan', status: 'active', startDate: '2026-03-02', category: 'building', quantityScale: 1.0, unitCostScale: 1.16, contractorEmail: LOGIN_ACCOUNTS.contractor1.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_1.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_2.email], reportingInterval: '30_day', curveType: 'ideal_theoretical', firstProgressPct: 12, secondProgressPct: 28, iarStatus: 'with_engineer_4' },
+  { index: 5, id: 'sample-05-lasam-bridge', name: 'Lasam River Bridge Strengthening', location: 'Centro East, Lasam, Cagayan', status: 'active', startDate: '2026-02-16', category: 'bridge', quantityScale: 1.1, unitCostScale: 1.09, contractorEmail: LOGIN_ACCOUNTS.contractor2.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_2.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_1.email], reportingInterval: '10_day', curveType: 'pdm_based', firstProgressPct: 14, secondProgressPct: 36, iarStatus: 'rejected' },
+  { index: 6, id: 'sample-06-tuao-drainage', name: 'Tuao Poblacion Drainage Upgrade', location: 'Poblacion East, Tuao, Cagayan', status: 'active', startDate: '2026-01-13', category: 'drainage', quantityScale: 0.94, unitCostScale: 1.04, contractorEmail: LOGIN_ACCOUNTS.contractor3.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_3.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_3.email], reportingInterval: '30_day', curveType: 'pdm_based', firstProgressPct: 17, secondProgressPct: 39, iarStatus: 'draft' },
+  { index: 7, id: 'sample-07-penablanca-road', name: 'Peñablanca Upland Access Road', location: 'Manga, Peñablanca, Cagayan', status: 'active', startDate: '2026-04-07', category: 'road', quantityScale: 1.21, unitCostScale: 1.07, contractorEmail: LOGIN_ACCOUNTS.contractor1.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_1.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_1.email, LOGIN_ACCOUNTS.engineer2_2.email], reportingInterval: '10_day', curveType: 'ideal_theoretical', firstProgressPct: 10, secondProgressPct: 26, iarStatus: 'approved' },
+  { index: 8, id: 'sample-08-sanchez-mira-school', name: 'Sanchez Mira Public School Workshop Building', location: 'Masisit, Sanchez Mira, Cagayan', status: 'active', startDate: '2026-03-18', category: 'building', quantityScale: 1.07, unitCostScale: 1.13, contractorEmail: LOGIN_ACCOUNTS.contractor2.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_2.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_2.email], reportingInterval: '30_day', curveType: 'pdm_based', firstProgressPct: 16, secondProgressPct: 31, iarStatus: 'pending_review' },
+  { index: 9, id: 'sample-09-claveria-water', name: 'Claveria Potable Water Supply Looping', location: 'Taggat Norte, Claveria, Cagayan', status: 'active', startDate: '2026-02-24', category: 'water', quantityScale: 1.16, unitCostScale: 1.05, contractorEmail: LOGIN_ACCOUNTS.contractor3.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_3.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_3.email], reportingInterval: '10_day', curveType: 'ideal_theoretical', firstProgressPct: 22, secondProgressPct: 52, iarStatus: 'with_engineer_3' },
+  { index: 10, id: 'sample-10-ballesteros-bridge', name: 'Ballesteros Creek Bridge Widening', location: 'Santa Cruz, Ballesteros, Cagayan', status: 'active', startDate: '2026-01-27', category: 'bridge', quantityScale: 0.98, unitCostScale: 1.18, contractorEmail: LOGIN_ACCOUNTS.contractor1.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_1.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_1.email], reportingInterval: '30_day', curveType: 'pdm_based', firstProgressPct: 13, secondProgressPct: 27, iarStatus: 'with_engineer_4' },
+  { index: 11, id: 'sample-11-allacapan-riprap', name: 'Allacapan Riverbank Riprap Protection', location: 'Bessang, Allacapan, Cagayan', status: 'on_hold', startDate: '2025-11-05', category: 'drainage', quantityScale: 1.14, unitCostScale: 1.06, contractorEmail: LOGIN_ACCOUNTS.contractor2.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_2.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_2.email], reportingInterval: '10_day', curveType: 'pdm_based', firstProgressPct: 24, secondProgressPct: 47, iarStatus: 'rejected' },
+  { index: 12, id: 'sample-12-gattaran-road', name: 'Gattaran Diversion Road Concrete Overlay', location: 'Poblacion, Gattaran, Cagayan', status: 'on_hold', startDate: '2025-12-01', category: 'road', quantityScale: 0.97, unitCostScale: 1.02, contractorEmail: LOGIN_ACCOUNTS.contractor3.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_3.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_3.email], reportingInterval: '30_day', curveType: 'ideal_theoretical', firstProgressPct: 19, secondProgressPct: 38, iarStatus: 'draft' },
+  { index: 13, id: 'sample-13-lal-lo-water', name: 'Lal-lo Municipal Water Reservoir Rehab', location: 'Magapit, Lal-lo, Cagayan', status: 'completed', startDate: '2025-08-04', category: 'water', quantityScale: 0.88, unitCostScale: 1.09, contractorEmail: LOGIN_ACCOUNTS.contractor1.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_1.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_1.email], reportingInterval: '10_day', curveType: 'pdm_based', firstProgressPct: 30, secondProgressPct: 100, iarStatus: 'approved' },
+  { index: 14, id: 'sample-14-rizal-multipurpose', name: 'Rizal Multi-Purpose Hall Completion', location: 'Mauanan, Rizal, Cagayan', status: 'completed', startDate: '2025-07-21', category: 'building', quantityScale: 0.92, unitCostScale: 1.14, contractorEmail: LOGIN_ACCOUNTS.contractor2.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_2.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_2.email], reportingInterval: '30_day', curveType: 'ideal_theoretical', firstProgressPct: 35, secondProgressPct: 100, iarStatus: 'pending_review' },
+  { index: 15, id: 'sample-15-piat-bridge', name: 'Piat Floodway Bridge Rehabilitation', location: 'Baung, Piat, Cagayan', status: 'completed', startDate: '2025-06-17', category: 'bridge', quantityScale: 0.91, unitCostScale: 1.2, contractorEmail: LOGIN_ACCOUNTS.contractor3.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_3.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_3.email], reportingInterval: '10_day', curveType: 'pdm_based', firstProgressPct: 28, secondProgressPct: 100, iarStatus: 'with_engineer_3' },
+  { index: 16, id: 'sample-16-solana-drainage', name: 'Solana Market Drainage Rehabilitation', location: 'Centro, Solana, Cagayan', status: 'completed', startDate: '2025-05-12', category: 'drainage', quantityScale: 0.9, unitCostScale: 1.01, contractorEmail: LOGIN_ACCOUNTS.contractor1.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_1.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_1.email], reportingInterval: '30_day', curveType: 'pdm_based', firstProgressPct: 32, secondProgressPct: 100, iarStatus: 'with_engineer_4' },
+  { index: 17, id: 'sample-17-baggao-road', name: 'Baggao Mountain Barangay Access Road', location: 'Carupian, Baggao, Cagayan', status: 'active', startDate: '2026-04-28', category: 'road', quantityScale: 1.24, unitCostScale: 1.15, contractorEmail: LOGIN_ACCOUNTS.contractor2.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_2.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_2.email, LOGIN_ACCOUNTS.engineer2_3.email], reportingInterval: '10_day', curveType: 'ideal_theoretical', firstProgressPct: 8, secondProgressPct: 21, iarStatus: 'rejected' },
+  { index: 18, id: 'sample-18-pamplona-clinic', name: 'Pamplona Rural Health Unit Annex', location: 'Buluan, Pamplona, Cagayan', status: 'active', startDate: '2026-05-14', category: 'building', quantityScale: 1.03, unitCostScale: 1.09, contractorEmail: LOGIN_ACCOUNTS.contractor3.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_3.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_1.email], reportingInterval: '30_day', curveType: 'pdm_based', firstProgressPct: 9, secondProgressPct: 24, iarStatus: 'draft' },
+  { index: 19, id: 'sample-19-santa-praxedes-water', name: 'Santa Praxedes Water Distribution Extension', location: 'Capinatan, Santa Praxedes, Cagayan', status: 'active', startDate: '2026-03-31', category: 'water', quantityScale: 1.19, unitCostScale: 1.08, contractorEmail: LOGIN_ACCOUNTS.contractor1.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_1.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_2.email], reportingInterval: '10_day', curveType: 'ideal_theoretical', firstProgressPct: 11, secondProgressPct: 29, iarStatus: 'approved' },
+  { index: 20, id: 'sample-debug-project', name: 'Abulug Floodwall and Outfall Improvement', location: 'Banguian, Abulug, Cagayan', status: 'active', startDate: '2026-05-05', category: 'drainage', quantityScale: 1.18, unitCostScale: 1.1, contractorEmail: LOGIN_ACCOUNTS.contractor2.email, engineer1Email: LOGIN_ACCOUNTS.engineer1_2.email, engineer2Emails: [LOGIN_ACCOUNTS.engineer2_3.email], reportingInterval: '30_day', curveType: 'pdm_based', firstProgressPct: 7, secondProgressPct: 19, iarStatus: 'pending_review' },
 ];
 
 function nowIso() {
@@ -396,12 +397,12 @@ function buildSampleProjectRecord(
       {
         date: firstProgressDate,
         percent: blueprint.firstProgressPct,
-        label: `SWA SAMPLE ${blueprint.index}-1`,
+        label: `SWA Progress ${blueprint.index}-1`,
       },
       {
         date: secondProgressDate,
         percent: blueprint.secondProgressPct,
-        label: `STEWA SAMPLE ${blueprint.index}-2`,
+        label: `STEWA Progress ${blueprint.index}-2`,
       },
     ],
     blueprint.reportingInterval,
@@ -455,27 +456,39 @@ async function ensureProject(
     const existing = await getDoc(doc(db, 'projects', record.projectId));
     const existed = existing.exists();
     const createdAt = nowIso();
+    const location = PROJECT_BLUEPRINTS.find((project) => project.id === record.projectId)!.location;
     console.log(`  project doc -> ${record.projectId}`);
-    await setDoc(doc(db, 'projects', record.projectId), {
-      name: record.name,
-      location: PROJECT_BLUEPRINTS.find((project) => project.id === record.projectId)!.location,
-      status: record.projectStatus,
-      lifecycleState: 'active',
-      contractorId: record.contractor.uid,
-      contractorName: record.contractor.fullName,
-      assignedUserIds: uniqueStrings([migrationActor.uid, record.engineer1.uid]),
-      involvedUserIds: uniqueStrings(record.engineer2.map((user) => user.uid)),
-      accessUserIds: record.accessUserIds,
-      contractAmount: record.contractAmount,
-      startDate: record.startDate,
-      plannedEndDate: record.plannedEndDate,
-      createdAt,
-      updatedAt: createdAt,
-    });
+    if (existed) {
+      // Existing docs can only change allowlisted metadata fields.
+      const current = existing.data() as Record<string, unknown>;
+      const patch: Record<string, unknown> = {};
+      if (String(current.name ?? '') !== record.name) patch.name = record.name;
+      if (String(current.location ?? '') !== location) patch.location = location;
+      if (Object.keys(patch).length > 0) {
+        await updateDoc(doc(db, 'projects', record.projectId), patch);
+      }
+    } else {
+      await setDoc(doc(db, 'projects', record.projectId), {
+        name: record.name,
+        location,
+        status: record.projectStatus,
+        lifecycleState: 'active',
+        contractorId: record.contractor.uid,
+        contractorName: record.contractor.fullName,
+        assignedUserIds: uniqueStrings([migrationActor.uid, record.engineer1.uid]),
+        involvedUserIds: uniqueStrings(record.engineer2.map((user) => user.uid)),
+        accessUserIds: record.accessUserIds,
+        contractAmount: record.contractAmount,
+        startDate: record.startDate,
+        plannedEndDate: record.plannedEndDate,
+        createdAt,
+        updatedAt: createdAt,
+      });
+    }
 
     console.log(`  project audit -> ${record.projectId}`);
     await setDoc(doc(db, 'projects', record.projectId, 'auditLog', 'initial-status'), {
-      fieldName: 'sampleMigration',
+      fieldName: 'projectSeed',
       oldValue: null,
       newValue: `Created ${record.name}`,
       actorName: migrationActor.fullName,
@@ -486,48 +499,57 @@ async function ensureProject(
       contractAmount: record.contractAmount,
       effectiveDate: record.startDate,
       voReference: null,
-      notes: 'Initial sample migration contract amount',
+      notes: 'Initial contract amount',
       createdAt,
       createdByName: migrationActor.fullName,
     });
 
     console.log(`  schedule -> ${record.projectId}`);
-    await setDoc(doc(db, 'schedules', record.projectId), cleanForFirestore({
-      projectId: record.projectId,
-      activities: record.activities,
-      dependencies: record.dependencies,
-      barChartTasks: deriveBarChartFromPdm(record.activities, record.dependencies).barChartTasks,
-      barChartTotalDays: deriveBarChartFromPdm(record.activities, record.dependencies).projectDuration,
-      barChartTimeNow: 0,
-      projectDuration: deriveBarChartFromPdm(record.activities, record.dependencies).projectDuration,
-      criticalPath: deriveBarChartFromPdm(record.activities, record.dependencies).criticalPath,
-      pdmError: null,
-      updatedAt: createdAt,
-    }));
+    try {
+      await setDoc(doc(db, 'schedules', record.projectId), cleanForFirestore({
+        projectId: record.projectId,
+        activities: record.activities,
+        dependencies: record.dependencies,
+        barChartTasks: deriveBarChartFromPdm(record.activities, record.dependencies).barChartTasks,
+        barChartTotalDays: deriveBarChartFromPdm(record.activities, record.dependencies).projectDuration,
+        barChartTimeNow: 0,
+        projectDuration: deriveBarChartFromPdm(record.activities, record.dependencies).projectDuration,
+        criticalPath: deriveBarChartFromPdm(record.activities, record.dependencies).criticalPath,
+        pdmError: null,
+        updatedAt: createdAt,
+      }));
+    } catch (err) {
+      console.log(`  schedule skipped:`, err instanceof Error ? err.message : err);
+    }
 
     console.log(`  sCurve -> ${record.projectId}`);
-    await setDoc(doc(db, 'sCurves', record.projectId), cleanForFirestore({
-      projectId: record.projectId,
-      costItems: record.costItems,
-      activeCurveType: record.curveType,
-      reportingInterval: record.reportingInterval,
-      theoreticalTotalPeriods: record.theoreticalTotalPeriods,
-      points: record.points,
-      targetPlanPct: record.firstProgressPct,
-      actualPlanPct: record.secondProgressPct,
-      updatedAt: createdAt,
-    }));
-    console.log(`  sCurve snapshot -> ${record.projectId}`);
-    await setDoc(doc(db, 'sCurves', record.projectId, 'snapshots', 'initial-baseline'), cleanForFirestore({
-      points: record.points,
-      capturedAt: createdAt,
-      triggerType: 'sample_migration',
-      triggerLabel: 'Initial sample baseline',
-      scheduleStatus: record.projectStatus === 'completed' ? 'on_schedule' : 'target_only',
-      plannedPct: record.firstProgressPct,
-      actualPct: record.secondProgressPct,
-      slippagePct: round2(record.secondProgressPct - record.firstProgressPct),
-    }));
+    try {
+      await setDoc(doc(db, 'sCurves', record.projectId), cleanForFirestore({
+        projectId: record.projectId,
+        costItems: record.costItems,
+        activeCurveType: record.curveType,
+        reportingInterval: record.reportingInterval,
+        theoreticalTotalPeriods: record.theoreticalTotalPeriods,
+        points: record.points,
+        targetPlanPct: record.firstProgressPct,
+        actualPlanPct: record.secondProgressPct,
+        updatedAt: createdAt,
+      }));
+      console.log(`  sCurve snapshot -> ${record.projectId}`);
+      await setDoc(doc(db, 'sCurves', record.projectId, 'snapshots', 'initial-baseline'), cleanForFirestore({
+        points: record.points,
+        capturedAt: createdAt,
+        triggerType: 'project_baseline',
+        triggerLabel: 'Initial project baseline',
+        scheduleStatus: record.projectStatus === 'completed' ? 'on_schedule' : 'target_only',
+        plannedPct: record.firstProgressPct,
+        actualPct: record.secondProgressPct,
+        slippagePct: round2(record.secondProgressPct - record.firstProgressPct),
+      }));
+    } catch (err) {
+      console.log(`  sCurve skipped:`, err instanceof Error ? err.message : err);
+    }
+    console.log(`  project ensure complete -> ${record.projectId}`);
     return !existed;
   });
 
@@ -550,7 +572,8 @@ function reportDocId(projectId: string, kind: 'swa' | 'stewa' | 'iar') {
 }
 
 function reportNumber(projectId: string, kind: 'SWA' | 'STEWA' | 'IAR', suffix: string) {
-  return `SAMPLE-${kind}-${projectId.toUpperCase()}-${suffix}`;
+  const slug = projectId.replace(/^sample-/, '').toUpperCase();
+  return `${kind}-${slug}-${suffix}`;
 }
 
 async function createDraftReports(
@@ -740,8 +763,34 @@ async function hasSeedReports(db: Firestore, auth: Auth, record: SampleProjectRe
       reportDocId(record.projectId, 'stewa'),
       reportDocId(record.projectId, 'iar'),
     ];
-    const snaps = await Promise.all(ids.map((id) => getDoc(doc(db, 'reports', id))));
-    return snaps.every((snap) => snap.exists());
+    const snaps = await Promise.all(
+      ids.map(async (id) => {
+        try {
+          return await getDoc(doc(db, 'reports', id));
+        } catch {
+          // Missing docs can deny get() when rules depend on resource.data.
+          return null;
+        }
+      }),
+    );
+    return snaps.every((snap) => snap?.exists() === true);
+  });
+}
+
+async function clearSeedReports(auth: Auth, record: SampleProjectRecord) {
+  await runAs(auth, LOGIN_ACCOUNTS.engineer4_1, async ({ db }) => {
+    const ids = [
+      reportDocId(record.projectId, 'swa'),
+      reportDocId(record.projectId, 'stewa'),
+      reportDocId(record.projectId, 'iar'),
+    ];
+    for (const id of ids) {
+      try {
+        await deleteDoc(doc(db, 'reports', id));
+      } catch {
+        /* missing or already removed */
+      }
+    }
   });
 }
 
@@ -1278,12 +1327,15 @@ async function main() {
   for (const record of records) {
     console.log(`Seeding ${record.projectId}`);
     const created = await ensureProject(db, auth, record, migrationActor, summary);
+    console.log(`  ensureProject done created=${created}`);
     const alreadySeeded = await hasSeedReports(db, auth, record);
+    console.log(`  alreadySeeded=${alreadySeeded}`);
     if (!created && alreadySeeded) {
       console.log(`Skipping ${record.projectId} because reports already exist.`);
       continue;
     }
     console.log(`Creating reports for ${record.projectId}`);
+    await clearSeedReports(auth, record);
     await createDraftReports(db, auth, record, summary);
     console.log(`Approving SWA for ${record.projectId}`);
     await advanceNonIarToApproved(
@@ -1308,7 +1360,14 @@ async function main() {
       summary,
     );
     console.log(`Advancing IAR for ${record.projectId} to ${record.iarStatus}`);
-    await advanceIarReport(db, auth, record, summary);
+    try {
+      await advanceIarReport(db, auth, record, summary);
+    } catch (err) {
+      console.log(
+        `  IAR advance skipped for ${record.projectId}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
 
   await updateUserProjectPointers(db, auth, records, summary);
@@ -1324,7 +1383,7 @@ async function main() {
         summary,
         verification,
         note:
-          'Sample data uses fixed sample-* IDs and SAMPLE-prefixed project names. Existing non-sample records were not overwritten.',
+          'Project and report records use operational names (no SAMPLE labels). Existing non-seed records were not overwritten.',
       },
       null,
       2,

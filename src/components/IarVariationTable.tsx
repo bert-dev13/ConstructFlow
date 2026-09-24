@@ -9,9 +9,10 @@ interface Props {
   items: IarVariationItem[];
   onChange: (items: IarVariationItem[]) => void;
   readOnly?: boolean;
+  projectBoqItems?: import('../lib/projectBoqApi').ProjectBoqItem[];
 }
 
-export function IarVariationTable({ items, onChange, readOnly }: Props) {
+export function IarVariationTable({ items, onChange, readOnly, projectBoqItems }: Props) {
   const inputCls = `${fieldInputClass()} !mt-0 !py-2 text-xs`;
 
   const update = (id: string, patch: Partial<IarVariationItem>) => {
@@ -19,7 +20,22 @@ export function IarVariationTable({ items, onChange, readOnly }: Props) {
   };
 
   const selectPayItem = (id: string, item: PayItem | null) => {
-    if (!item) return;
+    if (!item) {
+      update(id, {
+        payItemId: '',
+        payItemVersion: undefined,
+        snapshotItemNo: '',
+        snapshotDescription: '',
+        snapshotUnit: '',
+        itemNo: '',
+        description: '',
+        unit: '',
+      });
+      return;
+    }
+    const boqItem = (projectBoqItems ?? []).find(
+      (boq) => boq.payItemId === item.id && boq.active,
+    );
     update(id, {
       payItemId: item.id,
       payItemVersion: item.version,
@@ -29,6 +45,16 @@ export function IarVariationTable({ items, onChange, readOnly }: Props) {
       itemNo: item.itemNo,
       description: item.description,
       unit: item.unit,
+      ...(boqItem
+        ? {
+            itemNo: boqItem.itemNo,
+            description: boqItem.description,
+            unit: boqItem.unit,
+            snapshotItemNo: boqItem.itemNo,
+            snapshotDescription: boqItem.description,
+            snapshotUnit: boqItem.unit,
+          }
+        : {}),
     });
   };
 
@@ -55,7 +81,14 @@ export function IarVariationTable({ items, onChange, readOnly }: Props) {
                 className={`border-b border-border/40 transition hover:bg-white/60 ${idx % 2 === 1 ? 'bg-white/40' : ''}`}
               >
                 <td className="px-2 py-2">
-                  {readOnly ? item.snapshotItemNo || item.itemNo : <PayItemSelect value={item.payItemId ?? ''} onChange={(selected) => selectPayItem(item.id, selected)} fallbackLabel={item.itemNo || undefined} />}
+                  {readOnly ? item.snapshotItemNo || item.itemNo : (
+                    <PayItemSelect
+                      value={item.payItemId ?? ''}
+                      onChange={(selected) => selectPayItem(item.id, selected)}
+                      fallbackLabel={item.itemNo || undefined}
+                      projectBoqItems={projectBoqItems}
+                    />
+                  )}
                 </td>
                 <td className="px-2 py-2">
                   <span className="block min-w-[160px] text-xs text-text">{item.snapshotDescription || item.description || 'Select a Pay Item'}</span>
@@ -126,6 +159,9 @@ export function IarVariationTable({ items, onChange, readOnly }: Props) {
           >
             + Add variation order row
           </button>
+          <p className="mt-2 text-[11px] text-text-muted">
+            Item No. searches project BOQ / PDM items. Description and unit fill from the project record.
+          </p>
         </div>
       )}
     </div>

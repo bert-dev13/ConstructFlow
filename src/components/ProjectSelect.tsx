@@ -28,10 +28,36 @@ export function ProjectSelect({
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    listProjects()
-      .then((res) => setProjects(res.projects))
-      .catch(() => setProjects([]))
-      .finally(() => setLoaded(true));
+    let cancelled = false;
+    const load = () =>
+      listProjects()
+        .then((res) => {
+          if (!cancelled) setProjects(res.projects);
+        })
+        .catch(() => {
+          if (!cancelled) setProjects([]);
+        })
+        .finally(() => {
+          if (!cancelled) setLoaded(true);
+        });
+
+    void load();
+    // Only retry if the first pass returned nothing (auth may still be hydrating).
+    const retry = window.setTimeout(() => {
+      if (cancelled) return;
+      void listProjects()
+        .then((res) => {
+          if (!cancelled && res.projects.length) setProjects(res.projects);
+        })
+        .catch(() => {
+          /* keep prior */
+        });
+    }, 800);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(retry);
+    };
   }, []);
 
   useEffect(() => {
@@ -90,7 +116,7 @@ export function ProjectSelect({
       </button>
 
       {open && !disabled && (
-        <div className="absolute z-30 mt-1 w-full min-w-[240px] overflow-hidden rounded-lg border border-border bg-white shadow-lg">
+        <div className="absolute z-50 mt-1 w-full min-w-[240px] overflow-hidden rounded-lg border border-border bg-white shadow-lg">
           <div className="border-b border-border p-2">
             <input
               ref={inputRef}

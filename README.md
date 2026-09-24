@@ -43,6 +43,8 @@ If you only need to add missing tables without wiping data, use `database/schema
 
 See `DEMO_ACCOUNTS.md` for the full list of ConstructFlow accounts.
 
+**New to the system?** Start with [`USER_GUIDE.md`](./USER_GUIDE.md) — what ConstructFlow is for, who uses it, and how to use each part.
+
 - Contractors use password `contractor123`
 - Engineers I-IV use password `engineer123`
 

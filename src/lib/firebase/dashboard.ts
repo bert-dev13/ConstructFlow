@@ -3,6 +3,7 @@ import { COLLECTIONS } from './collections';
 import { db } from './config';
 import { auth } from './config';
 import { fetchUserProfile } from './auth';
+import { readListCache, writeListCache } from './listCache';
 import { listProjectsFs } from './projects';
 import { listReportsFs } from './reports';
 
@@ -28,11 +29,15 @@ export interface DashboardData {
 }
 
 export async function getDashboardStatsFs(): Promise<DashboardData> {
+  const uid = auth.currentUser?.uid ?? 'anon';
+  const cacheKey = `dashboard:${uid}`;
+  const cached = readListCache<DashboardData>(cacheKey);
+  if (cached) return cached;
+
   const [projects, reportRes] = await Promise.all([listProjectsFs(), listReportsFs()]);
   const reports = reportRes.reports;
 
-  const uid = auth.currentUser?.uid;
-  const profile = uid ? await fetchUserProfile(uid) : null;
+  const profile = uid !== 'anon' ? await fetchUserProfile(uid) : null;
 
   let drafts = 0;
   let my_drafts = 0;
@@ -45,9 +50,9 @@ export async function getDashboardStatsFs(): Promise<DashboardData> {
     const createdBy = report.created_by != null ? String(report.created_by) : '';
     if (status === 'draft') {
       drafts += 1;
-      if (uid && createdBy === uid) my_drafts += 1;
+      if (uid !== 'anon' && createdBy === uid) my_drafts += 1;
     }
-    if (status === 'rejected' && uid && createdBy === uid) my_rejected += 1;
+    if (status === 'rejected' && uid !== 'anon' && createdBy === uid) my_rejected += 1;
     if (['approved', 'generated'].includes(status)) approved += 1;
 
     if (profile?.role === 'engineer_2' && status === 'pending_review') pendingApprovals += 1;
@@ -63,7 +68,7 @@ export async function getDashboardStatsFs(): Promise<DashboardData> {
     if (end && end < now && status === 'active') delayedProjects += 1;
   }
 
-  return {
+  const data: DashboardData = {
     kpis: {
       visibleProjects: { value: projects.length, label: 'Projects' },
       pendingApprovals: { value: pendingApprovals, label: 'Pending approvals' },
@@ -73,6 +78,7 @@ export async function getDashboardStatsFs(): Promise<DashboardData> {
     counts: { drafts, my_drafts, my_rejected, approved },
     period: new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' }),
   };
+  return writeListCache(cacheKey, data, 20_000);
 }
 
 export async function listUsersByRoleFs(role: string) {

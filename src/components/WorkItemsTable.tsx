@@ -33,7 +33,7 @@ export function WorkItemsTable({
   onLessReasonChange,
   onLessAmountChange,
   onChange,
-  boqItems = [],
+  boqItems,
   readOnly,
 }: WorkItemsTableProps) {
   const { items: computed, totals } = computeWorkItems(items, lessAmount, showRevised);
@@ -48,8 +48,23 @@ export function WorkItemsTable({
   const leadingColSpan = 5; // item, desc, prog qty, unit price, unit
 
   const selectPayItem = (id: string, item: PayItem | null) => {
-    if (!item) return;
-    const boqItem = boqItems.find((boq) => boq.payItemId === item.id && boq.active);
+    if (!item) {
+      update(id, {
+        payItemId: '',
+        payItemVersion: undefined,
+        snapshotItemNo: '',
+        snapshotDescription: '',
+        snapshotUnit: '',
+        itemNo: '',
+        description: '',
+        unit: '',
+        programmedQty: 0,
+        revisedQty: 0,
+        unitPrice: 0,
+      });
+      return;
+    }
+    const boqItem = (boqItems ?? []).find((boq) => boq.payItemId === item.id && boq.active);
     update(id, {
       payItemId: item.id,
       payItemVersion: item.version,
@@ -64,6 +79,12 @@ export function WorkItemsTable({
             programmedQty: boqItem.programmedQty,
             revisedQty: boqItem.revisedQty ?? undefined,
             unitPrice: boqItem.unitPrice,
+            itemNo: boqItem.itemNo,
+            description: boqItem.description,
+            unit: boqItem.unit,
+            snapshotItemNo: boqItem.itemNo,
+            snapshotDescription: boqItem.description,
+            snapshotUnit: boqItem.unit,
           }
         : {}),
     });
@@ -145,7 +166,12 @@ export function WorkItemsTable({
             <tr key={row.id} className="border-b border-border/50">
               <td className="p-1">
                 {readOnly ? row.snapshotItemNo || row.itemNo : (
-                  <PayItemSelect value={row.payItemId ?? ''} onChange={(item) => selectPayItem(row.id, item)} fallbackLabel={row.itemNo || undefined} />
+                  <PayItemSelect
+                    value={row.payItemId ?? ''}
+                    onChange={(item) => selectPayItem(row.id, item)}
+                    fallbackLabel={row.itemNo || undefined}
+                    projectBoqItems={boqItems}
+                  />
                 )}
               </td>
               <td className="p-1">
@@ -211,16 +237,17 @@ export function WorkItemsTable({
               )}
               <td className="p-1">
                 {readOnly ? (
-                  row.previous
+                  '—'
                 ) : (
                   <input
                     type="number"
                     step="0.01"
-                    className="w-20 rounded border border-border px-1 py-0.5 text-right"
-                    value={row.previous || ''}
-                    onChange={(e) =>
-                      update(row.id, { previous: parseFloat(e.target.value) || 0 })
-                    }
+                    className="w-20 rounded border border-border bg-surface-muted px-1 py-0.5 text-right text-text-muted"
+                    value=""
+                    placeholder="—"
+                    readOnly
+                    disabled
+                    title="SWA rule: Previous is always blank"
                   />
                 )}
               </td>
@@ -283,8 +310,9 @@ export function WorkItemsTable({
             + Add work item
           </button>
           <p className="mt-2 text-xs text-text-muted">
-            Select a standardized <strong>Pay Item</strong>. Item No., description, and unit come from
-            the Pay Item Master and cannot be manually overridden.
+            Type or select an <strong>Item No.</strong> from this project&apos;s BOQ / PDM items.
+            Description, unit, programmed quantity, and unit price fill automatically from the project
+            record (same source used by S-Curve and Bar Chart).
             {showRevised && (
               <>
                 {' '}
@@ -293,8 +321,8 @@ export function WorkItemsTable({
             )}
           </p>
           <p className="mt-1 text-xs text-text-muted">
-            <strong>Formula:</strong> To Date = (Quantity / 2) × Unit Price, and This Period =
-            To Date − Previous.
+            <strong>Formula:</strong> Previous is always blank. To Date = (Quantity / 2) × Unit Price,
+            and This Period = To Date − Previous.
           </p>
         </>
       )}

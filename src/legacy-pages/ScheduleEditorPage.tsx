@@ -6,67 +6,79 @@ import { useAuth } from '../context/AuthContext';
 import { useSelectedProject } from '../context/SelectedProjectContext';
 import { ProjectSelect } from '../components/ProjectSelect';
 import { UndoRedoToolbar } from '../components/ui/UndoRedoToolbar';
+import { PageHeader } from '../components/ui/PageHeader';
 import { useUndoRedo, useUndoRedoKeyboard } from '../hooks/useUndoRedo';
 import { NavIcon, type NavIconName } from '../components/NavIcon';
 import { getSchedule, saveSchedule, clearSchedule, loadReferenceSchedule, type ProjectSchedule } from '../lib/scheduleApi';
 import { listProjects } from '../lib/projectsApi';
 import { applyPdmDerivatives, deriveBarChartFromPdm } from '../lib/scheduleSync';
 import { activityIncomingLinksMap, setActivityPredecessor, suggestFsDependency } from '../lib/pdm';
+import type { ActivityIncomingLink } from '../lib/pdm';
 import { REFERENCE_PDM_TITLE, HAS_REFERENCE_PDM } from '../data/roadPdmSample';
 import type { DependencyType, PdmActivity, PdmDependency } from '../types';
+import { PayItemSelect } from '../components/PayItemSelect';
+import type { PayItem } from '../lib/payItemsApi';
+import { listProjectBoq, type ProjectBoqItem } from '../lib/projectBoqApi';
+import { mergeBoqIntoActivities } from '../lib/projectBoqSync';
 
 const DEP_TYPES: DependencyType[] = ['FS', 'SS', 'FF', 'SF'];
 const TYPE_OPTIONS: Array<DependencyType | 'Independent'> = ['Independent', 'FS', 'SS', 'FF', 'SF'];
+
+const fieldClass =
+  'w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs text-text outline-none transition focus:border-primary/50 focus:ring-1 focus:ring-primary/20';
+const fieldCompactClass =
+  'rounded-md border border-border bg-card px-2 py-1.5 text-xs text-text outline-none transition focus:border-primary/50 focus:ring-1 focus:ring-primary/20';
 
 function newActivity(i: number): PdmActivity {
   const letter = String.fromCharCode(65 + (i % 26));
   return { id: `new-${Date.now()}-${i}`, number: letter, name: `Activity ${letter}`, duration: 3 };
 }
 
-const DependencyRow = memo(function DependencyRow({
+function activityLabel(a: PdmActivity) {
+  return `${a.number || '—'} — ${a.name || 'Untitled'}`;
+}
+
+const DependencyCard = memo(function DependencyCard({
   dep,
+  index,
   activities,
   onPatch,
   onRemove,
 }: {
   dep: PdmDependency;
+  index: number;
   activities: PdmActivity[];
   onPatch: (depId: string, patch: Partial<PdmDependency>) => void;
   onRemove: (depId: string) => void;
 }) {
   return (
-    <tr className="border-b border-border/50">
-      <td className="py-2 pr-2">
+    <article
+      className="schedule-row-in flex flex-wrap items-end gap-2 rounded-xl border border-border/80 bg-card px-3 py-2.5 transition hover:border-primary/25 hover:bg-primary-light/10"
+      style={{ animationDelay: `${Math.min(index, 10) * 30}ms` }}
+    >
+      <span className="mb-1.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary-light text-[10px] font-bold text-primary">
+        {index + 1}
+      </span>
+      <label className="min-w-[140px] flex-1 space-y-0.5">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">From</span>
         <select
           value={dep.fromId}
           onChange={(e) => onPatch(dep.id, { fromId: e.target.value })}
-          className="rounded border border-border px-2 py-1"
+          className={fieldClass}
         >
           {activities.map((a) => (
             <option key={a.id} value={a.id}>
-              {a.number} — {a.name}
+              {activityLabel(a)}
             </option>
           ))}
         </select>
-      </td>
-      <td className="py-2 pr-2">
-        <select
-          value={dep.toId}
-          onChange={(e) => onPatch(dep.id, { toId: e.target.value })}
-          className="rounded border border-border px-2 py-1"
-        >
-          {activities.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.number} — {a.name}
-            </option>
-          ))}
-        </select>
-      </td>
-      <td className="py-2 pr-2">
+      </label>
+      <label className="w-[4.25rem] space-y-0.5">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">Type</span>
         <select
           value={dep.type}
           onChange={(e) => onPatch(dep.id, { type: e.target.value as DependencyType })}
-          className="rounded border border-border px-2 py-1"
+          className={fieldCompactClass}
         >
           {DEP_TYPES.map((t) => (
             <option key={t} value={t}>
@@ -74,8 +86,9 @@ const DependencyRow = memo(function DependencyRow({
             </option>
           ))}
         </select>
-      </td>
-      <td className="py-2 pr-2">
+      </label>
+      <label className="w-14 space-y-0.5">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">Lag</span>
         <input
           type="number"
           value={dep.lag ?? 0}
@@ -83,16 +96,244 @@ const DependencyRow = memo(function DependencyRow({
             const n = Number(e.target.value);
             onPatch(dep.id, { lag: Number.isFinite(n) ? n : 0 });
           }}
-          className="w-16 rounded border border-border px-2 py-1"
-          title="Lag in days. Use a negative number for lead (example: FS with 3-day lead = -3)."
+          className={`${fieldCompactClass} w-full text-center`}
+          title="Lag in days. Use a negative number for lead."
         />
-      </td>
-      <td className="py-2 text-right">
-        <button type="button" onClick={() => onRemove(dep.id)} className="text-xs text-red-600">
+      </label>
+      <NavIcon name="arrow-right" className="mb-2 hidden h-3.5 w-3.5 text-primary/60 sm:block" />
+      <label className="min-w-[140px] flex-1 space-y-0.5">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">To</span>
+        <select
+          value={dep.toId}
+          onChange={(e) => onPatch(dep.id, { toId: e.target.value })}
+          className={fieldClass}
+        >
+          {activities.map((a) => (
+            <option key={a.id} value={a.id}>
+              {activityLabel(a)}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button
+        type="button"
+        onClick={() => onRemove(dep.id)}
+        className="mb-0.5 rounded-md px-2 py-1.5 text-[11px] font-semibold text-red-600 transition hover:bg-red-50"
+      >
+        Remove
+      </button>
+    </article>
+  );
+});
+
+const ActivityCard = memo(function ActivityCard({
+  activity,
+  index,
+  link,
+  computedEs,
+  displayDuration,
+  isCritical,
+  projectBoqItems,
+  activities,
+  onUpdate,
+  onSetIncoming,
+  onRemove,
+}: {
+  activity: PdmActivity;
+  index: number;
+  link: ActivityIncomingLink;
+  computedEs: number;
+  displayDuration: number;
+  isCritical: boolean;
+  projectBoqItems: ProjectBoqItem[];
+  activities: PdmActivity[];
+  onUpdate: (id: string, patch: Partial<PdmActivity>) => void;
+  onSetIncoming: (activityId: string, type: DependencyType | 'Independent', predecessorId: string | null) => void;
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <article
+      className={`schedule-row-in rounded-xl border bg-card px-3 py-2.5 transition hover:border-primary/25 hover:bg-primary-light/10 ${
+        isCritical ? 'border-red-200/90 bg-red-50/20' : 'border-border/80'
+      }`}
+      style={{ animationDelay: `${Math.min(index, 12) * 28}ms` }}
+    >
+      <div className="flex flex-wrap items-start gap-2">
+        <span
+          className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[10px] font-bold ${
+            isCritical ? 'bg-red-50 text-red-700' : 'bg-primary-light text-primary'
+          }`}
+        >
+          {String(index + 1).padStart(2, '0')}
+        </span>
+
+        <div className="min-w-[180px] flex-[1.4] space-y-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {isCritical ? (
+              <span className="rounded bg-red-50 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-red-700">
+                Critical
+              </span>
+            ) : null}
+            <div className="min-w-0 flex-1">
+              <PayItemSelect
+                value={activity.payItemId ?? ''}
+                onChange={(item: PayItem | null) => {
+                  if (!item) return;
+                  onUpdate(activity.id, {
+                    payItemId: item.id,
+                    payItemVersion: item.version,
+                    number: item.itemNo,
+                    name: item.description,
+                    unit: item.unit,
+                  });
+                }}
+                fallbackLabel={activity.number || 'Select Pay Item'}
+                projectBoqItems={
+                  projectBoqItems.some((row) => row.active && row.payItemId)
+                    ? projectBoqItems
+                    : undefined
+                }
+              />
+            </div>
+          </div>
+          {activity.payItemId ? (
+            <p className="truncate text-xs text-text-muted" title={activity.name}>
+              {activity.name}
+              {activity.unit ? ` · ${activity.unit}` : ''}
+            </p>
+          ) : (
+            <div className="flex gap-1.5">
+              <input
+                value={activity.number}
+                onChange={(e) => onUpdate(activity.id, { number: e.target.value })}
+                placeholder="Item No."
+                className={`${fieldClass} w-20`}
+              />
+              <input
+                value={activity.name}
+                onChange={(e) => onUpdate(activity.id, { name: e.target.value })}
+                placeholder="Description"
+                className={`${fieldClass} min-w-0 flex-1`}
+              />
+            </div>
+          )}
+        </div>
+
+        <label className="w-[4.5rem] space-y-0.5">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">Days</span>
+          <input
+            type="text"
+            inputMode="numeric"
+            value={displayDuration}
+            disabled={!!activity.extendToEnd}
+            onChange={(e) => {
+              const raw = e.target.value.replace(/[^\d]/g, '');
+              onUpdate(activity.id, { duration: raw === '' ? 0 : Number(raw) });
+            }}
+            title={
+              activity.extendToEnd
+                ? 'Duration is auto-calculated: project end − Early Start'
+                : 'Activity duration in days'
+            }
+            className={`${fieldClass} disabled:bg-surface-muted disabled:text-text-muted`}
+          />
+        </label>
+
+        <label
+          className="flex w-[4.75rem] flex-col justify-end gap-1 pb-0.5"
+          title="Continue until project completion"
+        >
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">Until end</span>
+          <span className="inline-flex h-[30px] items-center gap-1 text-xs text-text">
+            <input
+              type="checkbox"
+              checked={!!activity.extendToEnd}
+              onChange={(e) => onUpdate(activity.id, { extendToEnd: e.target.checked })}
+              className="h-3.5 w-3.5 rounded border-border text-primary"
+            />
+            Yes
+          </span>
+        </label>
+
+        <label className="w-[7.5rem] space-y-0.5">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-primary">ES override</span>
+          <div className="flex items-center gap-1">
+            <input
+              type="text"
+              inputMode="numeric"
+              value={activity.esOverride ?? ''}
+              onChange={(e) => {
+                const raw = e.target.value.replace(/[^\d]/g, '');
+                onUpdate(activity.id, { esOverride: raw === '' ? null : Number(raw) });
+              }}
+              placeholder="auto"
+              className={`${fieldClass} border-primary/30 bg-primary-light/30`}
+            />
+            <span className="shrink-0 rounded bg-surface-muted px-1.5 py-1 text-[10px] font-semibold text-text">
+              {computedEs}
+            </span>
+          </div>
+        </label>
+
+        <label className="w-[5.5rem] space-y-0.5">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">Type</span>
+          <select
+            value={link.type}
+            onChange={(e) => {
+              const nextType = e.target.value as DependencyType | 'Independent';
+              if (nextType === 'Independent') {
+                onSetIncoming(activity.id, 'Independent', null);
+                return;
+              }
+              const predId =
+                link.fromId ?? activities.find((x) => x.id !== activity.id)?.id ?? null;
+              onSetIncoming(activity.id, nextType, predId);
+            }}
+            className={fieldClass}
+          >
+            {TYPE_OPTIONS.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="min-w-[140px] flex-1 space-y-0.5">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">Predecessor</span>
+          <select
+            value={link.type === 'Independent' ? '' : (link.fromId ?? '')}
+            onChange={(e) => {
+              const predId = e.target.value;
+              if (!predId) {
+                onSetIncoming(activity.id, 'Independent', null);
+                return;
+              }
+              const nextType = link.type === 'Independent' ? 'FS' : link.type;
+              onSetIncoming(activity.id, nextType, predId);
+            }}
+            className={fieldClass}
+          >
+            <option value="">Independent</option>
+            {activities
+              .filter((x) => x.id !== activity.id)
+              .map((x) => (
+                <option key={x.id} value={x.id}>
+                  {activityLabel(x)}
+                </option>
+              ))}
+          </select>
+        </label>
+
+        <button
+          type="button"
+          onClick={() => onRemove(activity.id)}
+          className="mt-4 rounded-md px-2 py-1.5 text-[11px] font-semibold text-red-600 transition hover:bg-red-50"
+        >
           Remove
         </button>
-      </td>
-    </tr>
+      </div>
+    </article>
   );
 });
 
@@ -116,7 +357,8 @@ export function ScheduleEditorPage() {
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [tab, setTab] = useState<'pdm' | 'bar'>('pdm');
+  const [tab, setTab] = useState<'activities' | 'dependencies' | 'bar'>('activities');
+  const [projectBoqItems, setProjectBoqItems] = useState<ProjectBoqItem[]>([]);
   const autoSaveReady = useRef(false);
   const saveSeq = useRef(0);
   const savingRef = useRef(false);
@@ -161,7 +403,12 @@ export function ScheduleEditorPage() {
     setDirty(false);
     autoSaveReady.current = false;
     try {
-      replaceData(applyPdmDerivatives(await getSchedule(projectId)));
+      const [schedule, boq] = await Promise.all([
+        getSchedule(projectId),
+        listProjectBoq(projectId).catch(() => [] as ProjectBoqItem[]),
+      ]);
+      replaceData(applyPdmDerivatives(schedule));
+      setProjectBoqItems(boq);
     } catch {
       setError('Could not load schedule from database.');
     } finally {
@@ -293,19 +540,33 @@ export function ScheduleEditorPage() {
     return () => window.clearTimeout(timer);
   }, [canEdit, data, dirty, loading, derived?.pdmError, handleSave]);
 
-  const updateActivity = (id: string, patch: Partial<PdmActivity>) => {
+  const updateActivity = useCallback((id: string, patch: Partial<PdmActivity>) => {
     patchSchedule((d) => ({
       ...d,
       activities: d.activities.map((a) => (a.id === id ? { ...a, ...patch } : a)),
     }));
-  };
+  }, [patchSchedule]);
 
-  const updateActualEnd = (id: string, actualEndDay: number | undefined) => {
-    patchSchedule((d) => ({
-      ...d,
-      barChartTasks: d.barChartTasks.map((t) => (t.id === id ? { ...t, actualEndDay } : t)),
-    }));
-  };
+  const removeActivity = useCallback(
+    (id: string) => {
+      patchSchedule((d) => ({
+        ...d,
+        activities: d.activities.filter((x) => x.id !== id),
+        dependencies: d.dependencies.filter((dep) => dep.fromId !== id && dep.toId !== id),
+      }));
+    },
+    [patchSchedule],
+  );
+
+  const updateActualEnd = useCallback(
+    (id: string, actualEndDay: number | undefined) => {
+      patchSchedule((d) => ({
+        ...d,
+        barChartTasks: d.barChartTasks.map((t) => (t.id === id ? { ...t, actualEndDay } : t)),
+      }));
+    },
+    [patchSchedule],
+  );
 
   useUndoRedoKeyboard(undo, redo, canEdit && !!data);
 
@@ -336,47 +597,45 @@ export function ScheduleEditorPage() {
 
   return (
     <main className="flex-1 overflow-y-auto">
-      <div className="space-y-6 px-8 pb-10 pt-8">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <span className="inline-block rounded-full bg-primary-light px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-primary">
-            Schedule workspace
-          </span>
-          <h1 className="mt-3 font-serif text-3xl text-text">Prepare construction schedule</h1>
-          <p className="mt-2 max-w-3xl text-sm leading-relaxed text-text-muted">
-            Build the PDM network and automatically synchronize the bar chart and S-Curve for the selected project.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <ProjectSelect value={projectId} onChange={setProjectId} className="min-w-[240px]" />
-          <UndoRedoToolbar canUndo={canUndo} canRedo={canRedo} onUndo={undo} onRedo={redo} />
-          <button
-            type="button"
-            disabled={saving || !data}
-            onClick={() => void handleSave()}
-            className="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
-          >
-            {saving ? 'Saving…' : dirty ? 'Save schedule*' : 'Save schedule'}
-          </button>
-        </div>
-      </div>
+      <div className="space-y-5 px-8 pb-10 pt-6">
+      <PageHeader
+        badge="Schedule"
+        title="Prepare schedule"
+        description="Build the PDM network and automatically synchronize the bar chart and S-Curve for the selected project."
+        actions={
+          <>
+            <div className="min-w-[160px] flex-1 sm:max-w-[220px]">
+              <ProjectSelect value={projectId} onChange={setProjectId} />
+            </div>
+            <UndoRedoToolbar canUndo={canUndo} canRedo={canRedo} onUndo={undo} onRedo={redo} />
+            <button
+              type="button"
+              disabled={saving || !data}
+              onClick={() => void handleSave()}
+              className="shrink-0 rounded-lg bg-primary px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"
+            >
+              {saving ? 'Saving…' : dirty ? 'Save*' : 'Save'}
+            </button>
+          </>
+        }
+      />
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
         {([
           ['Activities', data?.activities.length ?? 0, 'PDM activities in this schedule', 'projects'],
           ['Dependencies', data?.dependencies.length ?? 0, 'Activity relationships', 'pdm'],
           ['Project duration', `${derived?.projectDuration ?? 0} days`, 'Calculated from the network', 'schedule'],
           ['Critical path', derived?.criticalPath.length ?? 0, 'Zero-float activities', 'approval'],
         ] as [string, string | number, string, NavIconName][]).map(([label, value, caption, icon]) => (
-          <div key={label} className="rounded-2xl border border-border bg-card p-4 shadow-sm">
-            <div className="flex items-start justify-between gap-3">
-              <p className="text-xs font-semibold uppercase tracking-wider text-text-muted">{label}</p>
-              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary-light text-primary">
-                <NavIcon name={icon} className="h-5 w-5" />
+          <div key={label} className="rounded-xl border border-border bg-card px-3.5 py-3 shadow-sm">
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">{label}</p>
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary-light text-primary">
+                <NavIcon name={icon} className="h-3.5 w-3.5" />
               </span>
             </div>
-            <p className="mt-3 text-2xl font-semibold text-text">{loading ? '…' : value}</p>
-            <p className="mt-1 text-xs text-text-muted">{caption}</p>
+            <p className="mt-1.5 text-xl font-semibold text-text">{loading ? '…' : value}</p>
+            <p className="mt-0.5 text-[11px] text-text-muted">{caption}</p>
           </div>
         ))}
       </div>
@@ -388,42 +647,89 @@ export function ScheduleEditorPage() {
         <p className="text-sm text-text-muted">Loading schedule…</p>
       ) : (
         <>
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-card p-3 shadow-sm">
-            <div className="flex rounded-xl bg-surface-muted p-1" role="tablist" aria-label="Schedule editor views">
-            <button
-              type="button"
-              onClick={() => setTab('pdm')}
-              role="tab"
-              aria-selected={tab === 'pdm'}
-              className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${tab === 'pdm' ? 'bg-primary text-white shadow-sm' : 'text-text-muted hover:text-text'}`}
-            >
-              PDM network
-            </button>
-            <button
-              type="button"
-              onClick={() => setTab('bar')}
-              role="tab"
-              aria-selected={tab === 'bar'}
-              className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${tab === 'bar' ? 'bg-primary text-white shadow-sm' : 'text-text-muted hover:text-text'}`}
-            >
-              Bar chart preview
-            </button>
+          <div className="page-toolbar-in flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/80 bg-card/95 p-2 shadow-sm">
+            <div className="flex flex-wrap rounded-lg bg-surface-muted/80 p-0.5" role="tablist" aria-label="Schedule editor views">
+              {(
+                [
+                  ['activities', 'Activities', 'projects', data.activities.length],
+                  ['dependencies', 'Dependencies', 'pdm', data.dependencies.length],
+                  ['bar', 'Bar chart', 'bar-chart', derived?.barChartTasks.length ?? 0],
+                ] as const
+              ).map(([id, label, icon, count]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setTab(id)}
+                  role="tab"
+                  aria-selected={tab === id}
+                  className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                    tab === id ? 'bg-primary text-white shadow-sm' : 'text-text-muted hover:text-text'
+                  }`}
+                >
+                  <NavIcon name={icon} className="h-3.5 w-3.5" />
+                  {label}
+                  <span
+                    className={`rounded-full px-1.5 py-0.5 text-[10px] ${
+                      tab === id ? 'bg-white/20 text-white' : 'bg-card text-text-muted'
+                    }`}
+                  >
+                    {count}
+                  </span>
+                </button>
+              ))}
             </div>
-            <p className="text-xs text-text-muted">Changes auto-save after you pause typing.</p>
+            <div className="flex items-center gap-2 px-1.5 text-[11px] text-text-muted">
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  saving
+                    ? 'schedule-autosave-dot bg-accent'
+                    : dirty
+                      ? 'schedule-autosave-dot bg-warning'
+                      : 'bg-emerald-500'
+                }`}
+              />
+              <span>
+                {saving ? 'Saving…' : dirty ? 'Unsaved — auto-saves soon' : 'Saved'}
+              </span>
+            </div>
           </div>
 
-          {tab === 'pdm' && (
-            <div className="space-y-6">
-              <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-                <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border bg-gradient-to-r from-card to-primary-light/20 px-5 py-5">
-                  <div>
-                    <div className="flex items-center gap-3">
-                      <h2 className="text-lg font-semibold text-text">PDM activities</h2>
-                      <span className="rounded-full bg-primary-light px-2.5 py-1 text-xs font-semibold text-primary">{data.activities.length} total</span>
-                    </div>
-                    <p className="mt-1 max-w-2xl text-sm text-text-muted">Define the work sequence, duration, start overrides, and predecessors for this project.</p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
+          {(tab === 'activities' || tab === 'dependencies') && (
+            <div className="schedule-panel-in schedule-critical-strip flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-border/80 px-3 py-2 shadow-sm">
+              <div className="flex items-center gap-1.5">
+                <span className="flex h-6 w-6 items-center justify-center rounded-md bg-red-50 text-red-600">
+                  <NavIcon name="approval" className="h-3.5 w-3.5" />
+                </span>
+                <span className="text-[11px] font-bold uppercase tracking-wide text-red-700/80">
+                  Critical · {derived?.projectDuration ?? 0}d
+                </span>
+              </div>
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+                {(derived?.criticalPath.length ? derived.criticalPath : ['—']).map((step, i, arr) => (
+                  <span key={`${step}-${i}`} className="inline-flex items-center gap-1">
+                    <span className="rounded border border-red-200/80 bg-card/90 px-1.5 py-0.5 text-[11px] font-semibold text-red-700">
+                      {step}
+                    </span>
+                    {i < arr.length - 1 ? (
+                      <NavIcon name="arrow-right" className="h-3 w-3 text-red-400" />
+                    ) : null}
+                  </span>
+                ))}
+              </div>
+              {derived?.pdmError ? (
+                <p className="text-[11px] font-semibold text-red-600">{derived.pdmError}</p>
+              ) : null}
+            </div>
+          )}
+
+          {tab === 'activities' && (
+            <div className="schedule-panel-in overflow-hidden rounded-xl border border-border/80 bg-card shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 px-3 py-2.5">
+                <div>
+                  <h2 className="text-sm font-semibold text-text">PDM activities</h2>
+                  <p className="text-[11px] text-text-muted">Sequence, duration, ES overrides, predecessors</p>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
                   <button
                     type="button"
                     onClick={() =>
@@ -432,9 +738,42 @@ export function ScheduleEditorPage() {
                         activities: [...d.activities, newActivity(d.activities.length)],
                       }))
                     }
-                    className="rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white shadow-sm"
+                    className="rounded-lg bg-primary px-2.5 py-1.5 text-[11px] font-semibold text-white transition hover:bg-primary-dark"
                   >
-                    + Add activity
+                    + Add
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!projectId) return;
+                      void (async () => {
+                        try {
+                          const boq = await listProjectBoq(projectId);
+                          if (!boq.some((row) => row.active && row.payItemId)) {
+                            setError(
+                              'No active project Pay Items found. Select Pay Items on the project BOQ page first.',
+                            );
+                            return;
+                          }
+                          patchSchedule((d) => {
+                            const merged = mergeBoqIntoActivities(d.activities, boq);
+                            setSuccess(
+                              `Synced from project BOQ: ${merged.added} added, ${merged.updated} updated. Bar chart / S-Curve use these activities.`,
+                            );
+                            setError('');
+                            return { ...d, activities: merged.activities };
+                          });
+                        } catch (e) {
+                          setError(
+                            e instanceof Error ? e.message : 'Could not sync from project BOQ.',
+                          );
+                        }
+                      })();
+                    }}
+                    className="rounded-lg border border-primary/25 bg-primary-light/70 px-2.5 py-1.5 text-[11px] font-semibold text-primary transition hover:bg-primary-light"
+                    title="Use Pay Items already selected on the project BOQ as PDM activities"
+                  >
+                    Sync BOQ
                   </button>
                   <button
                     type="button"
@@ -478,9 +817,9 @@ export function ScheduleEditorPage() {
                         ? undefined
                         : 'No reference PDM yet — waiting for new schedule data'
                     }
-                    className="rounded-xl border border-primary/30 bg-primary-light/60 px-3.5 py-2 text-xs font-semibold text-primary disabled:opacity-50"
+                    className="rounded-lg border border-primary/25 bg-primary-light/70 px-2.5 py-1.5 text-[11px] font-semibold text-primary transition hover:bg-primary-light disabled:opacity-50"
                   >
-                    Load reference PDM
+                    Load reference
                   </button>
                   <button
                     type="button"
@@ -512,359 +851,219 @@ export function ScheduleEditorPage() {
                         }
                       })();
                     }}
-                    className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-2 text-xs font-semibold text-red-700"
+                    className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-[11px] font-semibold text-red-700 transition hover:bg-red-100"
                   >
-                    Clear schedule
+                    Clear
                   </button>
-                  </div>
                 </div>
-                {data.activities.length === 0 ? (
-                  <div className="px-6 py-16 text-center">
-                    <p className="font-semibold text-text">No activities in this schedule</p>
-                    <p className="mt-2 text-sm text-text-muted">Add your first activity to begin building the project network.</p>
-                    <button type="button" onClick={() => patchSchedule((d) => ({ ...d, activities: [newActivity(0)] }))} className="mt-5 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white">Add first activity</button>
-                  </div>
-                ) : (
-                <div className="overflow-x-auto px-5 pb-5">
-                <table className="w-full min-w-[1050px] text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-xs uppercase text-text-muted">
-                      <th className="py-2 pr-2">No.</th>
-                      <th className="py-2 pr-2">Name</th>
-                      <th className="py-2 pr-2">Duration</th>
-                      <th
-                        className="py-2 pr-2"
-                        title="Activity continues from its Early Start until project completion. Duration is calculated automatically."
-                      >
-                        Until end
-                      </th>
-                      <th
-                        className="py-2 pr-2 text-primary"
-                        title="Optional Early Start day (0 = first day). Leave blank for formula. Set 0 on multiple activities to start in parallel."
-                      >
-                        Early Start (ES)
-                      </th>
-                      <th className="py-2 pr-2">ES</th>
-                      <th className="py-2 pr-2">Type</th>
-                      <th className="py-2 pr-2">TO</th>
-                      <th className="py-2" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.activities.map((a) => {
-                      const link = incomingByActivity.get(a.id) ?? {
-                        type: 'Independent' as const,
-                        to: 'Independent',
-                      };
-                      const scheduled = scheduledById.get(a.id);
-                      const computedEs = scheduled?.es ?? a.es ?? 0;
-                      const displayDuration = a.extendToEnd
-                        ? (scheduled?.duration ?? a.duration)
-                        : a.duration;
-                      return (
-                      <tr key={a.id} className="border-b border-border/50">
-                        <td className="py-2 pr-2">
-                          <input
-                            value={a.number}
-                            onChange={(e) => updateActivity(a.id, { number: e.target.value })}
-                            className="w-24 rounded border border-border px-2 py-1"
-                          />
-                        </td>
-                        <td className="py-2 pr-2">
-                          <input
-                            value={a.name}
-                            onChange={(e) => updateActivity(a.id, { name: e.target.value })}
-                            className="w-full rounded border border-border px-2 py-1"
-                          />
-                        </td>
-                        <td className="py-2 pr-2">
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            value={displayDuration}
-                            disabled={!!a.extendToEnd}
-                            onChange={(e) => {
-                              const raw = e.target.value.replace(/[^\d]/g, '');
-                              updateActivity(a.id, {
-                                duration: raw === '' ? 0 : Number(raw),
-                              });
-                            }}
-                            title={
-                              a.extendToEnd
-                                ? 'Duration is auto-calculated: project end − Early Start'
-                                : 'Activity duration in days'
-                            }
-                            className="w-16 rounded border border-border px-2 py-1 disabled:bg-surface-muted disabled:text-text-muted"
-                          />
-                        </td>
-                        <td className="py-2 pr-2">
-                          <label className="inline-flex items-center gap-1.5 text-xs text-text">
-                            <input
-                              type="checkbox"
-                              checked={!!a.extendToEnd}
-                              onChange={(e) =>
-                                updateActivity(a.id, { extendToEnd: e.target.checked })
-                              }
-                              title="Continue until project completion (Predecessor → this activity → End)"
-                            />
-                            Yes
-                          </label>
-                        </td>
-                        <td className="py-2 pr-2">
-                          <div className="flex items-center gap-1.5">
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              value={a.esOverride ?? ''}
-                              onChange={(e) => {
-                                const raw = e.target.value.replace(/[^\d]/g, '');
-                                updateActivity(a.id, {
-                                  esOverride: raw === '' ? null : Number(raw),
-                                });
-                              }}
-                              placeholder="auto"
-                              title="Early Start day (0 = first day). Leave blank to use the normal ES formula."
-                              className="w-16 rounded border border-primary/40 bg-primary-light/30 px-2 py-1"
-                            />
-                            <span className="whitespace-nowrap text-[10px] text-text-muted">
-                              → ES {computedEs}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="py-2 pr-2 text-text-muted">{computedEs}</td>
-                        <td className="py-2 pr-2">
-                          <select
-                            value={link.type}
-                            onChange={(e) => {
-                              const nextType = e.target.value as DependencyType | 'Independent';
-                              if (nextType === 'Independent') {
-                                setIncomingLink(a.id, 'Independent', null);
-                                return;
-                              }
-                              const predId =
-                                link.fromId ??
-                                data.activities.find((x) => x.id !== a.id)?.id ??
-                                null;
-                              setIncomingLink(a.id, nextType, predId);
-                            }}
-                            className="rounded border border-border px-2 py-1"
-                            title="Independent = no predecessor. Or pick FS / SS / FF / SF."
-                          >
-                            {TYPE_OPTIONS.map((t) => (
-                              <option key={t} value={t}>
-                                {t}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                        <td className="py-2 pr-2">
-                          <select
-                            value={link.type === 'Independent' ? '' : (link.fromId ?? '')}
-                            onChange={(e) => {
-                              const predId = e.target.value;
-                              if (!predId) {
-                                setIncomingLink(a.id, 'Independent', null);
-                                return;
-                              }
-                              const nextType = link.type === 'Independent' ? 'FS' : link.type;
-                              setIncomingLink(a.id, nextType, predId);
-                            }}
-                            className="rounded border border-border px-2 py-1"
-                            title="Select Independent, or the predecessor activity (who finishes/starts before this one)."
-                          >
-                            <option value="">Independent</option>
-                            {data.activities
-                              .filter((x) => x.id !== a.id)
-                              .map((x) => (
-                                <option key={x.id} value={x.id}>
-                                  {x.number} — {x.name}
-                                </option>
-                              ))}
-                          </select>
-                        </td>
-                        <td className="py-2 text-right">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              patchSchedule((d) => ({
-                                ...d,
-                                activities: d.activities.filter((x) => x.id !== a.id),
-                                dependencies: d.dependencies.filter(
-                                  (dep) => dep.fromId !== a.id && dep.toId !== a.id,
-                                ),
-                              }))
-                            }
-                            className="text-xs text-red-600"
-                          >
-                            Remove
-                          </button>
-                        </td>
-                      </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                </div>
-                )}
               </div>
 
-              <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-                <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border px-5 py-5">
-                  <div>
-                    <div className="flex items-center gap-3">
-                      <h2 className="text-lg font-semibold text-text">Dependencies</h2>
-                      <span className="rounded-full bg-surface-muted px-2.5 py-1 text-xs font-semibold text-text-muted">{data.dependencies.length} links</span>
-                    </div>
-                    <p className="mt-1 text-sm text-text-muted">Connect activities and control how each task starts relative to its predecessor.</p>
-                  </div>
+              {data.activities.length === 0 ? (
+                <div className="px-4 py-10 text-center">
+                  <p className="text-sm font-semibold text-text">No activities yet</p>
+                  <p className="mt-1 text-xs text-text-muted">
+                    Add an activity, sync from BOQ, or load the reference PDM.
+                  </p>
                   <button
                     type="button"
-                    onClick={() => {
-                      const acts = data.activities;
-                      if (acts.length < 2) {
-                        setError('Add at least two activities before creating dependencies.');
-                        return;
-                      }
-                      const next = suggestFsDependency(acts, data.dependencies);
-                      if (!next) {
-                        setError(
-                          'Every activity pair already has a dependency. Change a row below or remove one first.',
-                        );
-                        return;
-                      }
-                      setError('');
-                      patchSchedule((d) => ({
-                        ...d,
-                        dependencies: [
-                          ...d.dependencies,
-                          {
-                            id: `new-d-${Date.now()}`,
-                            fromId: next.fromId,
-                            toId: next.toId,
-                            type: 'FS' as const,
-                            lag: 0,
-                          },
-                        ],
-                      }));
-                    }}
-                    className="rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white shadow-sm disabled:opacity-50"
-                    disabled={data.activities.length < 2}
+                    onClick={() =>
+                      patchSchedule((d) => ({ ...d, activities: [newActivity(0)] }))
+                    }
+                    className="mt-3 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white"
                   >
-                    + Add dependency
+                    Add first activity
                   </button>
                 </div>
-                {data.activities.length < 2 ? (
-                  <div className="bg-amber-50/70 px-6 py-12 text-center">
-                    <p className="font-semibold text-amber-950">Add at least two activities first</p>
-                    <p className="mt-2 text-sm text-amber-800">Dependencies connect one activity to another. Add another activity above to create the first link.</p>
-                  </div>
-                ) : data.dependencies.length === 0 ? (
-                  <div className="px-6 py-12 text-center">
-                    <p className="font-semibold text-text">No dependencies yet</p>
-                    <p className="mt-2 text-sm text-text-muted">Add a dependency to define the order of work.</p>
-                  </div>
-                ) : (
-                <div className="overflow-x-auto px-5">
-                <table className="w-full text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-xs uppercase text-text-muted">
-                      <th className="py-2">From</th>
-                      <th className="py-2">To</th>
-                      <th className="py-2">Type</th>
-                      <th className="py-2">Lag</th>
-                      <th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.dependencies.map((d) => (
-                      <DependencyRow
-                        key={d.id}
-                        dep={d}
-                        activities={activityOptions}
-                        onPatch={updateDependency}
-                        onRemove={removeDependency}
+              ) : (
+                <div className="max-h-[min(62vh,720px)] space-y-1.5 overflow-y-auto p-2.5">
+                  {data.activities.map((a, index) => {
+                    const link = incomingByActivity.get(a.id) ?? {
+                      type: 'Independent' as const,
+                      to: 'Independent',
+                    };
+                    const scheduled = scheduledById.get(a.id);
+                    const computedEs = scheduled?.es ?? a.es ?? 0;
+                    const displayDuration = a.extendToEnd
+                      ? (scheduled?.duration ?? a.duration)
+                      : a.duration;
+                    return (
+                      <ActivityCard
+                        key={a.id}
+                        activity={a}
+                        index={index}
+                        link={link}
+                        computedEs={computedEs}
+                        displayDuration={displayDuration}
+                        isCritical={!!scheduled?.isCritical}
+                        projectBoqItems={projectBoqItems}
+                        activities={data.activities}
+                        onUpdate={updateActivity}
+                        onSetIncoming={setIncomingLink}
+                        onRemove={removeActivity}
                       />
-                    ))}
-                  </tbody>
-                </table>
+                    );
+                  })}
                 </div>
-                )}
-                <p className="mt-3 text-sm text-text-muted">
-                  Lag is in days (0 if none). Negative lag = lead. Critical path:{' '}
-                  <strong>{derived?.criticalPath.join(' → ') || '—'}</strong> · Project duration:{' '}
-                  <strong>{derived?.projectDuration ?? 0} days</strong>
-                  {derived?.pdmError ? (
-                    <span className="ml-2 text-red-600">({derived.pdmError})</span>
-                  ) : null}
-                </p>
+              )}
+            </div>
+          )}
+
+          {tab === 'dependencies' && (
+            <div className="schedule-panel-in overflow-hidden rounded-xl border border-border/80 bg-card shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 px-3 py-2.5">
+                <div>
+                  <h2 className="text-sm font-semibold text-text">Dependencies</h2>
+                  <p className="text-[11px] text-text-muted">
+                    Lag in days (0 if none). Negative lag = lead.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const acts = data.activities;
+                    if (acts.length < 2) {
+                      setError('Add at least two activities before creating dependencies.');
+                      return;
+                    }
+                    const next = suggestFsDependency(acts, data.dependencies);
+                    if (!next) {
+                      setError(
+                        'Every activity pair already has a dependency. Change a row below or remove one first.',
+                      );
+                      return;
+                    }
+                    setError('');
+                    patchSchedule((d) => ({
+                      ...d,
+                      dependencies: [
+                        ...d.dependencies,
+                        {
+                          id: `new-d-${Date.now()}`,
+                          fromId: next.fromId,
+                          toId: next.toId,
+                          type: 'FS' as const,
+                          lag: 0,
+                        },
+                      ],
+                    }));
+                  }}
+                  className="rounded-lg bg-primary px-2.5 py-1.5 text-[11px] font-semibold text-white transition hover:bg-primary-dark disabled:opacity-50"
+                  disabled={data.activities.length < 2}
+                >
+                  + Add dependency
+                </button>
               </div>
+
+              {data.activities.length < 2 ? (
+                <div className="bg-amber-50/70 px-4 py-8 text-center">
+                  <p className="text-sm font-semibold text-amber-950">Add at least two activities first</p>
+                  <p className="mt-1 text-xs text-amber-800">
+                    Switch to the Activities tab to add more work items.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setTab('activities')}
+                    className="mt-3 rounded-lg border border-amber-300 bg-card px-3 py-1.5 text-xs font-semibold text-amber-900"
+                  >
+                    Go to Activities
+                  </button>
+                </div>
+              ) : data.dependencies.length === 0 ? (
+                <div className="px-4 py-8 text-center">
+                  <p className="text-sm font-semibold text-text">No dependencies yet</p>
+                  <p className="mt-1 text-xs text-text-muted">Add a link to define work order.</p>
+                </div>
+              ) : (
+                <div className="max-h-[min(62vh,720px)] space-y-1.5 overflow-y-auto p-2.5">
+                  {data.dependencies.map((d, index) => (
+                    <DependencyCard
+                      key={d.id}
+                      dep={d}
+                      index={index}
+                      activities={activityOptions}
+                      onPatch={updateDependency}
+                      onRemove={removeDependency}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
           {tab === 'bar' && (
-            <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
-              <p className="mb-4 text-sm text-text-muted">
-                Bar chart tasks are generated automatically from PDM (ES/EF). You can record actual end days
-                for progress tracking.
-              </p>
-              <div className="mb-4 flex flex-wrap gap-4">
-                <label className="text-sm">
-                  Total days (from PDM)
-                  <input
-                    type="number"
-                    readOnly
-                    value={derived?.projectDuration ?? data.barChartTotalDays}
-                    className="ml-2 w-20 rounded border border-border bg-surface-muted px-2 py-1"
-                  />
-                </label>
-                <label className="text-sm">
-                  Time-now (day)
-                  <input
-                    type="number"
-                    min={0}
-                    value={data.barChartTimeNow}
-                    onChange={(e) =>
-                      patchSchedule((d) => ({ ...d, barChartTimeNow: Number(e.target.value) }))
-                    }
-                    className="ml-2 w-20 rounded border border-border px-2 py-1"
-                  />
-                </label>
+            <div className="schedule-panel-in rounded-xl border border-border/80 bg-card p-3 shadow-sm">
+              <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+                <div>
+                  <h2 className="text-sm font-semibold text-text">Bar chart preview</h2>
+                  <p className="text-[11px] text-text-muted">
+                    Generated from PDM (ES/EF). Record actual end days for progress.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <label className="rounded-lg border border-border/80 bg-surface-muted/40 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                    Total days
+                    <input
+                      type="number"
+                      readOnly
+                      value={derived?.projectDuration ?? data.barChartTotalDays}
+                      className="mt-0.5 block w-20 rounded-md border border-border bg-card px-2 py-1 text-xs font-semibold normal-case tracking-normal text-text"
+                    />
+                  </label>
+                  <label className="rounded-lg border border-border/80 bg-surface-muted/40 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                    Time-now
+                    <input
+                      type="number"
+                      min={0}
+                      value={data.barChartTimeNow}
+                      onChange={(e) =>
+                        patchSchedule((d) => ({ ...d, barChartTimeNow: Number(e.target.value) }))
+                      }
+                      className="mt-0.5 block w-20 rounded-md border border-border bg-card px-2 py-1 text-xs font-semibold normal-case tracking-normal text-text outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20"
+                    />
+                  </label>
+                </div>
               </div>
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-border text-xs uppercase text-text-muted">
-                    <th className="py-2">#</th>
-                    <th className="py-2">Task name</th>
-                    <th className="py-2">Start</th>
-                    <th className="py-2">End</th>
-                    <th className="py-2">Actual end</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {derived?.barChartTasks.map((t) => (
-                    <tr key={t.id} className="border-b border-border/50">
-                      <td className="py-2 pr-2">{t.index}</td>
-                      <td className="py-2 pr-2">{t.name}</td>
-                      <td className="py-2 pr-2">{t.startDay}</td>
-                      <td className="py-2 pr-2">{t.endDay}</td>
-                      <td className="py-2 pr-2">
-                        <input
-                          type="number"
-                          value={t.actualEndDay ?? ''}
-                          onChange={(e) =>
-                            updateActualEnd(
-                              t.id,
-                              e.target.value === '' ? undefined : Number(e.target.value),
-                            )
-                          }
-                          className="w-16 rounded border border-border px-2 py-1"
-                          placeholder="—"
-                        />
-                      </td>
+              <div className="max-h-[min(62vh,720px)] overflow-auto rounded-lg border border-border/80">
+                <table className="w-full text-left text-xs">
+                  <thead className="sticky top-0 z-10">
+                    <tr className="border-b border-border bg-surface-muted text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                      <th className="px-2.5 py-2">#</th>
+                      <th className="px-2.5 py-2">Task name</th>
+                      <th className="px-2.5 py-2">Start</th>
+                      <th className="px-2.5 py-2">End</th>
+                      <th className="px-2.5 py-2">Actual end</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {derived?.barChartTasks.map((t, index) => (
+                      <tr
+                        key={t.id}
+                        className="schedule-row-in border-b border-border/50 transition hover:bg-primary-light/20"
+                        style={{ animationDelay: `${Math.min(index, 12) * 25}ms` }}
+                      >
+                        <td className="px-2.5 py-1.5 text-text-muted">{t.index}</td>
+                        <td className="px-2.5 py-1.5 font-medium text-text">{t.name}</td>
+                        <td className="px-2.5 py-1.5">{t.startDay}</td>
+                        <td className="px-2.5 py-1.5">{t.endDay}</td>
+                        <td className="px-2.5 py-1.5">
+                          <input
+                            type="number"
+                            value={t.actualEndDay ?? ''}
+                            onChange={(e) =>
+                              updateActualEnd(
+                                t.id,
+                                e.target.value === '' ? undefined : Number(e.target.value),
+                              )
+                            }
+                            className="w-16 rounded-md border border-border px-2 py-1 text-xs outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20"
+                            placeholder="—"
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </>

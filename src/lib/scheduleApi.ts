@@ -2,6 +2,7 @@ import type { BarChartTask, PdmActivity, PdmDependency } from '../types';
 import type { ReportProgressEntry } from '../components/ReportProgressFeed';
 import {
   clearScheduleFs,
+  getBarChartFs,
   getScheduleFs,
   loadReferenceScheduleFs,
   saveScheduleFs,
@@ -12,6 +13,11 @@ export type ProjectSchedule = ProjectScheduleDoc;
 
 export function getSchedule(projectId: string | number = '1') {
   return getScheduleFs(projectId);
+}
+
+/** Fast path for Bar Chart — selected project only, no full S-curve rebuild. */
+export function getBarChart(projectId: string | number = '1') {
+  return getBarChartFs(projectId);
 }
 
 export function saveSchedule(payload: {

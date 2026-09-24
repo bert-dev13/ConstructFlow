@@ -95,6 +95,10 @@ export interface PdmActivity {
   number: string;
   name: string;
   duration: number;
+  /** Optional link to Pay Item Master (Item No. / Description source). */
+  payItemId?: string;
+  payItemVersion?: number;
+  unit?: string;
   /** Optional 0-based Early Start day override (0 = first day). Null = use formula. */
   esOverride?: number | null;
   /**

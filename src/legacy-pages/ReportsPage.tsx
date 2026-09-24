@@ -11,6 +11,9 @@ import {
   type SwaStewaReportKind,
 } from '../lib/reportPermissions';
 import { NavIcon } from '../components/NavIcon';
+import { PageHeader } from '../components/ui/PageHeader';
+import { Pagination } from '../components/ui/Pagination';
+import { usePagination } from '../hooks/usePagination';
 
 const REPORT_TYPES: { type: SwaStewaReportKind; label: string; desc: string; color: string }[] = [
   { type: 'IAR', label: 'IAR', desc: 'Inspection & Acceptance Report', color: 'border-teal-200 bg-teal-50/80' },
@@ -23,7 +26,7 @@ const STATUS_LABELS: Record<string, string> = {
   pending_review: 'Pending',
   with_engineer_3: 'Pending',
   with_engineer_4: 'Pending',
-  approved: 'Approved',
+  approved: 'Finalized',
   rejected: 'Revision Requested',
   generated: 'Finalized',
 };
@@ -43,7 +46,6 @@ export function ReportsPage() {
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState('all');
 
   useEffect(() => {
     listReports()
@@ -55,7 +57,6 @@ export function ReportsPage() {
   const isApprovedReport = (status: string) =>
     status === 'approved' || status === 'generated';
 
-  // Folders only list approved / finalized reports (not drafts or pending).
   const visible = reports.filter((r) => isApprovedReport(r.status));
 
   const canEditReport = (rpt: SwaStewaReport) =>
@@ -73,8 +74,19 @@ export function ReportsPage() {
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(search));
     const matchesType = typeFilter === 'all' || report.report_type === typeFilter;
-    const matchesStatus = statusFilter === 'all' || report.status === statusFilter;
-    return matchesQuery && matchesType && matchesStatus;
+    return matchesQuery && matchesType;
+  });
+  const {
+    page,
+    setPage,
+    pageItems,
+    totalPages,
+    from,
+    to,
+    total,
+    pageSize,
+  } = usePagination(filteredReports, {
+    resetKey: `${query}|${typeFilter}`,
   });
   const pendingCount = reports.filter((report) =>
     ['pending_review', 'with_engineer_3', 'with_engineer_4'].includes(report.status),
@@ -84,46 +96,44 @@ export function ReportsPage() {
 
   return (
     <main className="flex-1 overflow-y-auto">
-      <div className="space-y-6 px-8 pb-10 pt-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <span className="inline-block rounded-full bg-primary-light px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-primary">
-            {isReviewer ? 'Documents' : 'Reports'}
-          </span>
-          <h1 className="mt-3 font-serif text-3xl text-text">
-            {isReviewer
-              ? 'Documents'
-              : isContractor
-                ? 'Progress Reports'
-                : 'Report Generation'}
-          </h1>
-          <p className="mt-2 max-w-3xl text-sm leading-relaxed text-text-muted">
-            {isReviewer
-              ? 'Only reports finalized by Engineer IV appear here. Approvals and revision requests stay in For Approval until finalization.'
-              : isContractor
-                ? 'Prepare and edit IAR reports. SWA and STEWA reports from Engineer I are view only.'
-                : 'SWA, STEWA, and IAR reports are stored in the database with PDF and QR verification.'}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          {canManageTemplates && (
-            <Link
-              to="/reports/templates"
-              className="rounded-xl border border-border px-4 py-2.5 text-sm font-medium hover:bg-surface-muted"
-            >
-              Manage templates
-            </Link>
-          )}
-          {!isReviewer && (
-            <Link
-              to="/swa-stewa"
-              className="rounded-xl border border-border px-4 py-2.5 text-sm font-medium hover:bg-surface-muted"
-            >
-              IAR folders
-            </Link>
-          )}
-        </div>
-      </div>
+      <div className="space-y-5 px-8 pb-10 pt-6">
+      <PageHeader
+        badge={isReviewer ? 'Documents' : 'Reports'}
+        title={
+          isReviewer
+            ? 'Documents'
+            : isContractor
+              ? 'Progress Reports'
+              : 'Report Generation'
+        }
+        description={
+          isReviewer
+            ? 'Open any finalized report to review the official document.'
+            : isContractor
+              ? 'Prepare and edit IAR reports. SWA and STEWA reports from Engineer I are view only.'
+              : 'SWA, STEWA, and IAR reports are stored with an official review layout.'
+        }
+        actions={
+          <>
+            {canManageTemplates && (
+              <Link
+                to="/reports/templates"
+                className="shrink-0 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[11px] font-semibold text-text transition hover:bg-surface-muted"
+              >
+                Manage templates
+              </Link>
+            )}
+            {!isReviewer && (
+              <Link
+                to="/swa-stewa"
+                className="shrink-0 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[11px] font-semibold text-text transition hover:bg-surface-muted"
+              >
+                IAR folders
+              </Link>
+            )}
+          </>
+        }
+      />
 
       {canSubmit && (
         <div className="mb-8">
@@ -182,11 +192,6 @@ export function ReportsPage() {
           <option value="all">All report types</option>
           {REPORT_TYPES.map((type) => <option key={type.type} value={type.type}>{type.label}</option>)}
         </select>
-        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-xl border border-border bg-surface px-3 py-2.5 text-sm text-text outline-none focus:border-primary">
-          <option value="all">All statuses</option>
-          <option value="approved">Approved</option>
-          <option value="generated">Finalized</option>
-        </select>
       </div>
 
       {loading ? (
@@ -199,7 +204,7 @@ export function ReportsPage() {
       ) : (
         <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1050px] border-collapse text-left text-sm">
+            <table className="w-full min-w-[900px] border-collapse text-left text-sm">
               <thead className="bg-surface-muted/60">
                 <tr className="border-b border-border text-[11px] uppercase tracking-wider text-text-muted">
                   <th className="px-5 py-3 font-semibold">Report</th>
@@ -211,23 +216,38 @@ export function ReportsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/80">
-                {filteredReports.map((rpt) => (
+                {pageItems.map((rpt) => (
                   <tr key={rpt.id} className="transition hover:bg-surface-muted/40">
                     <td className="px-5 py-4"><p className="font-semibold text-text">{rpt.report_number}</p><p className="mt-1 text-xs text-text-muted">{new Date(rpt.created_at).toLocaleDateString()}</p></td>
                     <td className="max-w-[280px] px-5 py-4"><p className="truncate font-medium text-text">{reportTitle(rpt)}</p>{rpt.rejection_reason && <p className="mt-1 truncate text-xs text-warning">Revision: {rpt.rejection_reason}</p>}</td>
                     <td className="px-5 py-4"><span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${rpt.report_type === 'SWA' ? 'bg-violet-100 text-violet-800' : rpt.report_type === 'STEWA' ? 'bg-amber-100 text-amber-900' : 'bg-teal-100 text-teal-900'}`}>{rpt.report_type}</span></td>
                     <td className="px-5 py-4 text-text-muted">{rpt.created_by || '—'}</td>
-                    <td className="px-5 py-4"><span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${rpt.status === 'generated' ? 'border-blue-200 bg-blue-50 text-blue-700' : rpt.status === 'approved' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-border bg-surface-muted text-text-muted'}`}>{STATUS_LABELS[rpt.status] ?? rpt.status.replace(/_/g, ' ')}</span></td>
+                    <td className="px-5 py-4"><span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide border-emerald-200 bg-emerald-50 text-emerald-700`}>{STATUS_LABELS[rpt.status] ?? rpt.status.replace(/_/g, ' ')}</span></td>
                     <td className="px-5 py-4"><div className="flex flex-wrap justify-end gap-2">
                       {canEditReport(rpt) && <Link to={`/swa-stewa/edit?id=${encodeURIComponent(rpt.id)}`} className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted hover:bg-surface-muted">Edit</Link>}
-                      {(reportIsViewOnly(user?.role, rpt.report_type) || isReviewer) && <Link to={rpt.status === 'generated' || rpt.status === 'approved' ? `/reports/view?reportNumber=${encodeURIComponent(rpt.report_number)}` : `/swa-stewa/edit?id=${encodeURIComponent(rpt.id)}`} className="rounded-lg bg-primary-light px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary-light/70">View</Link>}
-                      {(rpt.status === 'generated' || rpt.status === 'approved' || rpt.public_url) && <Link to={`/reports/view?reportNumber=${encodeURIComponent(rpt.report_number)}`} className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted hover:bg-surface-muted">PDF / QR</Link>}
+                      {(reportIsViewOnly(user?.role, rpt.report_type) || isReviewer || isApprovedReport(rpt.status)) && (
+                        <Link
+                          to={`/reports/view?id=${encodeURIComponent(rpt.id)}`}
+                          className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-dark"
+                        >
+                          View
+                        </Link>
+                      )}
                     </div></td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            total={total}
+            from={from}
+            to={to}
+            pageSize={pageSize}
+            onPageChange={setPage}
+          />
         </div>
       )}
       </div>

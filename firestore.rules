@@ -26,6 +26,8 @@ service cloud.firestore {
     }
 
     function hasGlobalProjectAccess() {
+      // REVISIONS: Engineer III and IV may access all projects.
+      // Engineer I / II and contractors are limited to assigned / involved projects.
       return role() in ['engineer_3', 'engineer_4'];
     }
 
@@ -56,11 +58,17 @@ service cloud.firestore {
     }
 
     function projectLifecycleState(data) {
-      return data.lifecycleState is string ? data.lifecycleState : 'active';
+      // Older seed docs may omit this field — treat as active.
+      return data.keys().hasAll(['lifecycleState']) && data.lifecycleState is string
+        ? data.lifecycleState
+        : 'active';
     }
 
     function activeProjectReadable(data) {
-      return hasProjectAccessFromData(data) && projectLifecycleState(data) != 'archived';
+      // Prefer explicit membership; global roles still pass via hasProjectAccessFromData.
+      // Do not require lifecycleState to be present (legacy demo projects).
+      return hasProjectAccessFromData(data)
+        && projectLifecycleState(data) != 'archived';
     }
 
     function canReadProjectDoc(data) {
@@ -305,9 +313,12 @@ service cloud.firestore {
       allow delete: if false;
 
       match /boqItems/{boqItemId} {
-        allow read: if activeProjectReadable(projectData(projectId));
-        allow create, update, delete: if isRole('engineer_1')
-          && activeProjectReadable(projectData(projectId));
+        // Match auditLog/contractHistory: membership (or Eng III/IV global) is enough to read.
+        // Do not depend on lifecycleState being present — legacy demo docs omit it.
+        allow read: if canReadProjectDoc(projectData(projectId));
+        allow create, update, delete: if role() in ['engineer_1', 'engineer_4']
+          && canReadProjectDoc(projectData(projectId))
+          && projectLifecycleState(projectData(projectId)) != 'archived';
       }
 
       match /auditLog/{entryId} {

@@ -2,10 +2,13 @@ import {
   listProjectBoq as listProjectBoqFs,
   saveProjectBoqItem as saveProjectBoqItemFs,
   setProjectBoqActive as setProjectBoqActiveFs,
+  projectBoqAmount,
   type ProjectBoqItem,
+  type ProjectBoqInput,
 } from './firebase/projectBoq';
 
-export type { ProjectBoqItem };
+export type { ProjectBoqItem, ProjectBoqInput };
+export { projectBoqAmount };
 
 export function listProjectBoq(projectId: string) {
   return listProjectBoqFs(projectId);
@@ -13,7 +16,7 @@ export function listProjectBoq(projectId: string) {
 
 export function saveProjectBoqItem(
   projectId: string,
-  input: Omit<ProjectBoqItem, 'id' | 'projectId' | 'createdAt' | 'updatedAt'>,
+  input: ProjectBoqInput,
   id?: string,
 ) {
   return saveProjectBoqItemFs(projectId, input, id);

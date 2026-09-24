@@ -64,8 +64,8 @@ export function Sidebar() {
   };
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-border/80 bg-card shadow-sm">
-      <div className="border-b border-border/80 bg-gradient-to-b from-primary-light/30 to-card p-4">
+    <aside className="flex h-full w-64 shrink-0 flex-col overflow-hidden border-r border-border/80 bg-card shadow-sm">
+      <div className="shrink-0 border-b border-border/80 bg-gradient-to-b from-primary-light/30 to-card p-4">
         <Logo size="md" showText={false} />
         <p className="mt-3 text-[11px] leading-relaxed text-text-muted">
           <span className="text-text-muted/80">
@@ -74,7 +74,7 @@ export function Sidebar() {
         </p>
       </div>
 
-      <nav className="flex-1 space-y-0.5 overflow-y-auto p-3">
+      <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-3">
         {nav.map((item) => (
           <NavLink
             key={item.to}
@@ -96,7 +96,7 @@ export function Sidebar() {
         ))}
       </nav>
 
-      <div className="border-t border-border/80 bg-surface-muted/30 p-4">
+      <div className="shrink-0 border-t border-border/80 bg-surface-muted/30 p-4">
         <div className="rounded-xl border border-border/60 bg-card px-3 py-2.5">
           <p className="truncate text-sm font-medium text-text">{user.email}</p>
           <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-primary">

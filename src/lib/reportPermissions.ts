@@ -47,7 +47,15 @@ export function canEditReport(
   const locked = ['pending_review', 'with_engineer_3', 'with_engineer_4', 'approved', 'generated'];
   if (locked.includes(status)) return false;
 
-  if (editUserIds?.length && userId && !editUserIds.includes(userId)) {
+  // editUserIds narrows who may change a report during contractor review.
+  // Engineer I already has project-scoped access via Firestore rules — do not
+  // lock them out of drafts because seed/legacy editUserIds lists are incomplete.
+  if (
+    role !== 'engineer_1' &&
+    editUserIds?.length &&
+    userId &&
+    !editUserIds.includes(userId)
+  ) {
     return false;
   }
 

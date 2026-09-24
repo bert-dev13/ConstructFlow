@@ -1,8 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { Link } from '../lib/nextRouter';
 import { SubmissionSuccessSign } from '../components/ui/SubmissionSuccessSign';
+import { PageHeader } from '../components/ui/PageHeader';
 import { uploadTemplate } from '../lib/api';
 import type { ReportType } from '../types';
 
@@ -33,14 +33,15 @@ export function TemplateManagePage() {
   };
 
   return (
-    <main className="flex-1 overflow-y-auto p-8">
-      <Link to="/reports" className="text-sm text-text-muted hover:text-primary">Back to reports</Link>
-      <h1 className="mt-4 text-2xl font-bold text-text">Manage Report Templates</h1>
-      <p className="mt-2 max-w-2xl text-sm text-text-muted">
-        Upload your client&apos;s SWA, STEWA, or Progress Report templates. HTML files with{' '}
-        <code>{'{{placeholders}}'}</code> are used immediately. Word/Excel files are stored for reference
-        until converted to HTML.
-      </p>
+    <main className="flex-1 overflow-y-auto">
+      <div className="space-y-5 px-8 pb-10 pt-6">
+      <PageHeader
+        badge="Templates"
+        title="Manage Report Templates"
+        description="Upload SWA, STEWA, or Progress Report templates with {{placeholders}}."
+        backTo="/reports"
+        backLabel="Reports"
+      />
 
       <div className="mt-8 grid gap-6 md:grid-cols-3">
         {TYPES.map((type) => (
@@ -85,6 +86,7 @@ export function TemplateManagePage() {
         message={successType ? `${successType} template file uploaded.` : undefined}
         onClose={() => setShowSuccess(false)}
       />
+      </div>
     </main>
   );
 }

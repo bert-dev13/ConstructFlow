@@ -8,6 +8,9 @@ import { listProjects, type ProjectRow } from '../lib/projectsApi';
 import { listReports, type SwaStewaReport } from '../lib/swaStewaApi';
 import { NavIcon, type NavIconName } from './NavIcon';
 import { ReportTypeBadge, StatusBadge } from './ui/StatusBadge';
+import { PageHeader } from './ui/PageHeader';
+import { Pagination } from './ui/Pagination';
+import { usePagination } from '../hooks/usePagination';
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
@@ -30,12 +33,13 @@ export function ContractorDashboard() {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([getDashboardStats(), listProjects(), listReports()])
-      .then(([dashboard, projectRes, reportRes]) => {
+    Promise.all([listProjects(), listReports()])
+      .then(async ([projectRes, reportRes]) => {
         if (cancelled) return;
-        setStats(dashboard);
         setProjects(projectRes.projects);
         setReports(reportRes.reports);
+        const dashboard = await getDashboardStats();
+        if (!cancelled) setStats(dashboard);
       })
       .catch(() => {
         if (cancelled) return;
@@ -58,6 +62,7 @@ export function ContractorDashboard() {
   }, [projects, projectId, setProjectId]);
 
   const delayedProjects = useMemo(() => projects.filter(isDelayed), [projects]);
+  const projectPaging = usePagination(projects);
   const iarReports = reports.filter((report) => report.report_type === 'IAR');
   const reportsInReview = reports.filter((report) =>
     ['pending_review', 'with_engineer_3', 'with_engineer_4', 'contractor_confirmed'].includes(report.status),
@@ -73,28 +78,30 @@ export function ContractorDashboard() {
 
   return (
     <main className="flex-1 overflow-y-auto bg-surface">
-      <div className="space-y-8 px-8 pb-10 pt-8">
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <span className="inline-block rounded-full bg-primary-light px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-primary">
-              Contractor workspace
-            </span>
-            <h1 className="mt-3 font-serif text-3xl text-text">Construction dashboard</h1>
-            <p className="mt-2 max-w-3xl text-sm leading-relaxed text-text-muted">
-              Prepare schedules, monitor project delivery, and submit progress reports for review.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Link to="/schedule" className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary/90">
-              <NavIcon name="schedule" className="h-4 w-4" />
-              Prepare schedule
-            </Link>
-            <Link to="/swa-stewa/new/IAR" className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-semibold text-text hover:bg-surface-muted">
-              <NavIcon name="iar" className="h-4 w-4" />
-              New IAR
-            </Link>
-          </div>
-        </div>
+      <div className="space-y-5 px-8 pb-10 pt-6">
+        <PageHeader
+          badge="Contractor workspace"
+          title="Construction dashboard"
+          description="Prepare schedules, monitor project delivery, and submit progress reports for review."
+          actions={
+            <>
+              <Link
+                to="/schedule"
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-[11px] font-semibold text-white shadow-sm hover:bg-primary/90"
+              >
+                <NavIcon name="schedule" className="h-3.5 w-3.5" />
+                Prepare schedule
+              </Link>
+              <Link
+                to="/swa-stewa/new/IAR"
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[11px] font-semibold text-text hover:bg-surface-muted"
+              >
+                <NavIcon name="iar" className="h-3.5 w-3.5" />
+                New IAR
+              </Link>
+            </>
+          }
+        />
 
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {cards.map(([label, value, caption, icon]) => (
@@ -121,7 +128,8 @@ export function ContractorDashboard() {
             </div>
             <Link to="/projects" className="text-sm font-semibold text-primary hover:underline">View all projects</Link>
           </div>
-          <div className="mt-4 overflow-x-auto">
+          <div className="mt-4 overflow-hidden rounded-xl border border-border">
+            <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] border-collapse text-left text-sm">
               <thead className="bg-surface-muted/60 text-[11px] uppercase tracking-wider text-text-muted">
                 <tr className="border-b border-border">
@@ -137,7 +145,7 @@ export function ContractorDashboard() {
                   <tr><td colSpan={5} className="px-4 py-8 text-text-muted">Loading projects…</td></tr>
                 ) : projects.length === 0 ? (
                   <tr><td colSpan={5} className="px-4 py-8 text-text-muted">No projects assigned yet.</td></tr>
-                ) : projects.map((project) => {
+                ) : projectPaging.pageItems.map((project) => {
                   const delayed = isDelayed(project);
                   return (
                     <tr key={project.id} className="transition hover:bg-surface-muted/40">
@@ -151,6 +159,16 @@ export function ContractorDashboard() {
                 })}
               </tbody>
             </table>
+            </div>
+            <Pagination
+              page={projectPaging.page}
+              totalPages={projectPaging.totalPages}
+              total={projectPaging.total}
+              from={projectPaging.from}
+              to={projectPaging.to}
+              pageSize={projectPaging.pageSize}
+              onPageChange={projectPaging.setPage}
+            />
           </div>
         </section>
 
