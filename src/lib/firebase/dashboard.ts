@@ -55,7 +55,9 @@ export async function getDashboardStatsFs(): Promise<DashboardData> {
     if (status === 'rejected' && uid !== 'anon' && createdBy === uid) my_rejected += 1;
     if (['approved', 'generated'].includes(status)) approved += 1;
 
-    if (profile?.role === 'engineer_2' && status === 'pending_review') pendingApprovals += 1;
+    if (profile?.role === 'engineer_2' && (status === 'pending_review' || status === 'contractor_confirmed')) {
+      pendingApprovals += 1;
+    }
     if (profile?.role === 'engineer_3' && status === 'with_engineer_3') pendingApprovals += 1;
     if (profile?.role === 'engineer_4' && status === 'with_engineer_4') pendingApprovals += 1;
   }

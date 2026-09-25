@@ -4,6 +4,7 @@ import {
   buildSCurvePeriods,
   buildTheoreticalBarChartTasks,
   buildTheoreticalSCurvePeriods,
+  theoreticalAccomplishmentPct,
 } from '../src/lib/sCurvePeriods';
 import type { PdmActivity, PdmDependency } from '../src/types';
 
@@ -85,21 +86,133 @@ assert(
   '30-day target accomplishment should total 100%',
 );
 
-const theoretical30 = buildTheoreticalSCurvePeriods({
+// Pro-rata overlap: Pavement (days 18–47) must contribute to BOTH monthly periods,
+// not dump its full weight into the finish month only.
+const pavementWt =
+  costSummary.items.find((item) => item.activityId === 'c')?.weightPct ?? 0;
+assert(pavementWt > 0, 'Pavement weight should be positive');
+assert(
+  periods30[0]!.targetAccomplishmentPct > 0 && periods30[1]!.targetAccomplishmentPct > 0,
+  '30-day periods must both receive a portion of cross-boundary activities',
+);
+assert(
+  periods30[1]!.targetAccomplishmentPct < pavementWt + 0.0001,
+  'Period 2 must not receive the entire pavement weight when the activity starts in period 1',
+);
+
+// Explicit 30-day grouping sample (days 1–15, 16–30, 31–45, 46–60).
+const sampleActivities: PdmActivity[] = [
+  { id: 's1', number: '1', name: 'A1', duration: 15, es: 1, ef: 15 },
+  { id: 's2', number: '2', name: 'A2', duration: 15, es: 16, ef: 30 },
+  { id: 's3', number: '3', name: 'A3', duration: 15, es: 31, ef: 45 },
+  { id: 's4', number: '4', name: 'A4', duration: 15, es: 46, ef: 60 },
+];
+const sampleCosts = computeSCurveCostSummary(
+  sampleActivities.map((activity) => ({
+    activityId: activity.id,
+    itemNo: activity.number,
+    description: activity.name,
+    quantity: 1,
+    unitCost: 250000,
+  })),
+);
+const sample30 = buildSCurvePeriods({
   startDate: '2026-01-01',
-  totalPeriods: 4,
+  projectDuration: 60,
+  activities: sampleActivities,
+  costItems: sampleCosts.items,
+  totalContractAmount: sampleCosts.totalContractAmount,
+  reportingInterval: '30_day',
+});
+assert(sample30.length === 2, 'Sample 60d/30-day should have 2 periods');
+assert(
+  Math.abs(sample30[0]!.targetAccomplishmentPct - 50) < 0.01,
+  `First 30 days should cover A1+A2 (~50%), got ${sample30[0]!.targetAccomplishmentPct}`,
+);
+assert(
+  Math.abs(sample30[1]!.targetAccomplishmentPct - 50) < 0.01,
+  `Second 30 days should cover A3+A4 (~50%), got ${sample30[1]!.targetAccomplishmentPct}`,
+);
+
+// --- Theoretical: cosine formula over PDM duration + selected interval ---
+
+function assertMonotonicToEnd(
+  rows: ReturnType<typeof buildTheoreticalSCurvePeriods>,
+  label: string,
+) {
+  assert(rows.length >= 1, `${label}: expected at least one period`);
+  assert(round4(rows[rows.length - 1]!.cumulativePct) === 100, `${label}: must finish at 100%`);
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i]!;
+    if (i > 0) {
+      assert(
+        row.cumulativePct + 0.0001 >= rows[i - 1]!.cumulativePct,
+        `${label}: cumulative must be monotonic at period ${row.periodIndex}`,
+      );
+      assert(
+        rows[i - 1]!.cumulativePct < 100 - 0.0001 || i === rows.length - 1,
+        `${label}: must not reach 100% before the final period (hit at period ${rows[i - 1]!.periodIndex})`,
+      );
+    }
+  }
+  assert(
+    round4(rows.reduce((sum, period) => sum + period.targetAccomplishmentPct, 0)) === 100,
+    `${label}: period targets must sum to 100%`,
+  );
+}
+
+const expectedAt30of180 = theoreticalAccomplishmentPct(30, 180);
+assert(
+  Math.abs(expectedAt30of180 - 6.6987) < 0.01,
+  `Expected ~6.70% at day 30 of 180, got ${expectedAt30of180}`,
+);
+assert(theoreticalAccomplishmentPct(180, 180) === 100, 'Day 180 of 180 must be 100%');
+assert(theoreticalAccomplishmentPct(0, 180) === 0, 'Day 0 must be 0%');
+
+const theoretical180_30 = buildTheoreticalSCurvePeriods({
+  startDate: '2026-01-01',
+  projectDuration: 180,
   totalContractAmount: costSummary.totalContractAmount,
   reportingInterval: '30_day',
 });
-
-assert(theoretical30.length === 4, 'Expected 4 theoretical monthly periods');
-assert(round4(theoretical30[0]?.cumulativePct ?? 0) === 14.6447, 'Unexpected first theoretical cumulative %');
-assert(round4(theoretical30[3]?.cumulativePct ?? 0) === 100, 'Theoretical curve should finish at 100%');
+assert(theoretical180_30.length === 6, `180d/30-day: expected 6 periods, got ${theoretical180_30.length}`);
 assert(
-  theoretical30.every((period, index, rows) =>
-    index === 0 ? period.targetAccomplishmentPct > 0 : period.cumulativePct >= rows[index - 1]!.cumulativePct,
-  ),
-  'Theoretical cumulative percentages should be monotonic',
+  round4(theoretical180_30[0]!.cumulativePct) === round4(expectedAt30of180),
+  `180d/30-day period 1 cumulative should match formula (~6.70%), got ${theoretical180_30[0]!.cumulativePct}`,
+);
+assertMonotonicToEnd(theoretical180_30, '180d/30-day');
+assert(
+  round4(theoretical180_30.reduce((sum, row) => sum + row.targetAccomplishmentPhp, 0)) ===
+    round4(costSummary.totalContractAmount),
+  'Theoretical period amounts must sum to the contract amount',
+);
+assert(
+  round4(theoretical180_30[theoretical180_30.length - 1]!.cumulativePhp) ===
+    round4(costSummary.totalContractAmount),
+  'Theoretical final cumulative amount must equal the contract amount',
+);
+
+const theoretical180_10 = buildTheoreticalSCurvePeriods({
+  startDate: '2026-01-01',
+  projectDuration: 180,
+  totalContractAmount: costSummary.totalContractAmount,
+  reportingInterval: '10_day',
+});
+assert(theoretical180_10.length === 18, `180d/10-day: expected 18 periods, got ${theoretical180_10.length}`);
+assert(
+  round4(theoretical180_10[2]!.cumulativePct) === round4(expectedAt30of180),
+  `180d/10-day period 3 (day 30) should match ~6.70%, got ${theoretical180_10[2]!.cumulativePct}`,
+);
+assert(
+  round4(theoretical180_10[0]!.cumulativePct) === theoreticalAccomplishmentPct(10, 180),
+  '180d/10-day period 1 must use Current Period = 10',
+);
+assertMonotonicToEnd(theoretical180_10, '180d/10-day');
+
+// Not flat/linear: early increment < mid increment for a cosine S-curve
+assert(
+  theoretical180_30[0]!.targetAccomplishmentPct < theoretical180_30[2]!.targetAccomplishmentPct,
+  '180d/30-day: cosine curve should accelerate through the middle periods',
 );
 
 const theoreticalBar = buildTheoreticalBarChartTasks({

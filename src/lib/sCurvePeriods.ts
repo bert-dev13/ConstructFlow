@@ -32,11 +32,6 @@ function periodLabel(interval: SCurveReportingInterval, periodIndex: number): st
   return interval === '10_day' ? `10-Day ${periodIndex}` : `Month ${periodIndex}`;
 }
 
-function periodIndexForFinishDay(day: number, interval: SCurveReportingInterval): number {
-  const normalized = Math.max(1, day);
-  return Math.max(1, Math.ceil(normalized / intervalDays(interval)));
-}
-
 export function periodIndexForDate(
   startDate: string,
   date: string,
@@ -45,7 +40,32 @@ export function periodIndexForDate(
   const start = new Date(`${startDate}T00:00:00Z`).getTime();
   const current = new Date(`${date}T00:00:00Z`).getTime();
   const diffDays = Math.max(0, Math.floor((current - start) / 86400000));
-  return Math.max(1, Math.ceil(diffDays / intervalDays(interval)));
+  // Day 0 (project start) belongs to period 1; day 30 of a 30-day interval is still period 1.
+  return Math.max(1, Math.floor(diffDays / intervalDays(interval)) + 1);
+}
+
+/** Inclusive 1-based schedule span — same mapping as bar chart (ES 0-based → startDay). */
+export function activityDaySpan(activity: PdmActivity): { startDay: number; endDay: number } {
+  const duration = Math.max(1, Math.floor(Number(activity.duration) || 1));
+  const es = Math.max(0, Math.floor(Number(activity.es ?? 0) || 0));
+  const startDay = es + 1;
+  const ef =
+    activity.ef != null && Number.isFinite(Number(activity.ef))
+      ? Math.floor(Number(activity.ef))
+      : es + duration;
+  const endDay = Math.max(startDay, ef);
+  return { startDay, endDay };
+}
+
+function overlapDays(
+  aStart: number,
+  aEnd: number,
+  bStart: number,
+  bEnd: number,
+): number {
+  const start = Math.max(aStart, bStart);
+  const end = Math.min(aEnd, bEnd);
+  return Math.max(0, end - start + 1);
 }
 
 export function buildSCurvePeriods(input: {
@@ -58,32 +78,48 @@ export function buildSCurvePeriods(input: {
 }): SCurvePeriodRow[] {
   const reportingInterval = input.reportingInterval ?? '30_day';
   const daysPerPeriod = intervalDays(reportingInterval);
-  const periodCount = Math.max(1, Math.ceil(Math.max(1, input.projectDuration) / daysPerPeriod));
+  const projectDuration = Math.max(1, Math.floor(input.projectDuration) || 1);
+  const periodCount = Math.max(1, Math.ceil(projectDuration / daysPerPeriod));
   const wtByActivityId = new Map(
     input.costItems.map((item) => [item.activityId, item.weightPct]),
   );
   const targetPctByPeriod = new Map<number, number>();
 
+  // Pro-rate each activity's weight across intervals by calendar overlap with
+  // its PDM span (ES..EF). Do not dump the full weight into the finish period,
+  // and do not count an activity in an interval it does not overlap.
   for (const activity of input.activities) {
-    const finishDay = activity.ef ?? activity.duration ?? 0;
     const wt = wtByActivityId.get(activity.id) ?? 0;
     if (wt <= 0) continue;
-    const periodIndex = Math.min(
-      periodCount,
-      periodIndexForFinishDay(finishDay, reportingInterval),
-    );
-    targetPctByPeriod.set(periodIndex, (targetPctByPeriod.get(periodIndex) ?? 0) + wt);
+    const { startDay, endDay } = activityDaySpan(activity);
+    const clampedStart = Math.min(projectDuration, startDay);
+    const clampedEnd = Math.min(projectDuration, Math.max(clampedStart, endDay));
+    const spanDays = clampedEnd - clampedStart + 1;
+    if (spanDays <= 0) continue;
+
+    for (let periodIndex = 1; periodIndex <= periodCount; periodIndex += 1) {
+      const periodStartDay = (periodIndex - 1) * daysPerPeriod + 1;
+      const periodEndDay = Math.min(projectDuration, periodIndex * daysPerPeriod);
+      const overlap = overlapDays(clampedStart, clampedEnd, periodStartDay, periodEndDay);
+      if (overlap <= 0) continue;
+      const portion = (wt * overlap) / spanDays;
+      targetPctByPeriod.set(periodIndex, (targetPctByPeriod.get(periodIndex) ?? 0) + portion);
+    }
   }
 
   let runningCumulativePct = 0;
   const rows: SCurvePeriodRow[] = [];
 
   for (let periodIndex = 1; periodIndex <= periodCount; periodIndex += 1) {
-    const periodStartDay =
-      periodIndex === 1 ? 0 : (periodIndex - 1) * daysPerPeriod + 1;
-    const periodEndDay = Math.min(input.projectDuration, periodIndex * daysPerPeriod);
-    const targetAccomplishmentPct = round4(targetPctByPeriod.get(periodIndex) ?? 0);
+    const periodStartDay = (periodIndex - 1) * daysPerPeriod + 1;
+    const periodEndDay = Math.min(projectDuration, periodIndex * daysPerPeriod);
+    let targetAccomplishmentPct = round4(targetPctByPeriod.get(periodIndex) ?? 0);
+    // Snap the final period so cumulative % is exactly 100 (rounding residuals).
+    if (periodIndex === periodCount) {
+      targetAccomplishmentPct = round4(Math.max(0, 100 - runningCumulativePct));
+    }
     runningCumulativePct = round4(runningCumulativePct + targetAccomplishmentPct);
+    if (periodIndex === periodCount) runningCumulativePct = 100;
     const targetAccomplishmentPhp = round4(
       (targetAccomplishmentPct * input.totalContractAmount) / 100,
     );
@@ -92,8 +128,9 @@ export function buildSCurvePeriods(input: {
     rows.push({
       periodIndex,
       label: periodLabel(reportingInterval, periodIndex),
-      startDate: addDays(input.startDate, periodStartDay),
-      endDate: addDays(input.startDate, periodEndDay),
+      // Day 1 = project start date; day N = start + (N - 1).
+      startDate: addDays(input.startDate, periodStartDay - 1),
+      endDate: addDays(input.startDate, periodEndDay - 1),
       targetAccomplishmentPct,
       targetAccomplishmentPhp,
       cumulativePct: runningCumulativePct,
@@ -104,36 +141,88 @@ export function buildSCurvePeriods(input: {
   return rows;
 }
 
+function daysBetweenStartAndEnd(startDate: string, endDate: string): number {
+  const start = new Date(`${startDate}T00:00:00Z`).getTime();
+  const end = new Date(`${endDate}T00:00:00Z`).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return 0;
+  return Math.max(1, Math.round((end - start) / 86400000));
+}
+
+/**
+ * Exact theoretical cumulative accomplishment (%):
+ * 100 × (1 − cos(π × (Current Period / Total Duration))) / 2
+ *
+ * Current Period and Total Duration are both in days.
+ */
+export function theoreticalAccomplishmentPct(
+  currentPeriodDays: number,
+  totalDurationDays: number,
+): number {
+  const total = Math.max(1, totalDurationDays);
+  const current = Math.max(0, Math.min(total, currentPeriodDays));
+  if (current <= 0) return 0;
+  if (current >= total) return 100;
+  return round4((100 * (1 - Math.cos(Math.PI * (current / total)))) / 2);
+}
+
+/**
+ * Theoretical S-Curve using the cosine formula over PDM/project duration.
+ * Period checkpoints follow the selected 10-day or 30-day reporting interval.
+ * Cumulative starts at 0% and reaches exactly 100% when Current Period = Total Duration.
+ */
 export function buildTheoreticalSCurvePeriods(input: {
   startDate: string;
-  totalPeriods: number;
+  projectDuration: number;
+  /** Optional Project Details planned end — used when later than PDM duration. */
+  endDate?: string | null;
+  /** Kept for call-site compatibility; theoretical % does not use activity WT. */
+  activities?: PdmActivity[];
+  costItems?: SCurveCostItem[];
   totalContractAmount: number;
   reportingInterval?: SCurveReportingInterval;
 }): SCurvePeriodRow[] {
   const reportingInterval = input.reportingInterval ?? '30_day';
   const daysPerPeriod = intervalDays(reportingInterval);
-  const periodCount = Math.max(1, input.totalPeriods);
+
+  const durationFromEnd = input.endDate
+    ? daysBetweenStartAndEnd(input.startDate, input.endDate)
+    : 0;
+  const totalDuration = Math.max(1, Math.floor(input.projectDuration) || 0, durationFromEnd);
+  const periodCount = Math.max(1, Math.ceil(totalDuration / daysPerPeriod));
+  const projectEndDate = input.endDate?.trim()
+    ? input.endDate.trim()
+    : addDays(input.startDate, totalDuration);
+
   const rows: SCurvePeriodRow[] = [];
   let previousCumulativePct = 0;
 
   for (let periodIndex = 1; periodIndex <= periodCount; periodIndex += 1) {
-    const cumulativePct = round4(
-      (100 * (1 - Math.cos(Math.PI * (periodIndex / periodCount)))) / 2,
-    );
+    const periodStartDay = (periodIndex - 1) * daysPerPeriod + 1;
+    const periodEndDay = Math.min(totalDuration, periodIndex * daysPerPeriod);
+    const isLast = periodIndex === periodCount;
+
+    // Current Period = elapsed days at the end of this reporting interval.
+    const currentPeriodDays = isLast ? totalDuration : periodEndDay;
+    const cumulativePct = isLast
+      ? 100
+      : theoreticalAccomplishmentPct(currentPeriodDays, totalDuration);
     const targetAccomplishmentPct = round4(cumulativePct - previousCumulativePct);
-    const periodStartDay =
-      periodIndex === 1 ? 0 : (periodIndex - 1) * daysPerPeriod + 1;
-    const periodEndDay = periodIndex * daysPerPeriod;
-    const targetAccomplishmentPhp = round4(
-      (targetAccomplishmentPct * input.totalContractAmount) / 100,
+
+    // Amount follows the same interval % as the cosine curve (not activity WT).
+    // Cap cumulative peso at the contract amount on the final period.
+    const cumulativePhp = isLast
+      ? round4(input.totalContractAmount)
+      : round4((cumulativePct * input.totalContractAmount) / 100);
+    const previousCumulativePhp = round4(
+      (previousCumulativePct * input.totalContractAmount) / 100,
     );
-    const cumulativePhp = round4((cumulativePct * input.totalContractAmount) / 100);
+    const targetAccomplishmentPhp = round4(cumulativePhp - previousCumulativePhp);
 
     rows.push({
       periodIndex,
       label: periodLabel(reportingInterval, periodIndex),
-      startDate: addDays(input.startDate, periodStartDay),
-      endDate: addDays(input.startDate, periodEndDay),
+      startDate: addDays(input.startDate, periodStartDay - 1),
+      endDate: isLast ? projectEndDate : addDays(input.startDate, periodEndDay - 1),
       targetAccomplishmentPct,
       targetAccomplishmentPhp,
       cumulativePct,
@@ -170,3 +259,5 @@ export function buildTheoreticalBarChartTasks(input: {
     totalDays: totalPeriods * daysPerPeriod,
   };
 }
+
+

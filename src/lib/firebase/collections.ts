@@ -7,6 +7,7 @@ export const COLLECTIONS = {
   reports: 'reports',
   reportTemplates: 'reportTemplates',
   emailQueue: 'emailQueue',
+  emailNotifications: 'emailNotifications',
   counters: 'counters',
 } as const;
 
@@ -28,4 +29,8 @@ export function reportRevisionsPath(reportId: string) {
 
 export function sCurveSnapshotsPath(projectId: string) {
   return `${COLLECTIONS.sCurves}/${projectId}/snapshots`;
+}
+
+export function scheduleVersionsPath(projectId: string) {
+  return `${COLLECTIONS.schedules}/${projectId}/versions`;
 }

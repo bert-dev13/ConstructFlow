@@ -48,25 +48,19 @@ export const DEMO_ACCOUNTS_BY_ROLE: Record<
   { email: string; password: string; name: string }[]
 > = {
   contractor: [
-    { email: 'constructflow.contractor.1@gmail.com', password: 'contractor123', name: 'Contractor Alpha' },
-    { email: 'constructflow.contractor.2@gmail.com', password: 'contractor123', name: 'Contractor Bravo' },
-    { email: 'constructflow.contractor.3@gmail.com', password: 'contractor123', name: 'Contractor Charlie' },
+    { email: 'constructflow.contractor.1@gmail.com', password: 'fortesting01', name: 'Contractor' },
   ],
   engineer_1: [
-    { email: 'constructflow.engineer1.1@gmail.com', password: 'engineer123', name: 'Engr. Juan Dela Cruz' },
-    { email: 'constructflow.engineer1.2@gmail.com', password: 'engineer123', name: 'Engr. Carlos Mendoza' },
-    { email: 'constructflow.engineer1.3@gmail.com', password: 'engineer123', name: 'Engr. Sofia Ramirez' },
+    { email: 'constructflow.engineerr1@gmail.com', password: 'fortesting01', name: 'Engineer I' },
   ],
   engineer_2: [
-    { email: 'constructflow.engineer2.1@gmail.com', password: 'engineer123', name: 'Engr. Maria Santos' },
-    { email: 'constructflow.engineer2.2@gmail.com', password: 'engineer123', name: 'Engr. Luis Garcia' },
-    { email: 'constructflow.engineer2.3@gmail.com', password: 'engineer123', name: 'Engr. Elena Cruz' },
+    { email: 'constructflow.engineerii@gmail.com', password: 'EngineerII', name: 'Engineer II' },
   ],
   engineer_3: [
-    { email: 'constructflow.engineer3.1@gmail.com', password: 'engineer123', name: 'Engr. Pedro Reyes' },
+    { email: 'constructflow.engineerIII@gmail.com', password: 'Engineer 3', name: 'Engineer III' },
   ],
   engineer_4: [
-    { email: 'constructflow.engineer4.1@gmail.com', password: 'engineer123', name: 'Engr. Ana Lopez' },
+    { email: 'constructflow.engineer4@gmail.com', password: 'Engineer 4', name: 'Engineer IV' },
   ],
 };
 

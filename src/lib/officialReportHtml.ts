@@ -1,7 +1,9 @@
 import type { SwaStewaReport } from './swaStewaApi';
 import { BASE_URL } from './paths';
+import { formatExcelDate, stewaDash, stewaPercentText } from './stewaCalculations';
 import {
   computeWorkItems,
+  isSwaSectionRow,
   formatMoney,
   formatPct,
   type WorkItem,
@@ -134,10 +136,11 @@ const SHARED_CSS = `
 `;
 
 function isSectionRow(row: WorkItemComputed): boolean {
+  if (row.isSection || isSwaSectionRow(row)) return true;
   const itemNo = String(row.snapshotItemNo || row.itemNo || '').trim();
   const unit = String(row.snapshotUnit || row.unit || '').trim();
   const desc = String(row.snapshotDescription || row.description || '').trim();
-  if (/^[IVXLCDM]+\.\s/i.test(desc) || /^[A-Z]\.\s+[A-Z]/.test(desc)) return true;
+  if (/^[A-Z]\.\s+[A-Z]/.test(desc)) return true;
   return !itemNo && !unit && (row.unitPrice || 0) === 0 && (row.programmedQty || 0) === 0;
 }
 
@@ -171,6 +174,10 @@ function normalizeLineItems(raw: unknown): WorkItem[] {
       revisedQty: Number(item.revisedQty ?? item.revised_qty ?? 0) || 0,
       previous: Number(item.previous ?? 0) || 0,
       thisPeriod: Number(item.thisPeriod ?? item.this_period ?? 0) || 0,
+      toDateInput:
+        item.toDateInput != null && Number.isFinite(Number(item.toDateInput))
+          ? Number(item.toDateInput)
+          : undefined,
       remarks: String(item.remarks ?? item.status ?? ''),
     };
   });
@@ -226,6 +233,12 @@ export function buildOfficialSwaHtml(
       let html = '<tr>';
       html += `<td>${escapeHtml(String(row.snapshotItemNo || row.itemNo || ''))}</td>`;
       html += `<td class="left">${escapeHtml(String(row.snapshotDescription || row.description || ''))}</td>`;
+      if (row.isSection) {
+        const blanks = showRevised ? 13 : 10;
+        html += '<td></td>'.repeat(blanks);
+        html += '</tr>';
+        return html;
+      }
       html += `<td class="right">${qtyCell(row.programmedQty, section)}</td>`;
       html += `<td class="right">${moneyCell(row.unitPrice, section)}</td>`;
       html += `<td>${escapeHtml(String(row.snapshotUnit || row.unit || ''))}</td>`;
@@ -237,11 +250,11 @@ export function buildOfficialSwaHtml(
         html += `<td class="right">${moneyCell(row.revisedAmount, true)}</td>`;
         html += `<td class="right">${qtyCell(row.revisedWeightPct, true)}</td>`;
       }
-      html += `<td class="right">${qtyCell(row.previous, true)}</td>`;
-      html += `<td class="right">${qtyCell(row.thisPeriod, section || row.thisPeriod === 0)}</td>`;
-      html += `<td class="right">${qtyCell(row.toDate, section || row.toDate === 0)}</td>`;
+      html += `<td class="right">${row.previous ? moneyCell(row.previous, true) : ''}</td>`;
+      html += `<td class="right">${moneyCell(row.thisPeriod, section || row.thisPeriod === 0)}</td>`;
+      html += `<td class="right">${moneyCell(row.toDate, section || row.toDate === 0)}</td>`;
       html += `<td class="right">${qtyCell(row.accomplishmentWeightPct, section)}</td>`;
-      html += `<td>${escapeHtml(String(row.remarks || row.status || ''))}</td>`;
+      html += `<td>${escapeHtml(String(row.status || row.remarks || ''))}</td>`;
       html += '</tr>';
       return html;
     })
@@ -334,6 +347,23 @@ export function buildOfficialStewaHtml(
     field(data, 'project_name', 'project_title') || report.project_name || '',
   );
 
+  const asOf = field(data, 'report_date');
+  const periodStart = field(data, 'period_start');
+  const periodEnd = field(data, 'period_end');
+  const periodHtml =
+    periodStart && periodEnd
+      ? `${escapeHtml(formatExcelDate(periodStart))} to<br>${escapeHtml(formatExcelDate(periodEnd))}`
+      : escapeHtml(field(data, 'period_covered', 'week_covered'));
+  const pct = (key: string) => {
+    const raw = field(data, key);
+    if (!raw) return '';
+    return `${escapeHtml(stewaPercentText(raw))}%`;
+  };
+  const excelDate = (key: string) => {
+    const raw = field(data, key);
+    return escapeHtml(raw ? formatExcelDate(raw) : '');
+  };
+
   return `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><style>
 @page { size: 8.5in 13in; margin: 32px 42px 44px 42px; }
@@ -342,11 +372,11 @@ body { font-size: 10pt; max-width: 780px; margin: 0 auto; }
 table.form td.lbl { width: 52%; white-space: normal; }
 table.sig-table { width: 100%; border-collapse: collapse; margin-top: 36px; }
 table.sig-table td { width: 50%; text-align: center; vertical-align: top; border: none; padding: 8px 16px; font-size: 9.5pt; }
+.email-footer { margin-top: 28px; font-size: 9pt; font-weight: bold; }
 </style></head><body>
-<div class="report-no">${escapeHtml(report.report_number)}</div>
 ${letterheadHtml()}
 <div class="doc-title">STATEMENT OF TIME ELAPSED AND WORK ACCOMPLISHED</div>
-<div class="meta">As of <u>${escapeHtml(formatReportDate(data.report_date))}</u></div>
+<div class="meta">As of <u>${escapeHtml(asOf ? formatExcelDate(asOf) : '')}</u></div>
 
 <table class="form">
   ${formRow('Project Name', projectName, true)}
@@ -356,19 +386,19 @@ ${letterheadHtml()}
 </table>
 
 <table class="form">
-  ${formRow('1. Period Covered', escapeHtml(field(data, 'period_covered')))}
+  ${formRow('1. Period Covered', periodHtml)}
   ${formRow('2. Contract Duration', escapeHtml(field(data, 'contract_duration')))}
-  ${formRow('3. Date of Receipt of Notice to Proceed', escapeHtml(formatReportDate(data.notice_to_proceed, true)))}
-  ${formRow('4. Expiry Date', escapeHtml(formatReportDate(data.expiry_date, true)))}
-  ${formRow('5. Approved Time Extension', escapeHtml(field(data, 'approved_time_extension') || '-'))}
-  ${formRow('6. Approved Time Suspension', escapeHtml(field(data, 'approved_time_suspension') || '-'))}
-  ${formRow('7. Total Time Extension', escapeHtml(field(data, 'total_time_extension')))}
-  ${formRow('8. Revised Contract Duration', escapeHtml(field(data, 'revised_contract_duration')))}
-  ${formRow('9. Revised Expiry Date', escapeHtml(formatReportDate(data.revised_expiry_date, true)))}
+  ${formRow('3. Date of Receipt of Notice to Proceed', excelDate('notice_to_proceed'))}
+  ${formRow('4. Expiry Date', excelDate('expiry_date'))}
+  ${formRow('5. Approved Time Extension', escapeHtml(stewaDash(field(data, 'approved_time_extension'))))}
+  ${formRow('6. Approved Time Suspension', escapeHtml(stewaDash(field(data, 'approved_time_suspension'))))}
+  ${formRow('7. Total Time Extension', escapeHtml(stewaDash(field(data, 'total_time_extension'))))}
+  ${formRow('8. Revised Contract Duration', escapeHtml(stewaDash(field(data, 'revised_contract_duration'))))}
+  ${formRow('9. Revised Expiry Date', excelDate('revised_expiry_date'))}
   ${formRow('10. Total Calendar days Elapsed to Date', escapeHtml(field(data, 'calendar_days_elapsed')))}
-  ${formRow('11. Percentage of work accomplished - Actual', `${escapeHtml(field(data, 'percent_actual') || '0.00')}%`)}
-  ${formRow('12. Percentage of work accomplished - Planned', `${escapeHtml(field(data, 'percent_planned') || '0.00')}%`)}
-  ${formRow('13. Slippage', `${escapeHtml(field(data, 'slippage') || '0.00')}%`)}
+  ${formRow('11. Percentage of work accomplished - Actual', pct('percent_actual'))}
+  ${formRow('12. Percentage of work accomplished - Planned', pct('percent_planned'))}
+  ${formRow('13. Slippage', pct('slippage'))}
   ${formRow('14. Remarks', escapeHtml(field(data, 'remarks')))}
 </table>
 
@@ -386,6 +416,7 @@ ${letterheadHtml()}
     </td>
   </tr>
 </table>
+<div class="email-footer">EMAIL: peo@cagayan.gov.ph</div>
 </body></html>`;
 }
 

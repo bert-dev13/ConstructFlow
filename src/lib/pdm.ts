@@ -64,6 +64,14 @@ function requiredPredecessorLs(
   }
 }
 
+function stripUndefinedFields<T extends Record<string, unknown>>(obj: T): T {
+  const out = { ...obj };
+  for (const key of Object.keys(out)) {
+    if (out[key] === undefined) delete out[key];
+  }
+  return out;
+}
+
 /**
  * Forward/backward pass for PDM scheduling (Day 0 baseline).
  * Supports FS, SS, FF, SF with optional lag (lead = negative lag).
@@ -77,11 +85,11 @@ export function calculatePdmSchedule(
   const map = new Map(
     activities.map((a) => [
       a.id,
-      {
-        ...a,
+      stripUndefinedFields({
+        ...(a as unknown as Record<string, unknown>),
         // Placeholder duration for first pass — extend activities do not drive project end.
         duration: a.extendToEnd ? 1 : Math.max(1, a.duration),
-      },
+      }) as unknown as PdmActivity,
     ]),
   );
   const preds = new Map<string, PdmDependency[]>();

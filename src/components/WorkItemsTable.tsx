@@ -4,10 +4,13 @@ import {
   computeWorkItems,
   formatMoney,
   formatPct,
+  isSwaSectionHeading,
   newWorkItem,
   type WorkItem,
 } from '../lib/workItems';
 import { PayItemSelect } from './PayItemSelect';
+import { isPlaceholderUnit, resolveItemUnit } from '../lib/boqLookup';
+import { linkedPayItemId } from '../lib/projectBoqSync';
 import type { PayItem } from '../lib/payItemsApi';
 import type { ProjectBoqItem } from '../lib/projectBoqApi';
 
@@ -21,6 +24,7 @@ interface WorkItemsTableProps {
   onLessAmountChange?: (value: number) => void;
   onChange: (items: WorkItem[]) => void;
   boqItems?: ProjectBoqItem[];
+  onRefreshProjectBoq?: () => void | Promise<void>;
   readOnly?: boolean;
 }
 
@@ -34,6 +38,7 @@ export function WorkItemsTable({
   onLessAmountChange,
   onChange,
   boqItems,
+  onRefreshProjectBoq,
   readOnly,
 }: WorkItemsTableProps) {
   const { items: computed, totals } = computeWorkItems(items, lessAmount, showRevised);
@@ -64,27 +69,66 @@ export function WorkItemsTable({
       });
       return;
     }
-    const boqItem = (boqItems ?? []).find((boq) => boq.payItemId === item.id && boq.active);
+    const boqItem = (boqItems ?? []).find(
+      (boq) =>
+        boq.active !== false
+        && (
+          (boq.payItemId && boq.payItemId === item.id)
+          || boq.id === item.id
+          || (
+            boq.itemNo
+            && item.itemNo
+            && boq.itemNo.trim().toLowerCase() === item.itemNo.trim().toLowerCase()
+          )
+        ),
+    );
+    const resolved = resolveItemUnit(
+      boqItem?.itemNo || item.itemNo,
+      boqItem?.description || item.description,
+      boqItem && !isPlaceholderUnit(boqItem.unit) ? boqItem.unit : item.unit,
+    );
     update(id, {
-      payItemId: item.id,
+      payItemId: linkedPayItemId(item.id, boqItem),
       payItemVersion: item.version,
-      snapshotItemNo: item.itemNo,
-      snapshotDescription: item.description,
-      snapshotUnit: item.unit,
-      itemNo: item.itemNo,
-      description: item.description,
-      unit: item.unit,
+      snapshotItemNo: boqItem?.itemNo || item.itemNo,
+      snapshotDescription: resolved.description,
+      snapshotUnit: resolved.unit,
+      itemNo: boqItem?.itemNo || item.itemNo,
+      description: resolved.description,
+      unit: resolved.unit,
       ...(boqItem
         ? {
             programmedQty: boqItem.programmedQty,
             revisedQty: boqItem.revisedQty ?? undefined,
             unitPrice: boqItem.unitPrice,
-            itemNo: boqItem.itemNo,
-            description: boqItem.description,
-            unit: boqItem.unit,
-            snapshotItemNo: boqItem.itemNo,
-            snapshotDescription: boqItem.description,
-            snapshotUnit: boqItem.unit,
+          }
+        : {}),
+    });
+  };
+
+  const setCustomItemNo = (id: string, text: string) => {
+    const current = items.find((item) => item.id === id);
+    if (!current) return;
+    const trimmed = text.trim();
+    if (trimmed === current.itemNo.trim() && !current.payItemId) return;
+    const heading = isSwaSectionHeading(trimmed);
+    update(id, {
+      itemNo: trimmed,
+      snapshotItemNo: trimmed,
+      payItemId: '',
+      payItemVersion: undefined,
+      ...(heading
+        ? {
+            description: '',
+            snapshotDescription: '',
+            unit: '',
+            snapshotUnit: '',
+            programmedQty: 0,
+            revisedQty: 0,
+            unitPrice: 0,
+            previous: 0,
+            toDateInput: undefined,
+            remarks: '',
           }
         : {}),
     });
@@ -163,20 +207,67 @@ export function WorkItemsTable({
         </thead>
         <tbody>
           {computed.map((row) => (
-            <tr key={row.id} className="border-b border-border/50">
+            <tr key={row.id} className={`border-b border-border/50 ${row.isSection ? 'bg-surface-muted/40' : ''}`}>
               <td className="p-1">
-                {readOnly ? row.snapshotItemNo || row.itemNo : (
+                {readOnly ? (
+                  <span className={row.isSection ? 'font-semibold' : undefined}>
+                    {row.snapshotItemNo || row.itemNo}
+                  </span>
+                ) : (
                   <PayItemSelect
                     value={row.payItemId ?? ''}
                     onChange={(item) => selectPayItem(row.id, item)}
+                    onCustomText={(text) => setCustomItemNo(row.id, text)}
+                    allowCustomText
                     fallbackLabel={row.itemNo || undefined}
                     projectBoqItems={boqItems}
+                    onRefreshProjectBoq={onRefreshProjectBoq}
                   />
                 )}
               </td>
               <td className="p-1">
-                {row.snapshotDescription || row.description}
+                {readOnly ? (
+                  row.isSection ? (
+                    <span className="font-semibold">{row.snapshotDescription || row.description}</span>
+                  ) : (
+                    row.snapshotDescription || row.description
+                  )
+                ) : (
+                  <input
+                    type="text"
+                    className={`w-full min-w-[10rem] rounded border border-border px-1.5 py-0.5 text-left text-xs ${row.isSection ? 'font-semibold' : ''}`}
+                    value={row.snapshotDescription || row.description}
+                    onChange={(e) =>
+                      update(row.id, {
+                        description: e.target.value,
+                        snapshotDescription: e.target.value,
+                      })
+                    }
+                  />
+                )}
               </td>
+              {row.isSection ? (
+                <>
+                  <td />
+                  <td />
+                  <td />
+                  <td />
+                  <td />
+                  {showRevised && (
+                    <>
+                      <td />
+                      <td />
+                      <td />
+                    </>
+                  )}
+                  <td />
+                  <td />
+                  <td />
+                  <td />
+                  <td />
+                </>
+              ) : (
+                <>
               <td className="p-1">
                 {readOnly ? (
                   row.programmedQty
@@ -208,7 +299,11 @@ export function WorkItemsTable({
                 )}
               </td>
               <td className="p-1">
-                {row.snapshotUnit || row.unit}
+                {resolveItemUnit(
+                  row.snapshotItemNo || row.itemNo,
+                  row.snapshotDescription || row.description,
+                  row.snapshotUnit || row.unit,
+                ).unit || row.snapshotUnit || row.unit}
               </td>
               <td className="p-1 text-right">{formatMoney(row.contractAmount)}</td>
               <td className="p-1 text-right">{formatPct(row.weightPct)}</td>
@@ -237,17 +332,17 @@ export function WorkItemsTable({
               )}
               <td className="p-1">
                 {readOnly ? (
-                  '—'
+                  row.previous ? formatMoney(row.previous) : '—'
                 ) : (
                   <input
                     type="number"
                     step="0.01"
-                    className="w-20 rounded border border-border bg-surface-muted px-1 py-0.5 text-right text-text-muted"
-                    value=""
-                    placeholder="—"
-                    readOnly
-                    disabled
-                    title="SWA rule: Previous is always blank"
+                    className="w-20 rounded border border-border px-1 py-0.5 text-right"
+                    value={row.previous || ''}
+                    onChange={(e) =>
+                      update(row.id, { previous: parseFloat(e.target.value) || 0 })
+                    }
+                    title="Previous accomplishment amount (peso)"
                   />
                 )}
               </td>
@@ -258,15 +353,48 @@ export function WorkItemsTable({
                   <input
                     type="number"
                     step="0.01"
-                    className="w-24 rounded border border-border bg-surface-muted px-1 py-0.5 text-right"
+                    className="w-24 rounded border border-border bg-surface-muted px-1 py-0.5 text-right text-text-muted"
                     value={row.thisPeriod ? Number(row.thisPeriod.toFixed(2)) : ''}
                     readOnly
+                    disabled
+                    title="Auto: TO DATE − PREVIOUS"
                   />
                 )}
               </td>
-              <td className="p-1 text-right">{formatMoney(row.toDate)}</td>
-              <td className="p-1 text-right">{formatPct(row.accomplishmentWeightPct)}</td>
-              <td className="p-1 text-left">{row.status}</td>
+              <td className="p-1 text-right" title="To-date accomplishment amount (peso)">
+                {readOnly ? (
+                  formatMoney(row.toDate)
+                ) : (
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="w-24 rounded border border-border px-1 py-0.5 text-right"
+                    value={row.toDate ? Number(row.toDate.toFixed(2)) : ''}
+                    onChange={(e) =>
+                      update(row.id, { toDateInput: parseFloat(e.target.value) || 0 })
+                    }
+                    title="To-date accomplishment amount (peso)"
+                  />
+                )}
+              </td>
+              <td className="p-1 text-right" title="Auto: TO DATE ÷ Total Contract Amount">
+                {formatPct(row.accomplishmentWeightPct)}
+              </td>
+              <td className="p-1 text-left" title="Editable remarks — blank uses the Excel status rule">
+                {readOnly ? (
+                  row.remarks || row.status
+                ) : (
+                  <input
+                    type="text"
+                    className="w-full min-w-[8rem] rounded border border-border px-1.5 py-0.5 text-left text-xs"
+                    value={items.find((item) => item.id === row.id)?.remarks ?? ''}
+                    placeholder={row.status}
+                    onChange={(e) => update(row.id, { remarks: e.target.value })}
+                  />
+                )}
+              </td>
+                </>
+              )}
               {!readOnly && (
                 <td className="p-1">
                   <button
@@ -310,9 +438,10 @@ export function WorkItemsTable({
             + Add work item
           </button>
           <p className="mt-2 text-xs text-text-muted">
-            Type or select an <strong>Item No.</strong> from this project&apos;s BOQ / PDM items.
-            Description, unit, programmed quantity, and unit price fill automatically from the project
-            record (same source used by S-Curve and Bar Chart).
+            Type an <strong>Item No.</strong> such as A.1 or B.1 and choose a match, or type any
+            text such as <strong>I. OTHER GENERAL REQUIREMENTS</strong> for a section heading.
+            A Roman-numeral heading such as I. or II. SITE WORKS leaves the rest of that row blank and is not included in the totals. A matched item
+            still fills description and unit from the DPWH standard pay item list.
             {showRevised && (
               <>
                 {' '}
@@ -321,8 +450,10 @@ export function WorkItemsTable({
             )}
           </p>
           <p className="mt-1 text-xs text-text-muted">
-            <strong>Formula:</strong> Previous is always blank. To Date = (Quantity / 2) × Unit Price,
-            and This Period = To Date − Previous.
+            <strong>Formulas:</strong> TO DATE is entered manually; THIS PERIOD = TO DATE −
+            PREVIOUS; Weight % = (Contract Amt ÷ Total Project Cost) × 100;
+            WT% Accomp. = (TO DATE ÷ Total Project Cost) × 100; Remarks default to the Excel status
+            rule and can be edited.
           </p>
         </>
       )}

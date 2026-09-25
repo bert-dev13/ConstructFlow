@@ -1,13 +1,13 @@
 import { topologicalSort } from './pdm';
 import type { PdmActivity, PdmDependency } from '../types';
 
-/** Activity node half-width (must match PdmNode PDM_NODE_W / 2). */
-const PDM_ACTIVITY_HALF_W = 64;
+/** Activity node half-width (must match PdmNode PDM_NODE_W / 2 = 76). */
+const PDM_ACTIVITY_HALF_W = 76;
 
-export const PDM_COL_W = 184;
-export const PDM_ROW_H = 144;
-export const PDM_ORIGIN_X = 160;
-export const PDM_ORIGIN_Y = 110;
+export const PDM_COL_W = 230;
+export const PDM_ROW_H = 172;
+export const PDM_ORIGIN_X = 170;
+export const PDM_ORIGIN_Y = 120;
 export const PDM_START_NODE_W = 72;
 export const PDM_START_NODE_H = 48;
 export const PDM_START_HALF_W = PDM_START_NODE_W / 2;
@@ -82,7 +82,7 @@ export function dependencyEdge(
   const attachOffsetY = options?.attachOffsetY ?? 0;
   const laneOffsetX = options?.laneOffsetX ?? 0;
   const startOffsetY = options?.startOffsetY ?? 0;
-  const nodeHalfH = options?.nodeHalfH ?? 48;
+  const nodeHalfH = options?.nodeHalfH ?? 57;
   const cornerRadius = options?.cornerRadius ?? 10;
   const maxAttach = Math.max(8, nodeHalfH - 16);
   const yAttach = to.y + Math.max(-maxAttach, Math.min(maxAttach, attachOffsetY));
@@ -136,18 +136,30 @@ export function dependencyEdge(
     ];
   }
 
-  const labelX = (points[0].x + points[points.length - 1].x) / 2;
-  const labelY =
-    points.length >= 3
-      ? (points[1].y + points[points.length - 2].y) / 2
-      : (y1 + y2) / 2;
+  const labelPoint =
+    points.length >= 4
+      ? // Prefer the mid-vertical corridor (away from both nodes).
+        {
+          x: points[1]!.x,
+          y: (points[1]!.y + points[2]!.y) / 2,
+        }
+      : points.length >= 3
+        ? {
+            x: (points[0]!.x + points[1]!.x) / 2,
+            y: points[0]!.y,
+          }
+        : {
+            x: (points[0]!.x + points[points.length - 1]!.x) / 2,
+            y: (points[0]!.y + points[points.length - 1]!.y) / 2,
+          };
 
   return {
     d: roundedOrthoPath(points, cornerRadius),
     endX: x2,
     endY: y2,
-    labelX,
-    labelY: labelY - 10,
+    labelX: labelPoint.x,
+    // Sit slightly above the wire so type/lag text clears the stroke.
+    labelY: labelPoint.y - 8,
   };
 }
 

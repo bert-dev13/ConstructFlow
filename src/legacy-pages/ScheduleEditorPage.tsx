@@ -7,10 +7,21 @@ import { useSelectedProject } from '../context/SelectedProjectContext';
 import { ProjectSelect } from '../components/ProjectSelect';
 import { UndoRedoToolbar } from '../components/ui/UndoRedoToolbar';
 import { PageHeader } from '../components/ui/PageHeader';
+import { PreviewModal } from '../components/ui/PreviewModal';
 import { useUndoRedo, useUndoRedoKeyboard } from '../hooks/useUndoRedo';
 import { NavIcon, type NavIconName } from '../components/NavIcon';
-import { getSchedule, saveSchedule, clearSchedule, loadReferenceSchedule, type ProjectSchedule } from '../lib/scheduleApi';
-import { listProjects } from '../lib/projectsApi';
+import {
+  getSchedule,
+  saveSchedule,
+  clearSchedule,
+  loadReferenceSchedule,
+  getProjectScheduleVersions,
+  getScheduleVersion,
+  createSuspendedProjectSchedule,
+  type ProjectSchedule,
+  type ProjectScheduleVersions,
+} from '../lib/scheduleApi';
+import { listProjects, type ProjectRow } from '../lib/projectsApi';
 import { applyPdmDerivatives, deriveBarChartFromPdm } from '../lib/scheduleSync';
 import { activityIncomingLinksMap, setActivityPredecessor, suggestFsDependency } from '../lib/pdm';
 import type { ActivityIncomingLink } from '../lib/pdm';
@@ -20,6 +31,9 @@ import { PayItemSelect } from '../components/PayItemSelect';
 import type { PayItem } from '../lib/payItemsApi';
 import { listProjectBoq, type ProjectBoqItem } from '../lib/projectBoqApi';
 import { mergeBoqIntoActivities } from '../lib/projectBoqSync';
+import { buildPdmNetworkPreviewHtml } from '../lib/previewHelpers';
+import { PdmNetworkDiagram } from '../components/PdmNetworkDiagram';
+import { downloadReportPreviewPdf } from '../lib/downloadReportPdf';
 
 const DEP_TYPES: DependencyType[] = ['FS', 'SS', 'FF', 'SF'];
 const TYPE_OPTIONS: Array<DependencyType | 'Independent'> = ['Independent', 'FS', 'SS', 'FF', 'SF'];
@@ -178,45 +192,49 @@ const ActivityCard = memo(function ActivityCard({
               <PayItemSelect
                 value={activity.payItemId ?? ''}
                 onChange={(item: PayItem | null) => {
-                  if (!item) return;
+                  if (!item) {
+                    onUpdate(activity.id, {
+                      payItemId: undefined,
+                      payItemVersion: undefined,
+                    });
+                    return;
+                  }
                   onUpdate(activity.id, {
                     payItemId: item.id,
                     payItemVersion: item.version,
-                    number: item.itemNo,
-                    name: item.description,
-                    unit: item.unit,
+                    number: item.itemNo || activity.number || '',
+                    name: item.description || activity.name || '',
+                    unit: item.unit || activity.unit || '',
                   });
                 }}
                 fallbackLabel={activity.number || 'Select Pay Item'}
-                projectBoqItems={
-                  projectBoqItems.some((row) => row.active && row.payItemId)
-                    ? projectBoqItems
-                    : undefined
-                }
+                projectBoqItems={projectBoqItems}
               />
             </div>
           </div>
-          {activity.payItemId ? (
-            <p className="truncate text-xs text-text-muted" title={activity.name}>
-              {activity.name}
-              {activity.unit ? ` · ${activity.unit}` : ''}
-            </p>
-          ) : (
-            <div className="flex gap-1.5">
-              <input
-                value={activity.number}
-                onChange={(e) => onUpdate(activity.id, { number: e.target.value })}
-                placeholder="Item No."
-                className={`${fieldClass} w-20`}
-              />
-              <input
-                value={activity.name}
-                onChange={(e) => onUpdate(activity.id, { name: e.target.value })}
-                placeholder="Description"
-                className={`${fieldClass} min-w-0 flex-1`}
-              />
-            </div>
-          )}
+          <div className="flex flex-wrap gap-1.5">
+            <input
+              value={activity.number}
+              onChange={(e) => onUpdate(activity.id, { number: e.target.value })}
+              placeholder="Item No."
+              title="Item number shown on PDM / S-Curve (editable)"
+              className={`${fieldClass} w-[5.5rem]`}
+            />
+            <input
+              value={activity.name}
+              onChange={(e) => onUpdate(activity.id, { name: e.target.value })}
+              placeholder="Activity description"
+              title="Activity name shown on PDM network and charts (editable)"
+              className={`${fieldClass} min-w-[10rem] flex-1`}
+            />
+            <input
+              value={activity.unit ?? ''}
+              onChange={(e) => onUpdate(activity.id, { unit: e.target.value })}
+              placeholder="Unit"
+              title="Unit of measure (editable)"
+              className={`${fieldClass} w-[4.5rem]`}
+            />
+          </div>
         </div>
 
         <label className="w-[4.5rem] space-y-0.5">
@@ -359,6 +377,16 @@ export function ScheduleEditorPage() {
   const [success, setSuccess] = useState('');
   const [tab, setTab] = useState<'activities' | 'dependencies' | 'bar'>('activities');
   const [projectBoqItems, setProjectBoqItems] = useState<ProjectBoqItem[]>([]);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState('');
+  const [downloadingPreview, setDownloadingPreview] = useState(false);
+  const [versions, setVersions] = useState<ProjectScheduleVersions | null>(null);
+  const [viewingOriginal, setViewingOriginal] = useState(false);
+  const [suspendedOpen, setSuspendedOpen] = useState(false);
+  const [suspendedProjects, setSuspendedProjects] = useState<ProjectRow[]>([]);
+  const [suspendedPick, setSuspendedPick] = useState('');
+  const [creatingSuspended, setCreatingSuspended] = useState(false);
+  const [scheduleNonce, setScheduleNonce] = useState(0);
   const autoSaveReady = useRef(false);
   const saveSeq = useRef(0);
   const savingRef = useRef(false);
@@ -403,12 +431,16 @@ export function ScheduleEditorPage() {
     setDirty(false);
     autoSaveReady.current = false;
     try {
-      const [schedule, boq] = await Promise.all([
-        getSchedule(projectId),
+      const [schedule, boq, versionInfo] = await Promise.all([
+        viewingOriginal
+          ? getScheduleVersion(projectId, 'original')
+          : getSchedule(projectId),
         listProjectBoq(projectId).catch(() => [] as ProjectBoqItem[]),
+        getProjectScheduleVersions(projectId).catch(() => null),
       ]);
       replaceData(applyPdmDerivatives(schedule));
       setProjectBoqItems(boq);
+      setVersions(versionInfo);
     } catch {
       setError('Could not load schedule from database.');
     } finally {
@@ -418,17 +450,30 @@ export function ScheduleEditorPage() {
         autoSaveReady.current = true;
       });
     }
-  }, [projectId, replaceData]);
+  }, [projectId, replaceData, viewingOriginal, scheduleNonce]);
 
   useEffect(() => {
+    if (!user?.id) return;
     let cancelled = false;
+    const apply = (projects: { id: string }[]) => {
+      if (cancelled) return;
+      setHasProjects(projects.length > 0);
+      if (projects.length > 0 && !projects.some((p) => String(p.id) === projectId)) {
+        setProjectId(String(projects[0].id));
+      }
+    };
     listProjects()
       .then((res) => {
-        if (cancelled) return;
-        setHasProjects(res.projects.length > 0);
-        if (res.projects.length > 0 && !res.projects.some((p) => String(p.id) === projectId)) {
-          setProjectId(String(res.projects[0].id));
-        }
+        apply(res.projects);
+        if (cancelled || res.projects.length > 0) return;
+        window.setTimeout(() => {
+          if (cancelled) return;
+          listProjects()
+            .then((again) => apply(again.projects))
+            .catch(() => {
+              if (!cancelled) setHasProjects(true);
+            });
+        }, 500);
       })
       .catch(() => {
         if (!cancelled) setHasProjects(true);
@@ -436,7 +481,10 @@ export function ScheduleEditorPage() {
     return () => {
       cancelled = true;
     };
-  }, [projectId, setProjectId]);
+    // projectId is read once per signed-in user so selecting a project does not
+    // cancel this load and leave the page on an empty result.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, setProjectId]);
 
   useEffect(() => {
     if (hasProjects === false) return;
@@ -480,7 +528,7 @@ export function ScheduleEditorPage() {
   );
 
   const handleSave = useCallback(async (opts?: { silent?: boolean }) => {
-    if (!data || savingRef.current) return;
+    if (!data || savingRef.current || viewingOriginal) return;
     if (derived?.pdmError) {
       setError(derived.pdmError);
       return;
@@ -526,11 +574,11 @@ export function ScheduleEditorPage() {
         setSaving(false);
       }
     }
-  }, [data, derived?.pdmError, projectId, replaceData]);
+  }, [data, derived?.pdmError, projectId, replaceData, viewingOriginal]);
 
   // Auto-save ~2s after the last edit so dropdown changes stay responsive.
   useEffect(() => {
-    if (!canEdit || !data || !dirty || loading || !autoSaveReady.current) return;
+    if (!canEdit || viewingOriginal || !data || !dirty || loading || !autoSaveReady.current) return;
     if (derived?.pdmError) return;
 
     const timer = window.setTimeout(() => {
@@ -538,12 +586,20 @@ export function ScheduleEditorPage() {
     }, 2000);
 
     return () => window.clearTimeout(timer);
-  }, [canEdit, data, dirty, loading, derived?.pdmError, handleSave]);
+  }, [canEdit, viewingOriginal, data, dirty, loading, derived?.pdmError, handleSave]);
 
   const updateActivity = useCallback((id: string, patch: Partial<PdmActivity>) => {
     patchSchedule((d) => ({
       ...d,
-      activities: d.activities.map((a) => (a.id === id ? { ...a, ...patch } : a)),
+      activities: d.activities.map((a) => {
+        if (a.id !== id) return a;
+        const next = { ...a, ...patch };
+        // Firestore rejects undefined — drop keys cleared to undefined by patches.
+        (Object.keys(next) as (keyof PdmActivity)[]).forEach((key) => {
+          if (next[key] === undefined) delete next[key];
+        });
+        return next;
+      }),
     }));
   }, [patchSchedule]);
 
@@ -559,7 +615,7 @@ export function ScheduleEditorPage() {
   );
 
   const updateActualEnd = useCallback(
-    (id: string, actualEndDay: number | undefined) => {
+    (id: string, actualEndDay: number | null) => {
       patchSchedule((d) => ({
         ...d,
         barChartTasks: d.barChartTasks.map((t) => (t.id === id ? { ...t, actualEndDay } : t)),
@@ -568,7 +624,42 @@ export function ScheduleEditorPage() {
     [patchSchedule],
   );
 
-  useUndoRedoKeyboard(undo, redo, canEdit && !!data);
+  useUndoRedoKeyboard(undo, redo, canEdit && !!data && !viewingOriginal);
+
+  const openSuspendedPanel = () => {
+    setSuspendedOpen(true);
+    setError('');
+    void listProjects()
+      .then((res) => {
+        const rows = res.projects.filter((project) => project.status === 'suspended');
+        setSuspendedProjects(rows);
+        setSuspendedPick((current) => current || (rows[0] ? String(rows[0].id) : ''));
+      })
+      .catch(() => setError('Could not load suspended projects.'));
+  };
+
+  const createSuspendedSchedule = async () => {
+    if (!suspendedPick) return;
+    setCreatingSuspended(true);
+    setError('');
+    setSuccess('');
+    try {
+      const result = await createSuspendedProjectSchedule(suspendedPick);
+      setViewingOriginal(false);
+      setProjectId(String(suspendedPick));
+      setScheduleNonce((value) => value + 1);
+      setSuspendedOpen(false);
+      setSuccess(
+        result.alreadyExisted
+          ? 'Opened the current schedule for this suspended project. The original schedule is unchanged.'
+          : 'New schedule created under the same project. The original schedule is kept for reference.',
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not create the suspended-project schedule.');
+    } finally {
+      setCreatingSuspended(false);
+    }
+  };
 
   if (!canEdit) {
     return (
@@ -604,21 +695,116 @@ export function ScheduleEditorPage() {
         description="Build the PDM network and automatically synchronize the bar chart and S-Curve for the selected project."
         actions={
           <>
+            <button
+              type="button"
+              onClick={openSuspendedPanel}
+              className="shrink-0 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] font-semibold text-amber-900 transition hover:bg-amber-100"
+            >
+              For Suspended Projects
+            </button>
             <div className="min-w-[160px] flex-1 sm:max-w-[220px]">
               <ProjectSelect value={projectId} onChange={setProjectId} />
             </div>
             <UndoRedoToolbar canUndo={canUndo} canRedo={canRedo} onUndo={undo} onRedo={redo} />
             <button
               type="button"
-              disabled={saving || !data}
-              onClick={() => void handleSave()}
-              className="shrink-0 rounded-lg bg-primary px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"
+              disabled={!data || (data.activities.length === 0)}
+              onClick={() => {
+                if (!derived) return;
+                const panel = document.getElementById('schedule-pdm-diagram-panel');
+                const svg = panel?.querySelector('svg') as SVGSVGElement | null;
+                setPreviewHtml(
+                  buildPdmNetworkPreviewHtml({
+                    projectLabel: `Project ${projectId}`,
+                    projectDuration: derived.projectDuration,
+                    criticalPath: derived.criticalPath.join(' → '),
+                    svg,
+                  }),
+                );
+                setPreviewOpen(true);
+              }}
+              className="shrink-0 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[11px] font-semibold text-text disabled:opacity-50"
             >
-              {saving ? 'Saving…' : dirty ? 'Save*' : 'Save'}
+              Preview
             </button>
+            {!viewingOriginal && (
+              <button
+                type="button"
+                disabled={saving || !data}
+                onClick={() => void handleSave()}
+                className="shrink-0 rounded-lg bg-primary px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"
+              >
+                {saving ? 'Saving…' : dirty ? 'Save*' : 'Save'}
+              </button>
+            )}
           </>
         }
       />
+
+      {suspendedOpen && (
+        <section className="rounded-xl border border-amber-200 bg-amber-50/70 p-4">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div className="min-w-[220px] flex-1">
+              <h2 className="text-sm font-semibold text-text">Suspended projects</h2>
+              <p className="mt-1 text-xs text-text-muted">
+                Create a new schedule on the same project. The original schedule stays stored and unchanged.
+              </p>
+              {suspendedProjects.length === 0 ? (
+                <p className="mt-3 text-sm text-text-muted">No projects are marked Suspended.</p>
+              ) : (
+                <label className="mt-3 block text-xs font-semibold text-text-muted">
+                  Project
+                  <select
+                    value={suspendedPick}
+                    onChange={(e) => setSuspendedPick(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-text"
+                  >
+                    {suspendedProjects.map((project) => (
+                      <option key={project.id} value={project.id}>
+                        {project.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setSuspendedOpen(false)}
+                className="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-text-muted"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                disabled={!suspendedPick || creatingSuspended}
+                onClick={() => void createSuspendedSchedule()}
+                className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+              >
+                {creatingSuspended ? 'Creating…' : 'Create new schedule'}
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {versions?.hasOriginal && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-card px-4 py-3 text-sm">
+          <p className="font-semibold text-text">
+            {viewingOriginal
+              ? 'Original Schedule / Previous Schedule'
+              : versions.activeLabel || 'Current Active Schedule'}
+          </p>
+          <button
+            type="button"
+            onClick={() => setViewingOriginal((current) => !current)}
+            className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text"
+          >
+            {viewingOriginal ? 'Back to current schedule' : 'View original schedule'}
+          </button>
+        </div>
+      )}
 
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
         {([
@@ -647,6 +833,37 @@ export function ScheduleEditorPage() {
         <p className="text-sm text-text-muted">Loading schedule…</p>
       ) : (
         <>
+          {derived?.activities.length ? (
+            <PdmNetworkDiagram
+              panelId="schedule-pdm-diagram-panel"
+              activities={derived.activities}
+              dependencies={data.dependencies}
+              compact
+            />
+          ) : null}
+
+          {viewingOriginal ? (
+            <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
+              <p className="text-sm font-semibold text-text">Original schedule (read only)</p>
+              <p className="mt-1 text-xs text-text-muted">
+                This snapshot is the schedule from before the suspended-project schedule. It is not used by PDM, S-Curve, Bar Chart, SWA, or STEWA.
+              </p>
+              <ul className="mt-3 divide-y divide-border text-sm">
+                {(data?.activities ?? []).map((activity) => (
+                  <li key={activity.id} className="flex justify-between gap-3 py-2">
+                    <span className="font-medium text-text">
+                      {activity.number} — {activity.name}
+                    </span>
+                    <span className="text-text-muted">{activity.duration}d</span>
+                  </li>
+                ))}
+                {(data?.activities.length ?? 0) === 0 && (
+                  <li className="py-2 text-text-muted">No activities in the original schedule.</li>
+                )}
+              </ul>
+            </section>
+          ) : (
+          <>
           <div className="page-toolbar-in flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/80 bg-card/95 p-2 shadow-sm">
             <div className="flex flex-wrap rounded-lg bg-surface-muted/80 p-0.5" role="tablist" aria-label="Schedule editor views">
               {(
@@ -1052,7 +1269,7 @@ export function ScheduleEditorPage() {
                             onChange={(e) =>
                               updateActualEnd(
                                 t.id,
-                                e.target.value === '' ? undefined : Number(e.target.value),
+                                e.target.value === '' ? null : Number(e.target.value),
                               )
                             }
                             className="w-16 rounded-md border border-border px-2 py-1 text-xs outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/20"
@@ -1066,9 +1283,36 @@ export function ScheduleEditorPage() {
               </div>
             </div>
           )}
+          </>
+          )}
         </>
       )}
       </div>
+
+      <PreviewModal
+        title="Network diagram preview"
+        open={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        iframeSrcDoc={previewHtml}
+        iframeTitle="Schedule network diagram preview"
+        wide
+        downloading={downloadingPreview}
+        onDownload={() => {
+          void (async () => {
+            setDownloadingPreview(true);
+            try {
+              await downloadReportPreviewPdf({
+                fileName: `schedule-network-${projectId}.pdf`,
+                frame: document.querySelector(
+                  'iframe[title="Schedule network diagram preview"]',
+                ) as HTMLIFrameElement | null,
+              });
+            } finally {
+              setDownloadingPreview(false);
+            }
+          })();
+        }}
+      />
     </main>
   );
 }

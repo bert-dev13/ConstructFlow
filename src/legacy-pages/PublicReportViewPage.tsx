@@ -7,6 +7,7 @@ import { NavIcon } from '../components/NavIcon';
 import { useAuth } from '../context/AuthContext';
 import { downloadReportPreviewPdf } from '../lib/downloadReportPdf';
 import { buildOfficialReportHtml } from '../lib/officialReportHtml';
+import { printPreviewIframe } from '../lib/previewHelpers';
 import { trackReportViewed } from '../lib/recentViewed';
 import { buildReportPreviewHtml } from '../lib/reportVerification';
 import { getReport, type SwaStewaReport } from '../lib/swaStewaApi';
@@ -79,7 +80,7 @@ export function PublicReportViewPage() {
 
   const handlePrint = () => {
     const frame = document.getElementById('official-report-frame') as HTMLIFrameElement | null;
-    frame?.contentWindow?.print();
+    printPreviewIframe(frame);
   };
 
   const handleDownloadPdf = async () => {

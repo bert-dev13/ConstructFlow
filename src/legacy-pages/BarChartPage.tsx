@@ -14,6 +14,8 @@ import { exportBarChartPdf } from '../lib/chartPdfExport';
 import { saveSCurveSettings, type SCurveReportingInterval, type SCurveType, type ScheduleStatus } from '../lib/sCurveApi';
 import { applyReportProgressToBarChart } from '../lib/scheduleSync';
 import { buildTheoreticalBarChartTasks } from '../lib/sCurvePeriods';
+import { PreviewModal } from '../components/ui/PreviewModal';
+import { canEditProjectCharts } from '../lib/chartPermissions';
 
 function getScheduleStatus(
   plannedEnd: number,
@@ -59,6 +61,7 @@ function buildGroups(totalDays: number, reportingInterval: SCurveReportingInterv
 export function BarChartPage() {
   const { user } = useAuth();
   const { projectId, setProjectId } = useSelectedProject();
+  const canEditCharts = canEditProjectCharts(user?.role);
   const [tasks, setTasks] = useState<BarChartTask[]>([]);
   const [totalDays, setTotalDays] = useState(24);
   const [timeNow, setTimeNow] = useState(10);
@@ -73,15 +76,32 @@ export function BarChartPage() {
   const [theoreticalTotalPeriods, setTheoreticalTotalPeriods] = useState(1);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsVersion, setSettingsVersion] = useState(0);
+  const [baselineView, setBaselineView] = useState<'original' | 'revised'>('revised');
+  const [baselineSets, setBaselineSets] = useState<{
+    original: { tasks: BarChartTask[]; totalDays: number };
+    revised: { tasks: BarChartTask[]; totalDays: number };
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+
+  const barChartPdfInput = () => ({
+    projectLabel: `Project ${projectId}`,
+    tasks,
+    totalDays,
+    timeNow,
+    status: progressStatus,
+    targetPlanPercent,
+    actualPlanPercent,
+  });
 
   const persistScheduleSettings = async (next: {
     curveType?: SCurveType;
     reportingInterval?: SCurveReportingInterval;
     theoreticalTotalPeriods?: number;
   }) => {
+    if (!canEditCharts) return;
     const nextCurveType = next.curveType ?? curveType;
     const nextReportingInterval = next.reportingInterval ?? reportingInterval;
     const nextTheoreticalTotalPeriods = Math.max(
@@ -118,7 +138,19 @@ export function BarChartPage() {
           setCurveType(payload.curve_type);
           setReportingInterval(payload.reporting_interval);
           setTheoreticalTotalPeriods(payload.theoretical_total_periods);
-          if (payload.curve_type === 'ideal_theoretical' && payload.project_start_date) {
+          setBaselineSets(payload.baselines ?? null);
+          if (payload.baselines && payload.curve_type !== 'ideal_theoretical') {
+            const chosen = payload.baselines.revised;
+            setTasks(chosen.tasks);
+            setTotalDays(chosen.totalDays);
+            setTimeNow(0);
+            setReportFeed(payload.report_feed ?? []);
+            setLatestReportPercent(data.latestReportPercent ?? null);
+            setLatestReportDate(data.latestReportDate ?? null);
+            setTargetPlanPercent(payload.target_plan_percent ?? null);
+            setActualPlanPercent(payload.actual_plan_percent ?? null);
+            setProgressStatus(payload.schedule_status ?? null);
+          } else if (payload.curve_type === 'ideal_theoretical' && payload.project_start_date) {
             const theoretical = buildTheoreticalBarChartTasks({
               totalPeriods: payload.theoretical_total_periods,
               reportingInterval: payload.reporting_interval,
@@ -162,6 +194,14 @@ export function BarChartPage() {
       cancelled = true;
     };
   }, [projectId, settingsVersion]);
+
+  useEffect(() => {
+    if (!baselineSets || curveType === 'ideal_theoretical') return;
+    const chosen = baselineView === 'original' ? baselineSets.original : baselineSets.revised;
+    setTasks(chosen.tasks);
+    setTotalDays(chosen.totalDays);
+    setTimeNow(0);
+  }, [baselineSets, baselineView, curveType]);
 
   const days = useMemo(
     () => Array.from({ length: totalDays }, (_, i) => i + 1),
@@ -237,77 +277,116 @@ export function BarChartPage() {
               </div>
             )}
 
-            <div
-              role="group"
-              aria-label="Schedule basis"
-              className="flex shrink-0 rounded-lg bg-surface-muted p-0.5"
-            >
-              <button
-                type="button"
-                onClick={() => void persistScheduleSettings({ curveType: 'pdm_based' })}
-                disabled={settingsSaving}
-                className={`rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors duration-200 ${
-                  curveType === 'pdm_based'
-                    ? 'bg-primary text-white shadow-sm'
-                    : 'text-text-muted hover:text-text'
-                }`}
-              >
-                PDM target
-              </button>
-              <button
-                type="button"
-                onClick={() => void persistScheduleSettings({ curveType: 'ideal_theoretical' })}
-                disabled={settingsSaving}
-                className={`rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors duration-200 ${
-                  curveType === 'ideal_theoretical'
-                    ? 'bg-primary text-white shadow-sm'
-                    : 'text-text-muted hover:text-text'
-                }`}
-              >
-                Theoretical
-              </button>
-            </div>
+            {baselineSets && curveType === 'pdm_based' && (
+              <div role="group" aria-label="Bar chart baseline" className="flex shrink-0 rounded-lg bg-surface-muted p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setBaselineView('original')}
+                  className={`rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors duration-200 ${
+                    baselineView === 'original' ? 'bg-primary text-white shadow-sm' : 'text-text-muted hover:text-text'
+                  }`}
+                >
+                  Original Bar Chart
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBaselineView('revised')}
+                  className={`rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors duration-200 ${
+                    baselineView === 'revised' ? 'bg-primary text-white shadow-sm' : 'text-text-muted hover:text-text'
+                  }`}
+                >
+                  Revised Bar Chart
+                </button>
+              </div>
+            )}
 
-            <label className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs transition focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/20">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                Interval
-              </span>
-              <select
-                value={reportingInterval}
-                disabled={settingsSaving}
-                onChange={(e) =>
-                  void persistScheduleSettings({
-                    reportingInterval: e.target.value as SCurveReportingInterval,
-                  })
-                }
-                className="bg-transparent text-xs font-semibold text-text outline-none"
-              >
-                <option value="10_day">10-day</option>
-                <option value="30_day">30-day</option>
-              </select>
-            </label>
+            {canEditCharts ? (
+              <>
+                <div
+                  role="group"
+                  aria-label="Schedule basis"
+                  className="flex shrink-0 rounded-lg bg-surface-muted p-0.5"
+                >
+                  <button
+                    type="button"
+                    onClick={() => void persistScheduleSettings({ curveType: 'pdm_based' })}
+                    disabled={settingsSaving}
+                    className={`rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors duration-200 ${
+                      curveType === 'pdm_based'
+                        ? 'bg-primary text-white shadow-sm'
+                        : 'text-text-muted hover:text-text'
+                    }`}
+                  >
+                    PDM target
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void persistScheduleSettings({ curveType: 'ideal_theoretical' })}
+                    disabled={settingsSaving}
+                    className={`rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors duration-200 ${
+                      curveType === 'ideal_theoretical'
+                        ? 'bg-primary text-white shadow-sm'
+                        : 'text-text-muted hover:text-text'
+                    }`}
+                  >
+                    Theoretical
+                  </button>
+                </div>
 
-            {curveType === 'ideal_theoretical' && (
-              <label className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs transition focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/20">
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                  Periods
+                <label className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs transition focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/20">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                    Interval
+                  </span>
+                  <select
+                    value={reportingInterval}
+                    disabled={settingsSaving}
+                    onChange={(e) =>
+                      void persistScheduleSettings({
+                        reportingInterval: e.target.value as SCurveReportingInterval,
+                      })
+                    }
+                    className="bg-transparent text-xs font-semibold text-text outline-none"
+                  >
+                    <option value="10_day">10-day</option>
+                    <option value="30_day">30-day</option>
+                  </select>
+                </label>
+
+                {curveType === 'ideal_theoretical' && (
+                  <label className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs transition focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/20">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                      Periods
+                    </span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={theoreticalTotalPeriods}
+                      disabled={settingsSaving}
+                      onChange={(e) =>
+                        setTheoreticalTotalPeriods(Math.max(1, Number(e.target.value || 1)))
+                      }
+                      onBlur={(e) =>
+                        void persistScheduleSettings({
+                          theoreticalTotalPeriods: Math.max(1, Number(e.currentTarget.value || 1)),
+                        })
+                      }
+                      className="w-10 bg-transparent text-xs font-semibold text-text outline-none"
+                    />
+                  </label>
+                )}
+              </>
+            ) : (
+              <div className="flex shrink-0 flex-wrap items-center gap-1.5 text-xs">
+                <span className="rounded-md bg-primary px-2.5 py-1.5 font-semibold text-white shadow-sm">
+                  {curveType === 'ideal_theoretical' ? 'Theoretical' : 'PDM target'}
                 </span>
-                <input
-                  type="number"
-                  min={1}
-                  value={theoreticalTotalPeriods}
-                  disabled={settingsSaving}
-                  onChange={(e) =>
-                    setTheoreticalTotalPeriods(Math.max(1, Number(e.target.value || 1)))
-                  }
-                  onBlur={(e) =>
-                    void persistScheduleSettings({
-                      theoreticalTotalPeriods: Math.max(1, Number(e.currentTarget.value || 1)),
-                    })
-                  }
-                  className="w-10 bg-transparent text-xs font-semibold text-text outline-none"
-                />
-              </label>
+                <span className="rounded-lg border border-border bg-surface px-2.5 py-1.5 font-semibold text-text">
+                  {reportingInterval === '10_day' ? '10-day' : '30-day'} interval
+                </span>
+                <span className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 font-semibold text-amber-900">
+                  View only
+                </span>
+              </div>
             )}
 
             <div className="relative z-30 min-w-[180px] sm:w-[220px]">
@@ -316,19 +395,19 @@ export function BarChartPage() {
 
             <button
               type="button"
+              disabled={tasks.length === 0}
+              onClick={() => setPreviewOpen(true)}
+              className="shrink-0 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-text transition hover:border-primary/30 hover:bg-primary-light/40 disabled:opacity-50"
+            >
+              Preview
+            </button>
+            <button
+              type="button"
               disabled={exporting || tasks.length === 0}
               onClick={() => {
                 setExporting(true);
                 try {
-                  exportBarChartPdf({
-                    projectLabel: `Project ${projectId}`,
-                    tasks,
-                    totalDays,
-                    timeNow,
-                    status: progressStatus,
-                    targetPlanPercent,
-                    actualPlanPercent,
-                  });
+                  exportBarChartPdf(barChartPdfInput());
                 } finally {
                   setExporting(false);
                 }
@@ -521,6 +600,87 @@ export function BarChartPage() {
         </div>
       )}
       </div>
+
+      <PreviewModal
+        title="Bar Chart preview"
+        open={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        wide
+        downloading={exporting}
+        onDownload={() => {
+          setExporting(true);
+          try {
+            exportBarChartPdf(barChartPdfInput());
+          } finally {
+            setExporting(false);
+          }
+        }}
+      >
+        <div id="bar-chart-preview-print" className="space-y-3">
+          <div>
+            <p className="text-sm font-semibold text-text">Project {projectId}</p>
+            <p className="text-xs text-text-muted">
+              {totalDays} days
+              {hasReportActuals ? ` · Time now: Day ${timeNow}` : ' · Target Plan only'}
+              {progressStatus ? ` · ${progressStatus.label}` : ''}
+            </p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-border bg-surface-muted">
+                  <th className="p-2 text-left">#</th>
+                  <th className="min-w-[180px] p-2 text-left">Task</th>
+                  <th className="p-2 text-left">Start</th>
+                  <th className="p-2 text-left">End</th>
+                  <th className="p-2 text-left">Actual end</th>
+                  <th className="min-w-[220px] p-2 text-left">Timeline</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tasks.map((task) => {
+                  const hasActual = hasReportActuals && task.actualEndDay != null;
+                  const status = getScheduleStatus(
+                    task.endDay,
+                    hasReportActuals ? task.actualEndDay : null,
+                    timeNow,
+                  );
+                  const leftPct = totalDays > 0 ? ((task.startDay - 1) / totalDays) * 100 : 0;
+                  const widthPct =
+                    totalDays > 0
+                      ? (Math.max(0, task.endDay - task.startDay + 1) / totalDays) * 100
+                      : 0;
+                  return (
+                    <tr key={task.id} className="border-b border-border/50">
+                      <td className="p-2 text-text-muted">{task.index}</td>
+                      <td className={`p-2 font-medium ${task.isCritical ? 'text-red-700' : 'text-text'}`}>
+                        {task.name}
+                        {task.isCritical ? (
+                          <span className="ml-2 text-[10px] font-bold uppercase text-red-600">Critical</span>
+                        ) : null}
+                      </td>
+                      <td className="p-2">{task.startDay}</td>
+                      <td className="p-2">{task.endDay}</td>
+                      <td className="p-2">{hasActual ? task.actualEndDay : '—'}</td>
+                      <td className="p-2">
+                        <div className="relative h-4 w-full rounded bg-surface-muted">
+                          <div
+                            className={`absolute top-0 h-4 rounded-sm ${
+                              hasActual ? STATUS_COLORS[status] : STATUS_COLORS.planned
+                            }`}
+                            style={{ left: `${leftPct}%`, width: `${Math.max(widthPct, 1)}%` }}
+                            title={`Days ${task.startDay}–${task.endDay}`}
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </PreviewModal>
     </main>
   );
 }

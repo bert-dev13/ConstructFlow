@@ -6,7 +6,6 @@ import {
   useContext,
   useMemo,
   useState,
-  useEffect,
   type ReactNode,
 } from 'react';
 
@@ -19,18 +18,31 @@ interface SelectedProjectValue {
 
 const SelectedProjectContext = createContext<SelectedProjectValue | null>(null);
 
-export function SelectedProjectProvider({ children }: { children: ReactNode }) {
-  const [projectId, setProjectIdState] = useState<string>('demo-capitol-annex');
+function readStoredProjectId(): string {
+  // Never default to a hard-coded demo/sample id — those were purged and cause
+  // SWA/IAR `boqItems` reads to fail with permission-denied on a missing parent.
+  if (typeof window === 'undefined') return '';
+  try {
+    return localStorage.getItem(STORAGE_KEY)?.trim() || '';
+  } catch {
+    return '';
+  }
+}
 
-  useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) setProjectIdState(stored);
-  }, []);
+export function SelectedProjectProvider({ children }: { children: ReactNode }) {
+  // Read localStorage synchronously so SWA/IAR/PDM mount with the correct project
+  // (async useEffect left the first fetch on a stale default project id).
+  const [projectId, setProjectIdState] = useState<string>(readStoredProjectId);
 
   const setProjectId = useCallback((id: string) => {
-    if (!id) return;
-    setProjectIdState(id);
-    localStorage.setItem(STORAGE_KEY, id);
+    const next = String(id || '').trim();
+    setProjectIdState(next);
+    try {
+      if (next) localStorage.setItem(STORAGE_KEY, next);
+      else localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      /* ignore quota / private mode */
+    }
   }, []);
 
   const value = useMemo(() => ({ projectId, setProjectId }), [projectId, setProjectId]);

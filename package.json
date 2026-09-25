@@ -12,6 +12,7 @@
     "seed:projects": "tsx scripts/migrate-sample-projects.ts",
     "seed:sanitize-labels": "tsx scripts/sanitize-sample-labels.ts",
     "clear:demo-data": "tsx scripts/clear-demo-data.ts",
+    "clear:records": "node scripts/clear-firebase-records.mjs",
     "firebase:deploy:rules": "firebase deploy --only firestore:rules,storage"
   },
   "dependencies": {
@@ -19,6 +20,7 @@
     "html2canvas": "^1.4.1",
     "jspdf": "^4.2.1",
     "next": "^16.0.1",
+    "nodemailer": "^10.0.10",
     "qrcode": "^1.5.4",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
@@ -30,6 +32,7 @@
     "@firebase/rules-unit-testing": "^5.0.2",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^24.12.3",
+    "@types/nodemailer": "^8.0.2",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

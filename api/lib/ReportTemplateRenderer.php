@@ -177,20 +177,20 @@ class ReportTemplateRenderer
     {
         $html = $this->loadTemplate('STEWA/official.html');
         $replacements = array_merge($this->logoReplacements($forPdf), [
-            'report_date' => htmlspecialchars($this->formatReportDate($data['report_date'] ?? null)),
+            'report_date' => htmlspecialchars($this->formatStewaDate($data['report_date'] ?? null)),
             'project_name' => htmlspecialchars($data['project_name'] ?? ''),
             'location' => htmlspecialchars($data['location'] ?? ''),
             'contract_amount' => WorkItemCalculator::formatMoney((float)($data['contract_amount'] ?? 0)),
             'contractor' => htmlspecialchars($data['contractor'] ?? ''),
             'period_covered' => htmlspecialchars($data['period_covered'] ?? ''),
             'contract_duration' => htmlspecialchars((string)($data['contract_duration'] ?? '')),
-            'notice_to_proceed' => htmlspecialchars($this->formatReportDate($data['notice_to_proceed'] ?? null, true)),
-            'expiry_date' => htmlspecialchars($this->formatReportDate($data['expiry_date'] ?? null, true)),
-            'approved_time_extension' => htmlspecialchars((string)($data['approved_time_extension'] ?? '-')),
-            'approved_time_suspension' => htmlspecialchars((string)($data['approved_time_suspension'] ?? '-')),
-            'total_time_extension' => htmlspecialchars((string)($data['total_time_extension'] ?? '')),
-            'revised_contract_duration' => htmlspecialchars((string)($data['revised_contract_duration'] ?? '')),
-            'revised_expiry_date' => htmlspecialchars($this->formatReportDate($data['revised_expiry_date'] ?? null, true)),
+            'notice_to_proceed' => htmlspecialchars($this->formatStewaDate($data['notice_to_proceed'] ?? null, true)),
+            'expiry_date' => htmlspecialchars($this->formatStewaDate($data['expiry_date'] ?? null, true)),
+            'approved_time_extension' => htmlspecialchars($this->stewaDash($data['approved_time_extension'] ?? '')),
+            'approved_time_suspension' => htmlspecialchars($this->stewaDash($data['approved_time_suspension'] ?? '')),
+            'total_time_extension' => htmlspecialchars($this->stewaDash($data['total_time_extension'] ?? '')),
+            'revised_contract_duration' => htmlspecialchars($this->stewaDash($data['revised_contract_duration'] ?? '')),
+            'revised_expiry_date' => htmlspecialchars($this->formatStewaDate($data['revised_expiry_date'] ?? null, true)),
             'calendar_days_elapsed' => htmlspecialchars((string)($data['calendar_days_elapsed'] ?? '')),
             'percent_actual' => number_format((float)($data['percent_actual'] ?? 0), 2),
             'percent_planned' => number_format((float)($data['percent_planned'] ?? 0), 2),
@@ -331,9 +331,16 @@ class ReportTemplateRenderer
         $calc = WorkItemCalculator::compute($lineItems, $lessAmount, $showRevised);
         $rows = '';
         foreach ($calc['items'] as $row) {
+            $section = !empty($row['isSection']);
             $rows .= '<tr>';
             $rows .= '<td>' . htmlspecialchars($row['itemNo'] ?? '') . '</td>';
             $rows .= '<td class="left">' . htmlspecialchars($row['description'] ?? '') . '</td>';
+            if ($section) {
+                $blank = $showRevised ? 13 : 10;
+                $rows .= str_repeat('<td></td>', $blank);
+                $rows .= '</tr>';
+                continue;
+            }
             $rows .= '<td class="right">' . number_format((float)$row['programmedQty'], 2) . '</td>';
             $rows .= '<td class="right">' . WorkItemCalculator::formatMoney((float)$row['unitPrice']) . '</td>';
             $rows .= '<td>' . htmlspecialchars($row['unit'] ?? '') . '</td>';
@@ -394,6 +401,24 @@ class ReportTemplateRenderer
             $html = str_replace('{{' . $key . '}}', $val, $html);
         }
         return $html;
+    }
+
+    private function formatStewaDate(?string $value, bool $allowEmpty = false): string
+    {
+        if ($value === null || $value === '') {
+            return $allowEmpty ? '' : date('F d, Y');
+        }
+        $ts = strtotime($value);
+        return $ts !== false ? date('F d, Y', $ts) : $value;
+    }
+
+    private function stewaDash($value): string
+    {
+        $raw = trim((string) $value);
+        if ($raw === '' || $raw === '-' || $raw === '—' || (is_numeric(str_replace(',', '', $raw)) && (float) str_replace(',', '', $raw) == 0.0)) {
+            return '—';
+        }
+        return $raw;
     }
 
     private function formatReportDate(?string $value, bool $allowEmpty = false): string

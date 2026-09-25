@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from '../lib/nextRouter';
 import { useAuth } from '../context/AuthContext';
-import { listReports, type SwaStewaReport } from '../lib/swaStewaApi';
+import { getReport, listReports, type SwaStewaReport } from '../lib/swaStewaApi';
 import {
   canUserCreateReportType,
   canUserEditReportType,
@@ -12,8 +12,14 @@ import {
 } from '../lib/reportPermissions';
 import { NavIcon } from '../components/NavIcon';
 import { PageHeader } from '../components/ui/PageHeader';
+import { StatusBadge } from '../components/ui/StatusBadge';
 import { Pagination } from '../components/ui/Pagination';
+import { PreviewModal } from '../components/ui/PreviewModal';
 import { usePagination } from '../hooks/usePagination';
+import { buildOfficialReportHtml } from '../lib/officialReportHtml';
+import { buildReportPreviewHtml } from '../lib/reportVerification';
+import { downloadReportPreviewPdf } from '../lib/downloadReportPdf';
+import { wrapPreviewDocument } from '../lib/previewHelpers';
 
 const REPORT_TYPES: { type: SwaStewaReportKind; label: string; desc: string; color: string }[] = [
   { type: 'IAR', label: 'IAR', desc: 'Inspection & Acceptance Report', color: 'border-teal-200 bg-teal-50/80' },
@@ -21,18 +27,14 @@ const REPORT_TYPES: { type: SwaStewaReportKind; label: string; desc: string; col
   { type: 'STEWA', label: 'STEWA', desc: 'Statement of Time Elapsed & Work Accomplished', color: 'border-amber-200 bg-amber-50/80' },
 ];
 
-const STATUS_LABELS: Record<string, string> = {
-  draft: 'Draft',
-  pending_review: 'Pending',
-  with_engineer_3: 'Pending',
-  with_engineer_4: 'Pending',
-  approved: 'Finalized',
-  rejected: 'Revision Requested',
-  generated: 'Finalized',
-};
-
 const isReviewerRole = (role: string | undefined) =>
   role === 'engineer_2' || role === 'engineer_3' || role === 'engineer_4';
+
+function submittedByLabel(value: string | number | null | undefined) {
+  const text = String(value ?? '').trim();
+  if (!text || /^[A-Za-z0-9]{20,}$/.test(text)) return '—';
+  return text;
+}
 
 export function ReportsPage() {
   const { user } = useAuth();
@@ -46,6 +48,12 @@ export function ReportsPage() {
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState('');
+  const [previewTitle, setPreviewTitle] = useState('Report preview');
+  const [previewPdfUrl, setPreviewPdfUrl] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [downloadingPreview, setDownloadingPreview] = useState(false);
 
   useEffect(() => {
     listReports()
@@ -57,7 +65,9 @@ export function ReportsPage() {
   const isApprovedReport = (status: string) =>
     status === 'approved' || status === 'generated';
 
-  const visible = reports.filter((r) => isApprovedReport(r.status));
+  const visible = isContractor
+    ? reports
+    : reports.filter((r) => isApprovedReport(r.status));
 
   const canEditReport = (rpt: SwaStewaReport) =>
     (rpt.status === 'draft' || rpt.status === 'rejected') &&
@@ -65,6 +75,35 @@ export function ReportsPage() {
 
   const reportTitle = (r: SwaStewaReport) =>
     (r.report_data?.project_name as string) || r.project_name || `Project #${r.project_id}`;
+
+  const openReportPreview = async (rpt: SwaStewaReport) => {
+    const title = `${rpt.report_type} · ${rpt.report_number}`;
+    setPreviewLoading(true);
+    setPreviewTitle(title);
+    setPreviewOpen(true);
+    setPreviewHtml('');
+    setPreviewPdfUrl(null);
+    try {
+      const res = await getReport(rpt.id);
+      const loaded = res.report as SwaStewaReport;
+      const official = buildOfficialReportHtml(loaded);
+      const fallback = buildReportPreviewHtml(loaded);
+      setPreviewHtml(
+        official ||
+          (fallback.trim().toLowerCase().startsWith('<!DOCTYPE') ||
+          fallback.trim().toLowerCase().startsWith('<html')
+            ? fallback
+            : wrapPreviewDocument(title, fallback)),
+      );
+      setPreviewPdfUrl(loaded.pdf_file || (res as { pdf_url?: string | null }).pdf_url || null);
+    } catch {
+      setPreviewHtml(
+        wrapPreviewDocument(title, '<p>Could not load this report for preview.</p>'),
+      );
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
 
   const filteredReports = visible.filter((report) => {
     const search = query.trim().toLowerCase();
@@ -110,7 +149,7 @@ export function ReportsPage() {
           isReviewer
             ? 'Open any finalized report to review the official document.'
             : isContractor
-              ? 'Prepare and edit IAR reports. SWA and STEWA reports from Engineer I are view only.'
+              ? 'Save SWA drafts, submit them to Engineer II, and prepare IAR reports.'
               : 'SWA, STEWA, and IAR reports are stored with an official review layout.'
         }
         actions={
@@ -198,8 +237,8 @@ export function ReportsPage() {
         <div className="h-64 animate-pulse rounded-2xl border border-border bg-card" />
       ) : filteredReports.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-border bg-card px-6 py-16 text-center">
-          <p className="font-semibold text-text">{visible.length ? 'No matching reports' : 'No finalized reports yet'}</p>
-          <p className="mt-2 text-sm text-text-muted">{visible.length ? 'Try changing your search or filters.' : 'Approved and finalized reports will appear here.'}</p>
+          <p className="font-semibold text-text">{visible.length ? 'No matching reports' : isContractor ? 'No reports yet' : 'No finalized reports yet'}</p>
+          <p className="mt-2 text-sm text-text-muted">{visible.length ? 'Try changing your search or filters.' : isContractor ? 'IAR, SWA, and STEWA reports for your projects will appear here.' : 'Approved and finalized reports will appear here.'}</p>
         </div>
       ) : (
         <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
@@ -221,17 +260,26 @@ export function ReportsPage() {
                     <td className="px-5 py-4"><p className="font-semibold text-text">{rpt.report_number}</p><p className="mt-1 text-xs text-text-muted">{new Date(rpt.created_at).toLocaleDateString()}</p></td>
                     <td className="max-w-[280px] px-5 py-4"><p className="truncate font-medium text-text">{reportTitle(rpt)}</p>{rpt.rejection_reason && <p className="mt-1 truncate text-xs text-warning">Revision: {rpt.rejection_reason}</p>}</td>
                     <td className="px-5 py-4"><span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${rpt.report_type === 'SWA' ? 'bg-violet-100 text-violet-800' : rpt.report_type === 'STEWA' ? 'bg-amber-100 text-amber-900' : 'bg-teal-100 text-teal-900'}`}>{rpt.report_type}</span></td>
-                    <td className="px-5 py-4 text-text-muted">{rpt.created_by || '—'}</td>
-                    <td className="px-5 py-4"><span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide border-emerald-200 bg-emerald-50 text-emerald-700`}>{STATUS_LABELS[rpt.status] ?? rpt.status.replace(/_/g, ' ')}</span></td>
+                    <td className="px-5 py-4 text-text-muted">{submittedByLabel(rpt.created_by)}</td>
+                    <td className="px-5 py-4"><StatusBadge status={rpt.status} /></td>
                     <td className="px-5 py-4"><div className="flex flex-wrap justify-end gap-2">
                       {canEditReport(rpt) && <Link to={`/swa-stewa/edit?id=${encodeURIComponent(rpt.id)}`} className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted hover:bg-surface-muted">Edit</Link>}
                       {(reportIsViewOnly(user?.role, rpt.report_type) || isReviewer || isApprovedReport(rpt.status)) && (
-                        <Link
-                          to={`/reports/view?id=${encodeURIComponent(rpt.id)}`}
-                          className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-dark"
-                        >
-                          View
-                        </Link>
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => void openReportPreview(rpt)}
+                            className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted hover:bg-surface-muted"
+                          >
+                            Preview
+                          </button>
+                          <Link
+                            to={`/reports/view?id=${encodeURIComponent(rpt.id)}`}
+                            className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-dark"
+                          >
+                            Open
+                          </Link>
+                        </>
                       )}
                     </div></td>
                   </tr>
@@ -251,6 +299,32 @@ export function ReportsPage() {
         </div>
       )}
       </div>
+
+      <PreviewModal
+        title={previewLoading ? 'Loading preview…' : previewTitle}
+        open={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        iframeSrcDoc={previewHtml || undefined}
+        iframeTitle="Report preview"
+        wide
+        downloading={downloadingPreview}
+        onDownload={() => {
+          void (async () => {
+            setDownloadingPreview(true);
+            try {
+              await downloadReportPreviewPdf({
+                fileName: `${previewTitle.replace(/\s+/g, '-')}.pdf`,
+                pdfUrl: previewPdfUrl,
+                frame: document.querySelector(
+                  'iframe[title="Report preview"]',
+                ) as HTMLIFrameElement | null,
+              });
+            } finally {
+              setDownloadingPreview(false);
+            }
+          })();
+        }}
+      />
     </main>
   );
 }

@@ -3,6 +3,11 @@ import type { BarChartTask, PdmActivity, PdmDependency } from '../../types';
 import type { ReportProgressEntry } from '../../components/ReportProgressFeed';
 import { applyPdmDerivatives, applyReportProgressToBarChart } from '../scheduleSync';
 import { resolveTargetAndActual, compareTargetVsActual } from '../progressStatus';
+import {
+  originalBarChartTasks,
+  readSuspensionWindow,
+  revisedBarChartTasks,
+} from '../scheduleBaselines';
 import type { SCurveReportingInterval } from '../sCurvePeriods';
 import { intervalDays } from '../sCurvePeriods';
 import { COLLECTIONS, sCurveSnapshotsPath } from './collections';
@@ -46,6 +51,12 @@ export interface ProjectChartContext {
   projectId: string;
   projectStart: string;
   projectPlannedEnd: string | null;
+  /** Project contract amount (₱) — used when S-Curve cost rows are empty. */
+  projectContractAmount: number;
+  baselineMode: 'active' | 'prior_suspension';
+  revisedCompletionDate: string | null;
+  suspensionStartDate: string | null;
+  suspensionEndDate: string | null;
   schedule: ProjectScheduleDoc;
   feed: ReportProgressEntry[];
   settings: ChartSettings;
@@ -203,6 +214,9 @@ export async function loadProjectChartContext(
     const projectStart =
       projectResult?.project.start_date || nowIso().slice(0, 10);
     const projectPlannedEnd = projectResult?.project.planned_end_date ?? null;
+    const projectContractAmount = Number(projectResult?.project.contract_amount ?? 0) || 0;
+    const baselineMode =
+      projectResult?.project.baseline_mode === 'prior_suspension' ? 'prior_suspension' : 'active';
 
     let raw = EMPTY_SCHEDULE(id);
     if (scheduleSnap?.exists()) {
@@ -219,6 +233,11 @@ export async function loadProjectChartContext(
       projectId: id,
       projectStart,
       projectPlannedEnd,
+      projectContractAmount,
+      baselineMode,
+      revisedCompletionDate: projectResult?.project.revised_completion_date ?? null,
+      suspensionStartDate: projectResult?.project.suspension_start_date ?? null,
+      suspensionEndDate: projectResult?.project.suspension_end_date ?? null,
       schedule,
       feed,
       settings,
@@ -254,6 +273,22 @@ export async function getBarChartFs(projectId: string | number) {
       ? compareTargetVsActual(targetPlan, actualPlan)
       : ctx.schedule.progressStatus ?? null;
 
+  const suspension = readSuspensionWindow({
+    baselineMode: ctx.baselineMode,
+    suspensionStart: ctx.suspensionStartDate,
+    suspensionEnd: ctx.suspensionEndDate,
+    revisedCompletion: ctx.revisedCompletionDate,
+  });
+  const baselines = suspension
+    ? {
+        original: {
+          tasks: originalBarChartTasks(ctx.schedule.activities),
+          totalDays: Math.max(1, ctx.schedule.barChartTotalDays),
+        },
+        revised: revisedBarChartTasks(ctx.schedule.activities, ctx.projectStart, suspension),
+      }
+    : null;
+
   return {
     schedule: ctx.schedule,
     curve_type: ctx.settings.curveType,
@@ -264,6 +299,7 @@ export async function getBarChartFs(projectId: string | number) {
     target_plan_percent: targetPlan,
     actual_plan_percent: actualPlan,
     schedule_status: scheduleStatus,
+    baselines,
   };
 }
 

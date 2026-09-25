@@ -6,11 +6,15 @@ import { useAuth } from '../context/AuthContext';
 import { approveProjectArchive, listProjects, type ProjectRow } from '../lib/projectsApi';
 import {
   approveReport,
+  deleteReport,
+  getReport,
   listReports,
   rejectReport,
+  retryApprovalEmail,
   type SwaStewaReport,
 } from '../lib/swaStewaApi';
 import {
+  canDeleteDraftReport,
   canEditReport,
   canUserCreateReportType,
   canUserEditReportType,
@@ -18,7 +22,13 @@ import {
 } from '../lib/reportPermissions';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Pagination } from '../components/ui/Pagination';
+import { PreviewModal } from '../components/ui/PreviewModal';
+import { EmailNoticeStatus } from '../components/EmailNoticeStatus';
 import { usePagination } from '../hooks/usePagination';
+import { buildOfficialReportHtml } from '../lib/officialReportHtml';
+import { buildReportPreviewHtml } from '../lib/reportVerification';
+import { downloadReportPreviewPdf } from '../lib/downloadReportPdf';
+import { wrapPreviewDocument } from '../lib/previewHelpers';
 
 const REPORT_TYPES: { type: SwaStewaReportKind; label: string; desc: string; color: string }[] = [
   { type: 'IAR', label: 'IAR', desc: 'Inspection & Acceptance Report', color: 'border-teal-200 bg-teal-50/80' },
@@ -74,6 +84,11 @@ export function WorkflowPage() {
   const [projectFilter, setProjectFilter] = useState('all');
   const [submissionTab, setSubmissionTab] = useState<SubmissionTab>('all');
   const [reviewerTab, setReviewerTab] = useState<ReviewerTab>('queue');
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState('');
+  const [previewTitle, setPreviewTitle] = useState('Report preview');
+  const [previewPdfUrl, setPreviewPdfUrl] = useState<string | null>(null);
+  const [downloadingPreview, setDownloadingPreview] = useState(false);
 
   const isEngineer1 = user?.role === 'engineer_1';
   const isReviewer =
@@ -149,11 +164,30 @@ export function WorkflowPage() {
     loadReports();
   }, [loadReports]);
 
-  const pending = reports.filter(
+  const engineer2ProjectIds =
+    user?.role === 'engineer_2'
+      ? new Set(
+          projects
+            .filter((project) => {
+              const uid = String(user.id ?? '');
+              return (
+                (project.involved_user_ids ?? []).map(String).includes(uid) ||
+                (project.assigned_user_ids ?? []).map(String).includes(uid)
+              );
+            })
+            .map((project) => String(project.id)),
+        )
+      : null;
+  const visibleReports =
+    engineer2ProjectIds == null
+      ? reports
+      : reports.filter((report) => engineer2ProjectIds.has(String(report.project_id)));
+
+  const pending = visibleReports.filter(
     (r) =>
       matchesReportFilters(r) &&
       (user?.role === 'engineer_2'
-        ? r.status === 'pending_review'
+        ? r.status === 'pending_review' || r.status === 'contractor_confirmed'
         : user?.role === 'engineer_3'
           ? r.status === 'with_engineer_3'
           : user?.role === 'engineer_4'
@@ -161,7 +195,7 @@ export function WorkflowPage() {
             : false),
   );
 
-  const myEditable = reports.filter((r) =>
+  const myEditable = visibleReports.filter((r) =>
     canEditReport(
       user?.role,
       r.report_type,
@@ -176,13 +210,13 @@ export function WorkflowPage() {
       matchesProjectFilters(project) && project.lifecycle_state === 'pending_delete_approval',
   );
 
-  const pendingReports = reports.filter((r) =>
+  const pendingReports = visibleReports.filter((r) =>
     ['pending_review', 'with_engineer_3', 'with_engineer_4', 'pending_contractor', 'contractor_confirmed'].includes(
       r.status,
     ),
   );
-  const revisionReports = reports.filter((r) => r.status === 'rejected');
-  const approvedReports = reports.filter((r) => r.status === 'approved' || r.status === 'generated');
+  const revisionReports = visibleReports.filter((r) => r.status === 'rejected');
+  const approvedReports = visibleReports.filter((r) => r.status === 'approved' || r.status === 'generated');
 
   const tabReports =
     submissionTab === 'drafts'
@@ -193,7 +227,7 @@ export function WorkflowPage() {
           ? revisionReports
           : submissionTab === 'approved'
             ? approvedReports
-            : reports;
+            : visibleReports;
 
   const tableReports = tabReports.filter(matchesReportFilters);
   const filterResetKey = `${query}|${typeFilter}|${statusFilter}|${projectFilter}`;
@@ -207,6 +241,57 @@ export function WorkflowPage() {
     resetKey: `table|${isReviewer ? reviewerTab : submissionTab}|${filterResetKey}`,
   });
   const actorId = user?.id;
+
+  const handleDeleteDraft = async (rpt: SwaStewaReport) => {
+    if (
+      !canDeleteDraftReport(
+        user?.role,
+        rpt.status,
+        rpt.created_by,
+        user?.id ? String(user.id) : null,
+      )
+    ) {
+      return;
+    }
+    if (
+      !window.confirm(
+        'Are you sure you want to delete this draft? This action cannot be undone.',
+      )
+    ) {
+      return;
+    }
+    setActionId(rpt.id);
+    setError('');
+    setSuccess('');
+    try {
+      await deleteReport(rpt.id);
+      setSuccess(`Draft ${rpt.report_number || rpt.id} deleted.`);
+      await loadReports();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not delete draft.');
+    } finally {
+      setActionId(null);
+    }
+  };
+
+  const canRetryEmail =
+    user?.role === 'engineer_2' || user?.role === 'engineer_3' || user?.role === 'engineer_4';
+
+  const handleRetryEmail = async (reportId: string) => {
+    setActionId(reportId);
+    setError('');
+    setSuccess('');
+    try {
+      await retryApprovalEmail(reportId);
+      setSuccess('Approval email sent.');
+      await loadReports();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not retry the notification.');
+      await loadReports();
+    } finally {
+      setActionId(null);
+    }
+  };
 
   const handleApprove = async (reportId: string) => {
     setActionId(reportId);
@@ -223,10 +308,11 @@ export function WorkflowPage() {
         setSuccess('Report approved. Forwarded to Engineer III.');
       } else if (result.status === 'with_engineer_4') {
         setSuccess('Report accepted. Forwarded to Engineer IV.');
-      } else if (result.status === 'generated') {
-        setSuccess('Report approved. Final email sent to Engineer I–IV and Contractors.');
+      } else if (result.status === 'generated' || result.status === 'approved') {
+        setSuccess('Report approved. The approval email is sent to the users assigned to this project.');
         if (result.pdf_url) window.open(result.pdf_url, '_blank');
       }
+      setActionId(null);
       await loadReports();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Approval failed');
@@ -279,14 +365,38 @@ export function WorkflowPage() {
   const reportAuthor = (r: SwaStewaReport) =>
     (r.report_data?.prepared_by_name as string) || 'Engineer I';
 
+  const openReportPreview = async (rpt: SwaStewaReport) => {
+    const title = `${rpt.report_type} · ${rpt.report_number}`;
+    setPreviewTitle(title);
+    setPreviewOpen(true);
+    setPreviewHtml('');
+    setPreviewPdfUrl(null);
+    try {
+      const res = await getReport(rpt.id);
+      const loaded = res.report as SwaStewaReport;
+      const official = buildOfficialReportHtml(loaded);
+      const fallback = buildReportPreviewHtml(loaded);
+      setPreviewHtml(
+        official ||
+          (fallback.trim().toLowerCase().startsWith('<!DOCTYPE') ||
+          fallback.trim().toLowerCase().startsWith('<html')
+            ? fallback
+            : wrapPreviewDocument(title, fallback)),
+      );
+      setPreviewPdfUrl(loaded.pdf_file || null);
+    } catch {
+      setPreviewHtml(wrapPreviewDocument(title, '<p>Could not load this report for preview.</p>'));
+    }
+  };
+
   const reviewerTabs: { id: ReviewerTab; label: string; count: number }[] = [
     { id: 'queue', label: 'Approval queue', count: pending.length },
     { id: 'archive', label: 'Project archive', count: pendingProjectArchive.length },
-    { id: 'register', label: 'All reports', count: reports.length },
+    { id: 'register', label: 'All reports', count: visibleReports.length },
   ];
 
   const submissionTabs: { id: SubmissionTab; label: string; count: number }[] = [
-    { id: 'all', label: 'All', count: reports.length },
+    { id: 'all', label: 'All', count: visibleReports.length },
     { id: 'drafts', label: 'Drafts', count: myEditable.length },
     { id: 'pending', label: 'Pending', count: pendingReports.length },
     { id: 'revisions', label: 'Revisions', count: revisionReports.length },
@@ -325,11 +435,15 @@ export function WorkflowPage() {
           />
         )}
 
-        {error && (
-          <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-600">{error}</div>
-        )}
-        {success && (
-          <div className="rounded-xl bg-primary-light px-4 py-3 text-sm text-primary">{success}</div>
+        {(error || success) && (
+          <div
+            role="status"
+            className={`fixed right-4 top-4 z-50 max-w-sm rounded-xl px-4 py-3 text-sm shadow-lg ${
+              error ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-800'
+            }`}
+          >
+            {error || success}
+          </div>
         )}
 
         <section className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
@@ -510,11 +624,18 @@ export function WorkflowPage() {
                           rows={2}
                         />
                         <div className="flex flex-wrap gap-2 lg:w-40 lg:flex-col">
+                          <button
+                            type="button"
+                            onClick={() => void openReportPreview(rpt)}
+                            className="rounded-lg border border-border px-3 py-2 text-center text-xs font-semibold text-text-muted hover:bg-surface-muted"
+                          >
+                            Preview
+                          </button>
                           <Link
                             to={`/swa-stewa/edit?id=${encodeURIComponent(rpt.id)}`}
                             className="rounded-lg border border-border px-3 py-2 text-center text-xs font-semibold text-text-muted hover:bg-surface-muted"
                           >
-                            View
+                            Open
                           </Link>
                           <button
                             type="button"
@@ -522,7 +643,7 @@ export function WorkflowPage() {
                             onClick={() => handleApprove(rpt.id)}
                             className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
                           >
-                            {actionId === rpt.id ? 'Saving…' : 'Approve'}
+                            {actionId === rpt.id ? 'Approving…' : 'Approve'}
                           </button>
                           <button
                             type="button"
@@ -648,6 +769,15 @@ export function WorkflowPage() {
                         rpt.edit_user_ids,
                         user?.id ? String(user.id) : null,
                       );
+                      const canDeleteDraft = canDeleteDraftReport(
+                        user?.role,
+                        rpt.status,
+                        rpt.created_by,
+                        user?.id ? String(user.id) : null,
+                      );
+                      const showEditActions =
+                        showSubmissionTabs &&
+                        (canContinue || (submissionTab === 'drafts' && canEditNow));
                       return (
                         <tr key={rpt.id} className="transition hover:bg-surface-muted/40">
                           <td className="px-4 py-3">
@@ -673,27 +803,60 @@ export function WorkflowPage() {
                             <span className="rounded-full border border-border bg-surface-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
                               {STATUS_LABELS[rpt.status] ?? rpt.status.replace(/_/g, ' ')}
                             </span>
+                            <EmailNoticeStatus
+                              compact
+                              reportStatus={rpt.status}
+                              emailStatus={rpt.email_status}
+                              emailSentAt={rpt.email_sent_at}
+                              emailError={rpt.email_error}
+                              emailClaimedAt={rpt.email_claimed_at}
+                              emailRecipients={rpt.email_recipients}
+                              canRetry={canRetryEmail}
+                              busy={actionId === rpt.id}
+                              onRetry={() => void handleRetryEmail(rpt.id)}
+                            />
                           </td>
                           <td className="px-4 py-3 text-right">
-                            {showSubmissionTabs && (canContinue || (submissionTab === 'drafts' && canEditNow)) ? (
-                              <Link
-                                to={`/swa-stewa/edit?id=${encodeURIComponent(rpt.id)}`}
-                                className="rounded-lg bg-primary-light px-3 py-1.5 text-xs font-semibold text-primary"
-                              >
-                                {submissionTab === 'drafts' ? 'Edit' : 'Continue'}
-                              </Link>
-                            ) : (
-                              <Link
-                                to={
-                                  rpt.status === 'generated' || rpt.status === 'approved'
-                                    ? `/reports/view?id=${encodeURIComponent(rpt.id)}`
-                                    : `/swa-stewa/edit?id=${encodeURIComponent(rpt.id)}`
-                                }
-                                className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted"
-                              >
-                                View
-                              </Link>
-                            )}
+                            <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                              {showEditActions ? (
+                                <Link
+                                  to={`/swa-stewa/edit?id=${encodeURIComponent(rpt.id)}`}
+                                  className="rounded-lg bg-primary-light px-3 py-1.5 text-xs font-semibold text-primary"
+                                >
+                                  {submissionTab === 'drafts' ? 'Edit' : 'Continue'}
+                                </Link>
+                              ) : (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => void openReportPreview(rpt)}
+                                    className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted"
+                                  >
+                                    Preview
+                                  </button>
+                                  <Link
+                                    to={
+                                      rpt.status === 'generated' || rpt.status === 'approved'
+                                        ? `/reports/view?id=${encodeURIComponent(rpt.id)}`
+                                        : `/swa-stewa/edit?id=${encodeURIComponent(rpt.id)}`
+                                    }
+                                    className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted"
+                                  >
+                                    Open
+                                  </Link>
+                                </>
+                              )}
+                              {canDeleteDraft && (
+                                <button
+                                  type="button"
+                                  disabled={actionId === rpt.id}
+                                  onClick={() => void handleDeleteDraft(rpt)}
+                                  className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-100 disabled:opacity-50"
+                                >
+                                  {actionId === rpt.id ? 'Deleting…' : 'Delete'}
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -715,6 +878,32 @@ export function WorkflowPage() {
           </div>
         </section>
       </div>
+
+      <PreviewModal
+        title={previewTitle}
+        open={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        iframeSrcDoc={previewHtml || undefined}
+        iframeTitle="Workflow report preview"
+        wide
+        downloading={downloadingPreview}
+        onDownload={() => {
+          void (async () => {
+            setDownloadingPreview(true);
+            try {
+              await downloadReportPreviewPdf({
+                fileName: `${previewTitle.replace(/\s+/g, '-')}.pdf`,
+                pdfUrl: previewPdfUrl,
+                frame: document.querySelector(
+                  'iframe[title="Workflow report preview"]',
+                ) as HTMLIFrameElement | null,
+              });
+            } finally {
+              setDownloadingPreview(false);
+            }
+          })();
+        }}
+      />
     </main>
   );
 }

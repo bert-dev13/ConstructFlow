@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { listProjects, type ProjectRow } from '../lib/projectsApi';
 import { NavIcon } from './NavIcon';
 
@@ -25,7 +26,14 @@ export function ProjectSelect({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [menuBox, setMenuBox] = useState<{
+    top: number;
+    left: number;
+    width: number;
+    maxHeight: number;
+  } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,12 +68,33 @@ export function ProjectSelect({
     };
   }, []);
 
+  const placeMenu = useCallback(() => {
+    const trigger = containerRef.current?.querySelector('button');
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const gap = 4;
+    const searchRow = 52;
+    const width = Math.max(rect.width, 280);
+    const spaceBelow = window.innerHeight - rect.bottom - gap - 8;
+    const spaceAbove = rect.top - gap - 8;
+    const openUp = spaceBelow < 220 && spaceAbove > spaceBelow;
+    const room = (openUp ? spaceAbove : spaceBelow) - searchRow;
+    const maxHeight = Math.max(120, Math.min(Math.round(window.innerHeight * 0.55), room));
+    const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - width - 8));
+    setMenuBox({
+      top: openUp ? Math.max(8, rect.top - gap - maxHeight - searchRow) : rect.bottom + gap,
+      left,
+      width,
+      maxHeight,
+    });
+  }, []);
+
   useEffect(() => {
     if (!open) return;
     const handleClickOutside = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const target = e.target as Node;
+      if (containerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
     };
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false);
@@ -79,11 +108,31 @@ export function ProjectSelect({
   }, [open]);
 
   useEffect(() => {
-    if (open) {
-      setQuery('');
-      const id = requestAnimationFrame(() => inputRef.current?.focus());
-      return () => cancelAnimationFrame(id);
+    if (!open) return;
+    placeMenu();
+    const onMove = () => placeMenu();
+    window.addEventListener('resize', onMove);
+    window.addEventListener('scroll', onMove, true);
+    return () => {
+      window.removeEventListener('resize', onMove);
+      window.removeEventListener('scroll', onMove, true);
+    };
+  }, [open, placeMenu]);
+
+  useEffect(() => {
+    const el = menuRef.current;
+    if (!open || !el) return;
+    try {
+      if (!el.matches(':popover-open')) el.showPopover();
+    } catch {
+      /* popover already showing */
     }
+    const id = requestAnimationFrame(() => inputRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [open, menuBox]);
+
+  useEffect(() => {
+    if (open) setQuery('');
   }, [open]);
 
   const selected = projects.find((p) => String(p.id) === value);
@@ -115,49 +164,66 @@ export function ProjectSelect({
         <NavIcon name="chevron-down" className="h-4 w-4 shrink-0 text-text-muted" />
       </button>
 
-      {open && !disabled && (
-        <div className="absolute z-50 mt-1 w-full min-w-[240px] overflow-hidden rounded-lg border border-border bg-white shadow-lg">
-          <div className="border-b border-border p-2">
-            <input
-              ref={inputRef}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search project…"
-              className="w-full rounded-md border border-border px-3 py-1.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-            />
-          </div>
-          <ul className="max-h-60 overflow-y-auto py-1">
-            {filtered.length === 0 ? (
-              <li className="px-3 py-2 text-sm text-text-muted">No projects found</li>
-            ) : (
-              filtered.map((p) => {
-                const isSelected = String(p.id) === value;
-                return (
-                  <li key={p.id}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onChange(String(p.id));
-                        setOpen(false);
-                      }}
-                      className={`flex w-full flex-col items-start px-3 py-2 text-left text-sm transition hover:bg-surface-muted ${
-                        isSelected ? 'bg-primary-light/50 font-semibold text-primary' : 'text-text'
-                      }`}
-                    >
-                      <span className="w-full truncate">{p.name}</span>
-                      {p.location && (
-                        <span className="w-full truncate text-[11px] text-text-muted">
-                          {p.location}
-                        </span>
-                      )}
-                    </button>
-                  </li>
-                );
-              })
-            )}
-          </ul>
-        </div>
-      )}
+      {open && !disabled && menuBox && typeof document !== 'undefined'
+        ? createPortal(
+            <div
+              ref={menuRef}
+              popover="manual"
+              style={{
+                position: 'fixed',
+                margin: 0,
+                top: menuBox.top,
+                left: menuBox.left,
+                right: 'auto',
+                bottom: 'auto',
+                width: menuBox.width,
+              }}
+              className="overflow-hidden rounded-lg border border-border bg-white shadow-lg"
+            >
+              <div className="border-b border-border p-2">
+                <input
+                  ref={inputRef}
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search project…"
+                  className="w-full rounded-md border border-border px-3 py-1.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                />
+              </div>
+              <ul className="overflow-y-auto py-1" style={{ maxHeight: menuBox.maxHeight }}>
+                {filtered.length === 0 ? (
+                  <li className="px-3 py-2 text-sm text-text-muted">No projects found</li>
+                ) : (
+                  filtered.map((p) => {
+                    const isSelected = String(p.id) === value;
+                    return (
+                      <li key={p.id}>
+                        <button
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => {
+                            onChange(String(p.id));
+                            setOpen(false);
+                          }}
+                          className={`flex w-full flex-col items-start px-3 py-2 text-left text-sm transition hover:bg-surface-muted ${
+                            isSelected ? 'bg-primary-light/50 font-semibold text-primary' : 'text-text'
+                          }`}
+                        >
+                          <span className="w-full truncate">{p.name}</span>
+                          {p.location && (
+                            <span className="w-full truncate text-[11px] text-text-muted">
+                              {p.location}
+                            </span>
+                          )}
+                        </button>
+                      </li>
+                    );
+                  })
+                )}
+              </ul>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

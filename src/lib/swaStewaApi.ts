@@ -15,6 +15,7 @@ import {
   previewReportFs,
   regeneratePdfFs,
   rejectReportFs,
+  retryApprovalEmailFs,
   saveReportFs,
   sendToContractorFs,
   submitReportFs,
@@ -106,6 +107,12 @@ export interface SwaStewaReport {
   created_by?: string | null;
   created_at: string;
   generated_at?: string;
+  email_status?: 'NOT_SENT' | 'SENDING' | 'SENT' | 'FAILED';
+  email_sent_at?: string | null;
+  email_error?: string | null;
+  email_message_id?: string | null;
+  email_claimed_at?: string | null;
+  email_recipients?: string[];
 }
 
 export function verifyReportQr(qr: string) {
@@ -179,6 +186,10 @@ export function approveReport(
 
 export function rejectReport(reportId: string | number, reason: string, actorId?: string | number) {
   return rejectReportFs(reportId, reason, actorId);
+}
+
+export function retryApprovalEmail(reportId: string | number) {
+  return retryApprovalEmailFs(reportId);
 }
 
 export function emailApproveFromLink(reportId: string | number, token: string) {

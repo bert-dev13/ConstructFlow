@@ -63,7 +63,9 @@ export function canEditReport(
     if (reportType === 'IAR') {
       return ['draft', 'pending_contractor', 'rejected', 'contractor_confirmed'].includes(status);
     }
-    if (reportType === 'STEWA') {
+    // SWA drafts are created by the contractor and saved until they submit
+    // them to Engineer II. pending_contractor remains the Engineer I handoff.
+    if (reportType === 'SWA' || reportType === 'STEWA') {
       return ['draft', 'pending_contractor', 'rejected'].includes(status);
     }
     return status === 'pending_contractor' || status === 'rejected';
@@ -75,6 +77,19 @@ export function canEditReport(
 
   // Engineer I
   return ['draft', 'rejected', 'pending_contractor', 'contractor_confirmed'].includes(status);
+}
+
+/** Engineer I may permanently delete only their own drafts. */
+export function canDeleteDraftReport(
+  role: Role | undefined,
+  status: SwaStewaStatus | string,
+  createdBy?: string | null,
+  userId?: string | null,
+): boolean {
+  if (role !== 'engineer_1') return false;
+  if (status !== 'draft') return false;
+  if (!userId || !createdBy) return false;
+  return String(createdBy) === String(userId);
 }
 
 export function reportIsViewOnly(

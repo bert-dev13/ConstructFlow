@@ -29,11 +29,12 @@ import type {
 import { COLLECTIONS, reportAuditPath, reportRevisionsPath } from './collections';
 import { getAccessContext, getAccessibleProjectIds, readProjectAccess } from './access';
 import { chunkIds, mapPool, readListCache, writeListCache, invalidateListCache } from './listCache';
-import { db, functions, storage } from './config';
-import { asId, nowIso, omitUndefined } from './ids';
+import { auth, db, functions, storage } from './config';
+import { asId, nowIso, omitUndefined, omitUndefinedDeep } from './ids';
 import { syncProgressCharts } from './sCurves';
-import { listPayItems as listPayItemsFs, type PayItem } from './payItems';
+import { getPayItem, type PayItem } from './payItems';
 import { BASE_URL } from '../paths';
+import { pickProjectSwa, swaPhysicalAccomplishmentPct } from '../iarProgress';
 
 function enrichReportData(
   reportType: 'SWA' | 'STEWA' | 'IAR',
@@ -211,11 +212,48 @@ function standardizePayItemRow(row: Record<string, unknown>, masters: Map<string
   };
 }
 
+function rowNeedsPayItemMaster(row: Record<string, unknown>): boolean {
+  const payItemId = String(row.payItemId ?? '').trim();
+  if (!payItemId) return false;
+  if (payItemId.startsWith('catalog:') || payItemId.startsWith('schedule-')) return false;
+  return true;
+}
+
 async function standardizeReportPayItems(
   reportData: Record<string, unknown>,
   lineItems: WorkItem[] | undefined,
 ) {
-  const masters = new Map((await listPayItemsFs(true)).map((item) => [item.id, item]));
+  const accomplishment = Array.isArray(reportData.accomplishment_items)
+    ? (reportData.accomplishment_items as Record<string, unknown>[])
+    : [];
+  const variation = Array.isArray(reportData.variation_items)
+    ? (reportData.variation_items as Record<string, unknown>[])
+    : [];
+  const candidateRows = [
+    ...((lineItems ?? []) as unknown as Record<string, unknown>[]),
+    ...accomplishment,
+    ...variation,
+  ];
+  // Only the Pay Item documents this draft actually references. A full master-list
+  // scan (thousands of docs) is what exhausts the Firestore read quota on save.
+  const masterIds = [
+    ...new Set(
+      candidateRows
+        .filter(rowNeedsPayItemMaster)
+        .map((row) => String(row.payItemId).trim())
+        .filter(Boolean),
+    ),
+  ];
+  if (masterIds.length === 0) {
+    return { reportData, lineItems };
+  }
+  const masters = new Map<string, PayItem>();
+  await Promise.all(
+    masterIds.map(async (id) => {
+      const master = await getPayItem(id);
+      if (master) masters.set(master.id, master);
+    }),
+  );
   const normalizedLineItems = lineItems?.map((item) =>
     standardizePayItemRow(item as unknown as Record<string, unknown>, masters) as unknown as WorkItem,
   );
@@ -254,7 +292,21 @@ function mapReport(id: string, data: Record<string, unknown>): SwaStewaReport {
     created_by: data.createdBy != null ? asId(data.createdBy as string) : null,
     created_at: String(data.createdAt ?? ''),
     generated_at: (data.generatedAt as string | undefined) ?? undefined,
+    email_status: emailNoticeStatus(data.emailStatus),
+    email_sent_at: data.emailSentAt != null ? String(data.emailSentAt) : null,
+    email_error: data.emailError != null ? String(data.emailError) : null,
+    email_message_id: data.emailMessageId != null ? String(data.emailMessageId) : null,
+    email_claimed_at: data.emailClaimedAt != null ? String(data.emailClaimedAt) : null,
+    email_recipients: stringArray(data.emailRecipients),
   };
+}
+
+function emailNoticeStatus(value: unknown): SwaStewaReport['email_status'] {
+  const status = String(value ?? 'NOT_SENT');
+  if (status === 'SENDING' || status === 'SENT' || status === 'FAILED' || status === 'NOT_SENT') {
+    return status;
+  }
+  return 'NOT_SENT';
 }
 
 async function writeAudit(
@@ -581,15 +633,10 @@ export async function getIarProgressFs(projectId: string | number, reportDate?: 
         .filter((report) => report.report_type === type)
         .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
 
-  const swa = matching('SWA');
+  const swa = pickProjectSwa(reports, reportDate);
   const stewa = matching('STEWA');
-  const swaData = swa?.report_data ?? {};
   const stewaData = stewa?.report_data ?? {};
-  const actual = Number(
-    swaData.percent_actual
-      ?? swaData.actual_progress
-      ?? (swaData.computed_totals as Record<string, unknown> | undefined)?.totalToDateWeightPct,
-  );
+  const actual = swa ? swaPhysicalAccomplishmentPct(swa) : null;
   const originalTarget = Number(
     stewaData.orig_target
       ?? stewaData.original_target
@@ -605,11 +652,27 @@ export async function getIarProgressFs(projectId: string | number, reportDate?: 
   return {
     orig_target: Number.isFinite(originalTarget) ? originalTarget : null,
     rev_target: Number.isFinite(revisedTarget) ? revisedTarget : null,
-    actual_progress: Number.isFinite(actual) ? actual : null,
-    variance: Number.isFinite(actual) && Number.isFinite(planned) ? actual - planned : null,
+    actual_progress: actual != null && Number.isFinite(actual) ? actual : null,
+    variance:
+      actual != null && Number.isFinite(actual) && Number.isFinite(planned)
+        ? actual - planned
+        : null,
     source_swa: swa?.report_number ?? null,
     source_stewa: stewa?.report_number ?? null,
   };
+}
+
+function sanitizeLineItemsForFirestore(items: WorkItem[] | undefined): WorkItem[] {
+  if (!items?.length) return [];
+  return omitUndefinedDeep(
+    items.map((item) => {
+      const row: Record<string, unknown> = { ...item };
+      for (const [key, value] of Object.entries(row)) {
+        if (typeof value === 'number' && !Number.isFinite(value)) row[key] = 0;
+      }
+      return row;
+    }),
+  ) as unknown as WorkItem[];
 }
 
 export async function saveReportFs(payload: {
@@ -623,6 +686,9 @@ export async function saveReportFs(payload: {
   actor_name?: string;
 }) {
   const projectId = asId(payload.project_id);
+  if (!projectId || projectId === '1') {
+    throw new Error('Select a project before saving the draft.');
+  }
   let projectName: string | undefined;
   let accessUserIds: string[] = [];
   let projectData: Record<string, unknown> | null = null;
@@ -636,15 +702,23 @@ export async function saveReportFs(payload: {
   } catch {
     /* ignore */
   }
+  if (!projectData) {
+    throw new Error('Selected project was not found or is not accessible. Pick a project from the list and try again.');
+  }
 
   const standardized = await standardizeReportPayItems(
     payload.report_data,
     payload.line_items,
   );
-  const reportData = enrichReportData(
-    payload.report_type,
-    standardized.reportData,
-    standardized.lineItems,
+  const reportData = omitUndefinedDeep(
+    enrichReportData(
+      payload.report_type,
+      standardized.reportData,
+      standardized.lineItems,
+    ),
+  ) as Record<string, unknown>;
+  const lineItems = sanitizeLineItemsForFirestore(
+    standardized.lineItems ?? payload.line_items,
   );
 
   if (payload.id) {
@@ -663,16 +737,22 @@ export async function saveReportFs(payload: {
             projectData,
             prev.lastViewedBy != null ? String(prev.lastViewedBy) : null,
           );
-    await addDoc(collection(db, reportRevisionsPath(id)), {
-      revisionNumber: Date.now(),
-      reportData: prev.reportData ?? {},
-      lineItems: prev.lineItems ?? [],
-      createdAt: nowIso(),
-      changedByName: payload.actor_name ?? null,
-    });
+    try {
+      await addDoc(collection(db, reportRevisionsPath(id)), omitUndefinedDeep({
+        revisionNumber: Date.now(),
+        reportData: prev.reportData ?? {},
+        lineItems: prev.lineItems ?? [],
+        createdAt: nowIso(),
+        changedByName: payload.actor_name ?? null,
+      }));
+    } catch {
+      /* revision history is best-effort; do not block draft save */
+    }
     await updateDoc(ref, omitUndefined({
       reportData,
-      lineItems: standardized.lineItems ?? (prev.lineItems as WorkItem[] | undefined) ?? [],
+      lineItems: lineItems.length
+        ? lineItems
+        : sanitizeLineItemsForFirestore(prev.lineItems as WorkItem[] | undefined),
       projectName: projectName ?? prev.projectName,
       accessUserIds:
         accessUserIds.length > 0
@@ -703,9 +783,24 @@ export async function saveReportFs(payload: {
     payload.report_type,
     String(reportData.report_date ?? '') || null,
   );
+  let scheduleVersionId: string | null = null;
+  let scheduleVersionLabel: string | null = null;
+  try {
+    const scheduleSnap = await getDoc(doc(db, COLLECTIONS.schedules, projectId));
+    if (scheduleSnap.exists()) {
+      const scheduleData = scheduleSnap.data() as Record<string, unknown>;
+      if (scheduleData.activeVersionId != null) {
+        scheduleVersionId = String(scheduleData.activeVersionId);
+        scheduleVersionLabel =
+          scheduleData.versionLabel != null ? String(scheduleData.versionLabel) : null;
+      }
+    }
+  } catch {
+    /* keep report create independent of schedule version metadata */
+  }
   const ref = doc(collection(db, COLLECTIONS.reports));
   const editUserIds = buildEditableUserIds(payload.report_type, accessUserIds, projectData, null);
-  const docData = omitUndefined({
+  const docData = omitUndefinedDeep({
     reportNumber,
     projectId,
     projectName: projectName ?? null,
@@ -713,20 +808,22 @@ export async function saveReportFs(payload: {
     editUserIds,
     reportType: payload.report_type,
     reportData,
-    lineItems: standardized.lineItems ?? [],
+    lineItems,
     contractorChanges: payload.contractor_changes ?? [],
     status: 'draft' as SwaStewaStatus,
+    scheduleVersionId,
+    scheduleVersionLabel,
     approvalFlow: initialApprovalFlow(payload.report_type) ?? null,
     releaseState: null,
     publicUrl: publicReportUrl(reportNumber, ref.id),
     createdBy: payload.created_by != null ? asId(payload.created_by) : null,
     createdAt: nowIso(),
     updatedAt: nowIso(),
-  });
+  }) as Record<string, unknown>;
   await setDoc(ref, docData);
   await writeAudit(ref.id, 'created', { reportNumber }, payload.actor_name);
   bumpReportsCache();
-  return { report: mapReport(ref.id, docData as Record<string, unknown>) };
+  return { report: mapReport(ref.id, docData) };
 }
 
 export async function previewReportFs(payload: Parameters<typeof saveReportFs>[0]) {
@@ -860,19 +957,26 @@ export async function submitReportFs(
   if (!snap.exists()) throw new Error('Report not found');
   const data = snap.data() as Record<string, unknown>;
   if (String(data.reportType) === 'IAR') {
-    if (String(data.status) !== 'contractor_confirmed') {
-      throw new Error('IAR must be contractor-confirmed before Engineer II review');
-    }
-    const contractorConfirmation =
-      ((data.approvalFlow as Record<string, unknown> | undefined)?.contractorConfirmation as
-        | Record<string, unknown>
-        | undefined) ?? {};
-    if (contractorConfirmation.confirmsSwa !== true || contractorConfirmation.confirmsIar !== true) {
-      throw new Error('Contractor confirmation is incomplete');
+    if (!['draft', 'rejected', 'contractor_confirmed'].includes(String(data.status))) {
+      throw new Error('IAR cannot be submitted for Engineer II review in its current status');
     }
   }
+
+  // Refresh membership from the live project so Engineer II reviewers on
+  // involvedUserIds can see the pending_review document and project charts.
+  let accessUserIds = stringArray(data.accessUserIds);
+  try {
+    const projectSnap = await getDoc(doc(db, COLLECTIONS.projects, asId(data.projectId as string)));
+    if (projectSnap.exists()) {
+      accessUserIds = readProjectAccess(projectSnap.data() as Record<string, unknown>).accessUserIds;
+    }
+  } catch {
+    /* keep prior accessUserIds */
+  }
+
   await updateDoc(ref, {
     status: 'pending_review',
+    accessUserIds,
     approvalFlow:
       String(data.reportType) === 'IAR'
         ? {
@@ -888,6 +992,22 @@ export async function submitReportFs(
   return { status: 'pending_review' };
 }
 
+function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Timed out')), ms);
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 async function finalizeGenerated(reportId: string, actorName?: string) {
   const reportRef = doc(db, COLLECTIONS.reports, reportId);
   const snap = await getDoc(reportRef);
@@ -896,69 +1016,72 @@ async function finalizeGenerated(reportId: string, actorName?: string) {
   const reportNumber = String(data.reportNumber);
   const qrCode = reportNumber;
 
-  let pdfUrl: string | undefined;
+  let pdfUrl = String(data.pdfPath ?? '').trim() || undefined;
+  let pdfBase64: string | undefined;
   try {
-    const finalize = httpsCallable(functions, 'finalizeReport');
-    const result = await finalize({ reportId });
-    const payload = result.data as { pdf_url?: string; qr_code?: string };
-    pdfUrl = payload.pdf_url;
-    if (payload.qr_code) {
-      await updateDoc(reportRef, { qrCode: payload.qr_code });
+    const { officialReportPdfBase64 } = await import('../downloadReportPdf');
+    pdfBase64 = await officialReportPdfBase64(mapReport(reportId, data));
+  } catch {
+    pdfBase64 = undefined;
+  }
+
+  try {
+    await deliverFinalApprovalEmail(reportId, pdfBase64);
+  } catch {
+    /* Approval is already saved. The report shows the email error. */
+  }
+
+  if (pdfBase64) {
+    try {
+      const binary = atob(pdfBase64);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+      const fileRef = storageRef(storage, `reports/${reportId}/${reportNumber}.pdf`);
+      pdfUrl = await withTimeout(
+        (async () => {
+          await uploadBytes(fileRef, bytes, { contentType: 'application/pdf' });
+          return getDownloadURL(fileRef);
+        })(),
+        8000,
+      );
+    } catch {
+      /* The email already carries the approved PDF when storage is unavailable. */
     }
-  } catch {
-    // Client-side fallback: generate a real PDF certificate with jsPDF.
-    const { jsPDF } = await import('jspdf');
-    const doc = new jsPDF();
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(16);
-    doc.setTextColor(11, 61, 46);
-    doc.text('ConstructFlow', 14, 22);
-    doc.setTextColor(0);
-    doc.setFontSize(13);
-    doc.text(`${String(data.reportType)} — Final Report`, 14, 32);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(11);
-    doc.text(`Report Number: ${reportNumber}`, 14, 44);
-    doc.text(`Project: ${String(data.projectName ?? data.projectId)}`, 14, 52);
-    doc.text('Status: Approved / Generated', 14, 60);
-    doc.text(`Verification code: ${qrCode}`, 14, 68);
-    doc.text(`Generated at ${nowIso()}`, 14, 76);
-    const blob = doc.output('blob');
-    const fileRef = storageRef(storage, `reports/${reportId}/${reportNumber}.pdf`);
-    await uploadBytes(fileRef, blob, { contentType: 'application/pdf' });
-    pdfUrl = await getDownloadURL(fileRef);
   }
-
-  await updateDoc(reportRef, {
-    status: 'generated',
-    pdfPath: pdfUrl ?? null,
-    qrCode,
-    publicUrl: publicReportUrl(reportNumber, reportId),
-    approvalFlow:
-      String(data.reportType) === 'IAR'
-        ? {
-            ...((data.approvalFlow as Record<string, unknown> | undefined) ?? {}),
-            currentStage: 'released',
-          }
-        : (data.approvalFlow ?? null),
-    releaseState:
-      String(data.reportType) === 'IAR'
-        ? {
-            ...((data.releaseState as Record<string, unknown> | undefined) ?? {}),
-            attachmentsReleasedAt: nowIso(),
-          }
-        : (data.releaseState ?? null),
-    generatedAt: nowIso(),
-    updatedAt: nowIso(),
-  });
-  await writeAudit(reportId, 'generated', { pdfUrl }, actorName);
-  await queueEmail(reportId, 'final_approved');
 
   try {
-    await syncProgressCharts(asId(data.projectId as string));
-  } catch {
-    /* schedule/s-curve optional */
+    await updateDoc(reportRef, {
+      status: 'generated',
+      pdfPath: pdfUrl ?? null,
+      qrCode,
+      publicUrl: publicReportUrl(reportNumber, reportId),
+      approvalFlow:
+        String(data.reportType) === 'IAR'
+          ? {
+              ...((data.approvalFlow as Record<string, unknown> | undefined) ?? {}),
+              currentStage: 'released',
+            }
+          : (data.approvalFlow ?? null),
+      releaseState:
+        String(data.reportType) === 'IAR'
+          ? {
+              ...((data.releaseState as Record<string, unknown> | undefined) ?? {}),
+              attachmentsReleasedAt: nowIso(),
+            }
+          : (data.releaseState ?? null),
+      generatedAt: nowIso(),
+      updatedAt: nowIso(),
+    });
+  } catch (err) {
+    const fresh = await getDoc(reportRef);
+    const savedStatus = String(fresh.data()?.status ?? '');
+    if (savedStatus !== 'generated' && savedStatus !== 'approved') throw err;
+    pdfUrl = pdfUrl || String(fresh.data()?.pdfPath ?? '') || undefined;
   }
+  await writeAudit(reportId, 'generated', { pdfUrl }, actorName);
+  void syncProgressCharts(asId(data.projectId as string)).catch(() => {
+    /* schedule/s-curve optional */
+  });
 
   bumpReportsCache();
   return {
@@ -988,18 +1111,11 @@ export async function approveReportFs(
   const isIar = String(data.reportType) === 'IAR';
   const approvalFlowData =
     ((data.approvalFlow as Record<string, unknown> | undefined) ?? {}) as Record<string, unknown>;
-  const contractorConfirmation =
-    ((approvalFlowData.contractorConfirmation as Record<string, unknown> | undefined) ?? {}) as Record<
-      string,
-      unknown
-    >;
-
-  if (isIar && (contractorConfirmation.confirmsSwa !== true || contractorConfirmation.confirmsIar !== true)) {
-    throw new Error('Contractor confirmation is required before engineer approval');
-  }
 
   if (role === 'engineer_2') {
-    if (status !== 'pending_review') throw new Error('Report is not pending Engineer II review');
+    if (status !== 'pending_review' && status !== 'contractor_confirmed') {
+      throw new Error('Report is not pending Engineer II review');
+    }
     await updateDoc(ref, {
       status: 'with_engineer_3',
       approvalFlow: isIar
@@ -1068,7 +1184,14 @@ export async function approveReportFs(
       updatedAt: nowIso(),
     });
     await writeAudit(id, 'approved', {}, actorName);
-    return finalizeGenerated(id, actorName);
+    bumpReportsCache();
+    void finalizeGenerated(id, actorName).catch(() => {
+      /* Approval is already saved. Email status is recorded separately. */
+    });
+    return {
+      status: 'approved',
+      message: 'Report approved. The approval email is sent to the users assigned to this project.',
+    };
   }
 
   throw new Error('This role cannot approve reports');
@@ -1123,6 +1246,12 @@ export async function rejectReportFs(
             lastCorrectionRole: access?.role ?? null,
           }
         : data.approvalFlow ?? null,
+    emailStatus: 'NOT_SENT',
+    emailSentAt: null,
+    emailError: null,
+    emailMessageId: null,
+    emailClaimedAt: null,
+    emailRecipients: [],
     updatedAt: nowIso(),
   });
   await writeAudit(id, 'rejected', { reason }, actorName);
@@ -1168,8 +1297,47 @@ export async function regeneratePdfFs(reportIdOrNumber: string | number, actorNa
   return { pdf_url: result.pdf_url ?? '' };
 }
 
+async function deleteReportSubcollection(path: string) {
+  const snap = await getDocs(collection(db, path));
+  await Promise.all(snap.docs.map((entry) => deleteDoc(entry.ref)));
+}
+
 export async function deleteReportFs(reportId: string | number) {
-  await deleteDoc(doc(db, COLLECTIONS.reports, asId(reportId)));
+  const id = asId(reportId);
+  const access = await getAccessContext();
+  if (!access) throw new Error('Not signed in');
+
+  const reportRef = doc(db, COLLECTIONS.reports, id);
+  const snap = await getDoc(reportRef);
+  if (!snap.exists()) throw new Error('Report not found');
+
+  const data = snap.data() as Record<string, unknown>;
+  const status = String(data.status ?? '');
+  const createdBy = data.createdBy != null ? asId(data.createdBy as string) : null;
+  const projectId = asId(data.projectId as string);
+
+  if (access.role === 'engineer_4') {
+    // Engineer IV retains unrestricted delete (admin cleanup).
+  } else if (access.role === 'engineer_1') {
+    if (status !== 'draft') {
+      throw new Error('Only draft submissions can be deleted.');
+    }
+    if (!createdBy || createdBy !== access.uid) {
+      throw new Error('You can only delete your own draft submissions.');
+    }
+    const projectIds = await getAccessibleProjectIds(access.uid);
+    const accessUserIds = stringArray(data.accessUserIds);
+    if (!projectIds.includes(projectId) && !accessUserIds.includes(access.uid)) {
+      throw new Error('You do not have access to delete this draft.');
+    }
+  } else {
+    throw new Error('You do not have permission to delete this submission.');
+  }
+
+  // Remove related draft data first (rules still resolve parent while it exists).
+  await deleteReportSubcollection(reportAuditPath(id));
+  await deleteReportSubcollection(reportRevisionsPath(id));
+  await deleteDoc(reportRef);
   bumpReportsCache();
   return { ok: true };
 }
@@ -1214,6 +1382,95 @@ export async function emailReviseFromLinkFs(
   return { status: 'rejected', message: 'Revision request sent to Engineer I' };
 }
 
+export async function retryApprovalEmailFs(reportId: string | number) {
+  const access = await getAccessContext();
+  if (!access) throw new Error('Not signed in');
+  if (!['engineer_2', 'engineer_3', 'engineer_4'].includes(access.role)) {
+    throw new Error('You cannot retry this notification');
+  }
+  await deliverFinalApprovalEmail(asId(reportId));
+  bumpReportsCache();
+  return { emailStatus: 'SENT' };
+}
+
+async function approvedReportPdfBase64(reportId: string) {
+  if (typeof document === 'undefined') return undefined;
+  const { officialReportPdfBase64 } = await import('../downloadReportPdf');
+  const loaded = await getReportFs(reportId);
+  return officialReportPdfBase64(loaded.report);
+}
+
+async function deliverFinalApprovalEmail(reportId: string, pdfBase64?: string) {
+  try {
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) throw new Error('Not signed in');
+    let attachment = pdfBase64;
+    if (!attachment) {
+      try {
+        attachment = await approvedReportPdfBase64(reportId);
+      } catch {
+        attachment = undefined;
+      }
+    }
+    const response = await fetch('/api/approval-email/', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ reportId, pdfBase64: attachment }),
+      signal: AbortSignal.timeout(90000),
+    });
+    const payload = (await response.json()) as {
+      sent?: boolean;
+      skipped?: boolean;
+      recipients?: string[];
+      messageId?: string | null;
+      sentAt?: string;
+      error?: string;
+    };
+    if (!response.ok || !payload.sent) {
+      const error = payload.error || 'Approval email failed.';
+      await markApprovalEmail(reportId, { status: 'FAILED', error, recipients: payload.recipients ?? [] });
+      throw new Error(error);
+    }
+    if (!payload.skipped) {
+      await markApprovalEmail(reportId, {
+        status: 'SENT',
+        sentAt: payload.sentAt ?? nowIso(),
+        messageId: payload.messageId ?? null,
+        recipients: payload.recipients ?? [],
+      });
+    }
+  } catch (err) {
+    const error = err instanceof Error ? err.message : 'Approval email failed.';
+    await markApprovalEmail(reportId, { status: 'FAILED', error, recipients: [] }).catch(() => {
+      /* The approval itself stays saved. */
+    });
+    throw new Error(error);
+  }
+}
+
+async function markApprovalEmail(
+  reportId: string,
+  result: {
+    status: 'SENT' | 'FAILED';
+    sentAt?: string | null;
+    error?: string | null;
+    messageId?: string | null;
+    recipients?: string[];
+  },
+) {
+  await updateDoc(doc(db, COLLECTIONS.reports, reportId), {
+    emailStatus: result.status,
+    emailSentAt: result.sentAt ?? null,
+    emailError: result.error ?? null,
+    emailMessageId: result.messageId ?? null,
+    emailRecipients: result.recipients ?? [],
+    updatedAt: nowIso(),
+  });
+}
+
 async function queueEmail(
   reportId: string,
   event: string,
@@ -1226,10 +1483,8 @@ async function queueEmail(
     ...extra,
     createdAt: nowIso(),
   });
-  try {
-    const send = httpsCallable(functions, 'sendWorkflowEmail');
-    await send({ reportId, event, ...extra });
-  } catch {
-    /* Functions optional until deployed */
-  }
+  const send = httpsCallable(functions, 'sendWorkflowEmail');
+  void send({ reportId, event, ...extra }).catch(() => {
+    /* Queue trigger sends the message if this call does not finish. */
+  });
 }

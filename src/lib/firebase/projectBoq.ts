@@ -1,7 +1,7 @@
-import { collection, doc, getDocs, setDoc, updateDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, setDoc, updateDoc } from 'firebase/firestore';
 import { COLLECTIONS } from './collections';
 import { db } from './config';
-import { nowIso } from './ids';
+import { nowIso, omitUndefinedDeep } from './ids';
 import { getPayItem } from './payItems';
 
 export interface ProjectBoqItem {
@@ -36,35 +36,96 @@ function path(projectId: string) {
   return collection(db, COLLECTIONS.projects, projectId, 'boqItems');
 }
 
+function firstString(data: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = data[key];
+    if (value != null && String(value).trim() !== '') return String(value).trim();
+  }
+  return '';
+}
+
+function toFiniteNumber(value: unknown, fallback = 0): number {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function toNullableNumber(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
 function mapBoqItem(projectId: string, id: string, data: Record<string, unknown>): ProjectBoqItem {
   return {
     id,
     projectId,
-    payItemId: String(data.payItemId ?? ''),
-    payItemVersion: Number(data.payItemVersion ?? 1),
-    itemNo: String(data.itemNo ?? ''),
-    description: String(data.description ?? ''),
-    unit: String(data.unit ?? ''),
-    programmedQty: Number(data.programmedQty ?? 0),
-    revisedQty: data.revisedQty == null ? null : Number(data.revisedQty),
-    unitPrice: Number(data.unitPrice ?? 0),
-    weightPct: data.weightPct == null ? null : Number(data.weightPct),
+    payItemId: firstString(data, ['payItemId', 'pay_item_id', 'payItemID']),
+    payItemVersion: toFiniteNumber(data.payItemVersion ?? data.pay_item_version, 1),
+    itemNo: firstString(data, ['itemNo', 'item_no', 'ItemNo', 'number']),
+    description: firstString(data, ['description', 'Description', 'name']),
+    unit: firstString(data, ['unit', 'Unit']),
+    programmedQty: toFiniteNumber(data.programmedQty ?? data.programmed_qty, 0),
+    revisedQty: toNullableNumber(data.revisedQty ?? data.revised_qty),
+    unitPrice: toFiniteNumber(data.unitPrice ?? data.unit_price, 0),
+    weightPct: toNullableNumber(data.weightPct ?? data.weight_pct),
     active: data.active !== false,
-    createdAt: String(data.createdAt ?? ''),
-    updatedAt: String(data.updatedAt ?? ''),
+    createdAt: String(data.createdAt ?? data.created_at ?? ''),
+    updatedAt: String(data.updatedAt ?? data.updated_at ?? ''),
   };
 }
 
-export function projectBoqAmount(item: Pick<ProjectBoqItem, 'programmedQty' | 'revisedQty' | 'unitPrice'>): number {
+export function projectBoqAmount(
+  item: Pick<ProjectBoqItem, 'programmedQty' | 'revisedQty' | 'unitPrice'>,
+): number {
   const qty = item.revisedQty != null && item.revisedQty > 0 ? item.revisedQty : item.programmedQty;
   return qty * item.unitPrice;
 }
 
+/**
+ * Load `projects/{id}/boqItems` — the single source of truth for SWA / IAR / PDM Item No.
+ * Hydrates Item No. / Description / Unit from Pay Item Master when legacy rows only store payItemId.
+ */
 export async function listProjectBoq(projectId: string): Promise<ProjectBoqItem[]> {
-  const snap = await getDocs(path(projectId));
-  return snap.docs
-    .map((item) => mapBoqItem(projectId, item.id, item.data() as Record<string, unknown>))
-    .sort((a, b) => a.itemNo.localeCompare(b.itemNo, undefined, { numeric: true }));
+  const id = String(projectId || '').trim();
+  if (!id || id === '1') return [];
+
+  const snap = await getDocs(path(id));
+  let rows = snap.docs.map((item) =>
+    mapBoqItem(id, item.id, item.data() as Record<string, unknown>),
+  );
+
+  const missingMasterIds = [
+    ...new Set(rows.filter((row) => row.payItemId && !row.itemNo).map((row) => row.payItemId)),
+  ];
+  if (missingMasterIds.length > 0) {
+    try {
+      const masters = new Map<string, Awaited<ReturnType<typeof getPayItem>>>();
+      await Promise.all(
+        missingMasterIds.map(async (payItemId) => {
+          const master = await getPayItem(payItemId);
+          if (master) masters.set(master.id, master);
+        }),
+      );
+      rows = rows.map((row) => {
+        if (row.itemNo || !row.payItemId) return row;
+        const master = masters.get(row.payItemId);
+        if (!master) return row;
+        return {
+          ...row,
+          itemNo: master.itemNo,
+          description: row.description || master.description,
+          unit: row.unit || master.unit,
+          payItemVersion: master.version || row.payItemVersion,
+        };
+      });
+    } catch {
+      // Keep raw rows if master list is unavailable (permissions); SWA still shows itemNo when present.
+    }
+  }
+
+  return rows.sort((a, b) =>
+    a.itemNo.localeCompare(b.itemNo, undefined, { numeric: true }),
+  );
 }
 
 export async function saveProjectBoqItem(
@@ -89,30 +150,34 @@ export async function saveProjectBoqItem(
   const ref = id ? doc(path(projectId), id) : doc(path(projectId));
   let existingCreatedAt = nowIso();
   if (id) {
-    const current = await getDocs(path(projectId));
-    const existing = current.docs.find((item) => item.id === id)?.data();
-    if (existing?.createdAt) existingCreatedAt = String(existing.createdAt);
+    const existingSnap = await getDoc(ref);
+    if (existingSnap.exists()) {
+      const existing = existingSnap.data() as Record<string, unknown>;
+      if (existing.createdAt) existingCreatedAt = String(existing.createdAt);
+    }
   }
 
   // Read-only master lookup: copy Item No. / Description / Unit / Version into the project
   // record. Quantity, unit price, amount, and WT% stay on this document only and never write
   // back to the Pay Item Master collection.
-  const payload = {
+  // Firestore rejects `undefined` and `NaN` — coerce everything to safe values.
+  const payload = omitUndefinedDeep({
     payItemId: master.id,
     payItemVersion: master.version,
     itemNo: master.itemNo,
     description: master.description,
     unit: master.unit,
-    programmedQty: input.programmedQty,
-    revisedQty: input.revisedQty,
-    unitPrice: input.unitPrice,
-    weightPct: input.weightPct ?? null,
-    active: input.active,
+    programmedQty: toFiniteNumber(input.programmedQty, 0),
+    revisedQty: toNullableNumber(input.revisedQty),
+    unitPrice: toFiniteNumber(input.unitPrice, 0),
+    weightPct: toNullableNumber(input.weightPct ?? null),
+    active: input.active !== false,
     createdAt: existingCreatedAt,
     updatedAt: nowIso(),
-  };
+  });
+
   await setDoc(ref, payload);
-  return mapBoqItem(projectId, ref.id, payload);
+  return mapBoqItem(projectId, ref.id, payload as Record<string, unknown>);
 }
 
 export async function setProjectBoqActive(projectId: string, id: string, active: boolean) {

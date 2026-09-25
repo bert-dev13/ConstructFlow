@@ -14,3 +14,17 @@ export function omitUndefined<T extends Record<string, unknown>>(obj: T): T {
   }
   return out;
 }
+
+/** Recursively drop `undefined` so Firestore setDoc/updateDoc do not reject the payload. */
+export function omitUndefinedDeep<T>(value: T): T {
+  if (value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => omitUndefinedDeep(item)) as T;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    if (nested === undefined) continue;
+    out[key] = omitUndefinedDeep(nested);
+  }
+  return out as T;
+}

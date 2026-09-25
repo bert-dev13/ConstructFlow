@@ -3,6 +3,8 @@
 import { newVariationItem, type IarVariationItem } from '../lib/iarItems';
 import { fieldInputClass } from './ui/FormField';
 import { PayItemSelect } from './PayItemSelect';
+import { isPlaceholderUnit, resolveItemUnit } from '../lib/boqLookup';
+import { linkedPayItemId } from '../lib/projectBoqSync';
 import type { PayItem } from '../lib/payItemsApi';
 
 interface Props {
@@ -10,9 +12,16 @@ interface Props {
   onChange: (items: IarVariationItem[]) => void;
   readOnly?: boolean;
   projectBoqItems?: import('../lib/projectBoqApi').ProjectBoqItem[];
+  onRefreshProjectBoq?: () => void | Promise<void>;
 }
 
-export function IarVariationTable({ items, onChange, readOnly, projectBoqItems }: Props) {
+export function IarVariationTable({
+  items,
+  onChange,
+  readOnly,
+  projectBoqItems,
+  onRefreshProjectBoq,
+}: Props) {
   const inputCls = `${fieldInputClass()} !mt-0 !py-2 text-xs`;
 
   const update = (id: string, patch: Partial<IarVariationItem>) => {
@@ -34,27 +43,32 @@ export function IarVariationTable({ items, onChange, readOnly, projectBoqItems }
       return;
     }
     const boqItem = (projectBoqItems ?? []).find(
-      (boq) => boq.payItemId === item.id && boq.active,
+      (boq) =>
+        boq.active !== false
+        && (
+          (boq.payItemId && boq.payItemId === item.id)
+          || boq.id === item.id
+          || (
+            boq.itemNo
+            && item.itemNo
+            && boq.itemNo.trim().toLowerCase() === item.itemNo.trim().toLowerCase()
+          )
+        ),
+    );
+    const resolved = resolveItemUnit(
+      boqItem?.itemNo || item.itemNo,
+      boqItem?.description || item.description,
+      boqItem && !isPlaceholderUnit(boqItem.unit) ? boqItem.unit : item.unit,
     );
     update(id, {
-      payItemId: item.id,
+      payItemId: linkedPayItemId(item.id, boqItem),
       payItemVersion: item.version,
-      snapshotItemNo: item.itemNo,
-      snapshotDescription: item.description,
-      snapshotUnit: item.unit,
-      itemNo: item.itemNo,
-      description: item.description,
-      unit: item.unit,
-      ...(boqItem
-        ? {
-            itemNo: boqItem.itemNo,
-            description: boqItem.description,
-            unit: boqItem.unit,
-            snapshotItemNo: boqItem.itemNo,
-            snapshotDescription: boqItem.description,
-            snapshotUnit: boqItem.unit,
-          }
-        : {}),
+      snapshotItemNo: boqItem?.itemNo || item.itemNo,
+      snapshotDescription: resolved.description,
+      snapshotUnit: resolved.unit,
+      itemNo: boqItem?.itemNo || item.itemNo,
+      description: resolved.description,
+      unit: resolved.unit,
     });
   };
 
@@ -87,6 +101,7 @@ export function IarVariationTable({ items, onChange, readOnly, projectBoqItems }
                       onChange={(selected) => selectPayItem(item.id, selected)}
                       fallbackLabel={item.itemNo || undefined}
                       projectBoqItems={projectBoqItems}
+                      onRefreshProjectBoq={onRefreshProjectBoq}
                     />
                   )}
                 </td>
@@ -107,7 +122,13 @@ export function IarVariationTable({ items, onChange, readOnly, projectBoqItems }
                   />
                 </td>
                 <td className="px-2 py-2">
-                  <span className="text-xs text-text">{item.snapshotUnit || item.unit || '—'}</span>
+                  <span className="text-xs text-text">
+                    {resolveItemUnit(
+                      item.snapshotItemNo || item.itemNo,
+                      item.snapshotDescription || item.description,
+                      item.snapshotUnit || item.unit,
+                    ).unit || item.snapshotUnit || item.unit || '—'}
+                  </span>
                 </td>
                 <td className="px-2 py-2">
                   <input
@@ -160,7 +181,8 @@ export function IarVariationTable({ items, onChange, readOnly, projectBoqItems }
             + Add variation order row
           </button>
           <p className="mt-2 text-[11px] text-text-muted">
-            Item No. searches project BOQ / PDM items. Description and unit fill from the project record.
+            Type an Item No. such as A.1 or B.1 and choose a match.
+            Description and unit fill in from the DPWH standard pay item list.
           </p>
         </div>
       )}

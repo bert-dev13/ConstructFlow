@@ -25,6 +25,12 @@ export interface ProjectRow {
   deletion_approval?: Record<string, unknown> | null;
   start_date?: string | null;
   planned_end_date?: string | null;
+  /** Active project, or a project that already resumed after an approved suspension. */
+  baseline_mode?: 'active' | 'prior_suspension';
+  contact_details?: string | null;
+  revised_completion_date?: string | null;
+  suspension_start_date?: string | null;
+  suspension_end_date?: string | null;
   contractor_id?: string | null;
   contractor_name?: string | null;
   contract_amount?: number | null;
@@ -72,6 +78,11 @@ export interface ProjectInput {
   location?: string;
   start_date?: string;
   planned_end_date?: string;
+  baseline_mode?: 'active' | 'prior_suspension';
+  contact_details?: string | null;
+  revised_completion_date?: string | null;
+  suspension_start_date?: string | null;
+  suspension_end_date?: string | null;
   status?: string;
   contractor_id?: string | null;
   contract_amount?: number | null;

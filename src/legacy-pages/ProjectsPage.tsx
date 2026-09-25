@@ -26,8 +26,9 @@ import {
 } from '../lib/projectsApi';
 
 function dateInputValue(value: string | null | undefined): string {
-  if (!value) return '';
-  return value.slice(0, 10);
+  if (!value || typeof value !== 'string') return '';
+  const match = value.match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : '';
 }
 
 function formatMoney(n: number | null | undefined): string {
@@ -120,6 +121,11 @@ export function ProjectsPage() {
   const [involvedUserIds, setInvolvedUserIds] = useState<string[]>([]);
   const [contractAmount, setContractAmount] = useState('');
   const [status, setStatus] = useState('active');
+  const [baselineMode, setBaselineMode] = useState<'active' | 'prior_suspension'>('active');
+  const [contactDetails, setContactDetails] = useState('');
+  const [revisedCompletion, setRevisedCompletion] = useState('');
+  const [suspensionStart, setSuspensionStart] = useState('');
+  const [suspensionEnd, setSuspensionEnd] = useState('');
 
   const resetForm = () => {
     setEditingId(null);
@@ -129,9 +135,15 @@ export function ProjectsPage() {
     setPlannedEnd('');
     setContractorId('');
     setAssignedUserIds(user?.id ? [String(user.id)] : []);
-    setInvolvedUserIds([]);
+    // Default all Engineer II reviewers so submitted reports / charts are visible to them.
+    setInvolvedUserIds(engineerTwos.map((eng) => eng.id));
     setContractAmount('');
     setStatus('active');
+    setBaselineMode('active');
+    setContactDetails('');
+    setRevisedCompletion('');
+    setSuspensionStart('');
+    setSuspensionEnd('');
     setAuditLog([]);
     setContractHistory([]);
   };
@@ -192,6 +204,11 @@ export function ProjectsPage() {
     setInvolvedUserIds((p.involved_user_ids ?? []).map(String));
     setContractAmount(p.contract_amount != null ? String(p.contract_amount) : '');
     setStatus(p.status || 'active');
+    setBaselineMode(p.baseline_mode === 'prior_suspension' ? 'prior_suspension' : 'active');
+    setContactDetails(p.contact_details ?? '');
+    setRevisedCompletion(dateInputValue(p.revised_completion_date));
+    setSuspensionStart(dateInputValue(p.suspension_start_date));
+    setSuspensionEnd(dateInputValue(p.suspension_end_date));
     setDrawerOpen(true);
     try {
       const detail = await getProject(p.id);
@@ -206,13 +223,37 @@ export function ProjectsPage() {
   const toggleId = (list: string[], id: string, checked: boolean) =>
     checked ? [...new Set([...list, id])] : list.filter((value) => value !== id);
 
-  const handleSubmit = async (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError('');
     setSuccess('');
     if (!name.trim()) {
       setError('Project title is required.');
       return;
+    }
+    // Read the date inputs from the form. The picker can show a new day before
+    // React state catches up, and saving that stale state wrote the previous date.
+    const formData = new FormData(e.currentTarget);
+    const submittedStart = dateInputValue(String(formData.get('start_date') ?? startDate));
+    const submittedEnd = dateInputValue(String(formData.get('planned_end_date') ?? plannedEnd));
+    const submittedRevised = dateInputValue(
+      String(formData.get('revised_completion_date') ?? revisedCompletion),
+    );
+    const submittedSuspStart = dateInputValue(
+      String(formData.get('suspension_start_date') ?? suspensionStart),
+    );
+    const submittedSuspEnd = dateInputValue(
+      String(formData.get('suspension_end_date') ?? suspensionEnd),
+    );
+    if (editingId !== null && baselineMode === 'prior_suspension') {
+      if (!submittedRevised || !submittedSuspStart || !submittedSuspEnd) {
+        setError('Enter the suspension dates and the revised completion date.');
+        return;
+      }
+      if (submittedSuspEnd < submittedSuspStart) {
+        setError('Suspension end date must be on or after the suspension start date.');
+        return;
+      }
     }
     setSaving(true);
     try {
@@ -221,9 +262,17 @@ export function ProjectsPage() {
       const input = {
         name: name.trim(),
         location: location.trim() || undefined,
-        start_date: startDate || undefined,
-        planned_end_date: plannedEnd || undefined,
+        start_date: submittedStart,
+        planned_end_date: submittedEnd,
         status: status || 'active',
+        baseline_mode: editingId !== null ? baselineMode : 'active',
+        contact_details: editingId !== null ? contactDetails.trim() || null : null,
+        revised_completion_date:
+          editingId !== null && baselineMode === 'prior_suspension' ? submittedRevised : '',
+        suspension_start_date:
+          editingId !== null && baselineMode === 'prior_suspension' ? submittedSuspStart : '',
+        suspension_end_date:
+          editingId !== null && baselineMode === 'prior_suspension' ? submittedSuspEnd : '',
         contractor_id: contractorId || null,
         contract_amount: contractAmount ? parseFloat(contractAmount) : null,
         assigned_user_ids: nextAssigned,
@@ -591,6 +640,7 @@ export function ProjectsPage() {
                 >
                   <option value="all">All statuses</option>
                   <option value="active">Active</option>
+                  <option value="suspended">Suspended</option>
                   <option value="on_hold">On hold</option>
                   <option value="completed">Completed</option>
                 </select>
@@ -794,7 +844,7 @@ export function ProjectsPage() {
                               )}
                               {projectView === 'active' && canManage && (
                                 <Link
-                                  to={`/projects/${p.id}/boq`}
+                                  to={`/projects/boq/?projectId=${encodeURIComponent(String(p.id))}`}
                                   className="rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold text-text-muted hover:bg-surface-muted"
                                 >
                                   Pay items
@@ -873,12 +923,17 @@ export function ProjectsPage() {
       {drawerOpen && canManage && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4" role="dialog" aria-modal="true" aria-labelledby="project-form-title">
           <button type="button" aria-label="Close project form" onClick={closeDrawer} className="absolute inset-0 cursor-default" />
-          <form onSubmit={handleSubmit} className="relative flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-card shadow-2xl">
-            <div className="sticky top-0 z-10 flex items-start justify-between border-b border-border bg-card px-6 py-5">
+          <form onSubmit={handleSubmit} className="relative flex max-h-[94vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-card shadow-2xl">
+            <div className="shrink-0 flex items-start justify-between border-b border-border bg-card px-6 py-5">
               <div><p className="text-xs font-bold uppercase tracking-wider text-primary">{editingId !== null ? 'Project settings' : 'Portfolio'}</p><h2 id="project-form-title" className="mt-1 text-xl font-semibold text-text">{editingId !== null ? 'Edit project' : 'Create project'}</h2><p className="mt-1 text-sm text-text-muted">Keep the project record complete and current.</p></div>
               <button type="button" onClick={closeDrawer} className="rounded-lg p-2 text-xl text-text-muted hover:bg-surface-muted" aria-label="Close">×</button>
             </div>
-            <div className="flex-1 space-y-5 px-6 py-6">
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-6 py-6">
+              {error && (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+                  {error}
+                </div>
+              )}
               <div>
                 <h3 className="text-sm font-semibold text-text">Basic information</h3>
                 <div className="mt-3 space-y-4">
@@ -908,14 +963,15 @@ export function ProjectsPage() {
                     </select>
                   </div>
                   <div><label className="block text-xs font-semibold uppercase tracking-wide text-text-muted">Contract amount (₱)</label><input type="number" step="0.01" min="0" value={contractAmount} onChange={(e) => setContractAmount(e.target.value)} placeholder="5991119.01" className={inputCls} /></div>
-                  <div><label className="block text-xs font-semibold uppercase tracking-wide text-text-muted">Start date</label><input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className={inputCls} /></div>
-                  <div><label className="block text-xs font-semibold uppercase tracking-wide text-text-muted">Planned end date</label><input type="date" value={plannedEnd} onChange={(e) => setPlannedEnd(e.target.value)} className={inputCls} /></div>
+                  <div><label className="block text-xs font-semibold uppercase tracking-wide text-text-muted">Start date</label><input type="date" name="start_date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className={inputCls} /></div>
+                  <div><label className="block text-xs font-semibold uppercase tracking-wide text-text-muted">Planned end date</label><input type="date" name="planned_end_date" value={plannedEnd} onChange={(e) => setPlannedEnd(e.target.value)} className={inputCls} /></div>
                 </div>
               </div>
               <div className="border-t border-border pt-5">
                 <h3 className="text-sm font-semibold text-text">Project access</h3>
                 <p className="mt-1 text-xs text-text-muted">
-                  Engineer I / II only see projects they are assigned or involved in. Engineer III / IV keep access to all projects.
+                  Engineer I only sees projects they are assigned to. Engineer II–IV can open all projects for review.
+                  Still assign Engineer II reviewers here so they appear in the project’s access list.
                 </p>
                 <div className="mt-3 grid gap-4 sm:grid-cols-2">
                   <div>
@@ -975,10 +1031,84 @@ export function ProjectsPage() {
                   </div>
                 </div>
               </div>
-              {editingId !== null && <div className="border-t border-border pt-5"><h3 className="text-sm font-semibold text-text">Project status</h3><select value={status} onChange={(e) => setStatus(e.target.value)} className={inputCls}><option value="active">Active</option><option value="completed">Completed</option><option value="on_hold">On hold</option></select></div>}
+              {editingId !== null && (
+                <div className="border-t border-border pt-5">
+                  <h3 className="text-sm font-semibold text-text">Project status</h3>
+                  <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                    <div className="sm:col-span-2">
+                      <label className="block text-xs font-semibold uppercase tracking-wide text-text-muted">
+                        Project status
+                      </label>
+                      <select
+                        value={baselineMode}
+                        onChange={(e) =>
+                          setBaselineMode(e.target.value === 'prior_suspension' ? 'prior_suspension' : 'active')
+                        }
+                        className={inputCls}
+                      >
+                        <option value="active">Active Project</option>
+                        <option value="prior_suspension">Active Project with a Prior Period of Suspension</option>
+                      </select>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="block text-xs font-semibold uppercase tracking-wide text-text-muted">
+                        Contact details
+                      </label>
+                      <textarea
+                        value={contactDetails}
+                        onChange={(e) => setContactDetails(e.target.value)}
+                        rows={2}
+                        placeholder="Office, phone, or email"
+                        className={inputCls}
+                      />
+                    </div>
+                    {baselineMode === 'prior_suspension' && (
+                      <>
+                        <div>
+                          <label className="block text-xs font-semibold uppercase tracking-wide text-text-muted">
+                            Suspension start date
+                          </label>
+                          <input
+                            type="date"
+                            name="suspension_start_date"
+                            value={suspensionStart}
+                            onChange={(e) => setSuspensionStart(e.target.value)}
+                            className={inputCls}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold uppercase tracking-wide text-text-muted">
+                            Suspension end date
+                          </label>
+                          <input
+                            type="date"
+                            name="suspension_end_date"
+                            value={suspensionEnd}
+                            onChange={(e) => setSuspensionEnd(e.target.value)}
+                            className={inputCls}
+                          />
+                        </div>
+                        <div className="sm:col-span-2">
+                          <label className="block text-xs font-semibold uppercase tracking-wide text-text-muted">
+                            Revised completion date
+                          </label>
+                          <input
+                            type="date"
+                            name="revised_completion_date"
+                            value={revisedCompletion}
+                            onChange={(e) => setRevisedCompletion(e.target.value)}
+                            className={inputCls}
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+              {editingId !== null && <div className="border-t border-border pt-5"><h3 className="text-sm font-semibold text-text">Work status</h3><select value={status} onChange={(e) => setStatus(e.target.value)} className={inputCls}><option value="active">Active</option><option value="suspended">Suspended</option><option value="completed">Completed</option><option value="on_hold">On hold</option></select></div>}
               {editingId !== null && (contractHistory.length > 0 || auditLog.length > 0) && <div className="border-t border-border pt-5"><h3 className="text-sm font-semibold text-text">History</h3>{contractHistory.length > 0 && <div className="mt-3 space-y-2 text-xs">{contractHistory.map((h) => <div key={h.id} className="rounded-lg bg-surface-muted p-3"><span className="font-semibold">₱{formatMoney(h.contract_amount)}</span><span className="text-text-muted"> · effective {h.effective_date}</span><span className="block mt-1 text-text-muted">Recorded {formatWhen(h.created_at)}{h.created_by_name ? ` by ${h.created_by_name}` : ''}</span></div>)}</div>}{auditLog.length > 0 && <ul className="mt-3 max-h-48 space-y-2 overflow-y-auto text-xs">{auditLog.map((a) => <li key={a.id} className="rounded-lg border border-border p-3"><span className="font-semibold">{a.field_name}</span><span className="text-text-muted"> · {formatWhen(a.created_at)}</span><p className="mt-1 text-text-muted">{a.old_value || '—'} → {a.new_value || '—'}</p></li>)}</ul>}</div>}
             </div>
-            <div className="sticky bottom-0 flex gap-3 border-t border-border bg-card px-6 py-4">
+            <div className="shrink-0 flex gap-3 border-t border-border bg-card px-6 py-4">
               <button type="button" onClick={closeDrawer} className="flex-1 rounded-xl border border-border px-4 py-2.5 text-sm font-semibold text-text-muted hover:bg-surface-muted">Cancel</button>
               <button type="submit" disabled={saving} className="flex-1 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{saving ? 'Saving…' : editingId !== null ? 'Save changes' : 'Create project'}</button>
             </div>

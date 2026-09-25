@@ -10,10 +10,13 @@ import { IarVariationTable } from '../components/IarVariationTable';
 import { ProjectSelect } from '../components/ProjectSelect';
 import { WorkItemsTable } from '../components/WorkItemsTable';
 import { newIarItem, newManpowerRow, newVariationItem, type IarAccomplishmentItem, type IarManpowerRow, type IarVariationItem } from '../lib/iarItems';
-import { computeStewaSlippage, newWorkItem, type WorkItem } from '../lib/workItems';
-import { applyStewaDerivedFields } from '../lib/stewaCalculations';
+import { computeStewaSlippage, computeWorkItems, newWorkItem, type WorkItem } from '../lib/workItems';
+import { applyStewaDerivedFields, stewaDash, stewaPercentText } from '../lib/stewaCalculations';
+import { buildOfficialReportHtml } from '../lib/officialReportHtml';
 import { getProject, listProjects } from '../lib/projectsApi';
-import { listProjectBoq, type ProjectBoqItem } from '../lib/projectBoqApi';
+import { type ProjectBoqItem } from '../lib/projectBoqApi';
+import { resolveItemUnit } from '../lib/boqLookup';
+import { listProjectItemOptions } from '../lib/projectBoqSync';
 import { buildReferenceWorkItems } from '../data/roadProjectReference';
 import {
   approveReport,
@@ -23,19 +26,23 @@ import {
   getStewaFromSwa,
   listReportRevisions,
   markReportViewed,
-  previewReport,
   rejectReport,
+  retryApprovalEmail,
   saveReport,
   sendToContractor,
   submitReport,
   type ContractorChange,
+  type SwaStewaReport,
+  type SwaStewaStatus,
 } from '../lib/swaStewaApi';
 import { trackReportViewed } from '../lib/recentViewed';
 import { downloadReportPreviewPdf } from '../lib/downloadReportPdf';
+import { EmailNoticeStatus } from '../components/EmailNoticeStatus';
 import { Button, ButtonLink } from '../components/ui/Button';
 import { FormField, TextArea, TextInput } from '../components/ui/FormField';
 import { FormSection } from '../components/ui/FormSection';
 import { PageHeader } from '../components/ui/PageHeader';
+import { PreviewModal } from '../components/ui/PreviewModal';
 import { ReportTypeBadge } from '../components/ui/StatusBadge';
 import { SubmissionSuccessSign } from '../components/ui/SubmissionSuccessSign';
 import { UndoRedoToolbar } from '../components/ui/UndoRedoToolbar';
@@ -61,7 +68,7 @@ type ReportEditorSnapshot = {
 
 function createInitialSnapshot(isContractor: boolean, userName: string): ReportEditorSnapshot {
   return {
-    projectId: '1',
+    projectId: '',
     data: {
       report_date: new Date().toISOString().slice(0, 10),
       project_name: '',
@@ -86,7 +93,7 @@ function createInitialSnapshot(isContractor: boolean, userName: string): ReportE
       less_reason: 'Advance Payment',
       less_amount: '359431.86',
       contract_number: 'B011 - 2023',
-      project_title: 'Improvement of Road Network',
+      project_title: '',
       municipality: 'Tuao',
       week_covered: '',
       problems_remarks: '',
@@ -107,35 +114,100 @@ function createInitialSnapshot(isContractor: boolean, userName: string): ReportE
   };
 }
 
-const STEWA_DERIVE_KEYS = new Set(['report_date', 'period_covered', 'notice_to_proceed']);
+const STEWA_DERIVE_KEYS = new Set([
+  'report_date',
+  'contract_duration',
+  'notice_to_proceed',
+  'approved_time_extension',
+  'approved_time_suspension',
+  'percent_actual',
+]);
 
 const STEWA_FIELDS = [
-  { key: 'report_date', label: 'Report date', type: 'date' },
-  { key: 'period_covered', label: 'Period covered (end date)', type: 'date', hint: 'Contract duration = days from report date through this date.' },
-  { key: 'contract_duration', label: 'Contract duration (days)', type: 'number', computed: true },
-  { key: 'notice_to_proceed', label: 'Notice to proceed date', type: 'date' },
-  { key: 'expiry_date', label: 'Expiry date', type: 'date' },
-  { key: 'approved_time_extension', label: 'Approved time extension', type: 'number' },
-  { key: 'approved_time_suspension', label: 'Approved time suspension', type: 'text' },
-  { key: 'total_time_extension', label: 'Total time extension', type: 'number' },
-  { key: 'revised_contract_duration', label: 'Revised contract duration', type: 'number' },
-  { key: 'revised_expiry_date', label: 'Revised expiry date', type: 'date' },
-  { key: 'calendar_days_elapsed', label: 'Calendar days elapsed', type: 'number' },
+  { key: 'report_date', label: 'As of', type: 'date', hint: 'Excel as-of date (I9). The period ends on this date.' },
+  {
+    key: 'period_covered',
+    label: '1. Period Covered / Week Covered',
+    type: 'text',
+    computed: true,
+    span2: true,
+    hint: 'Start = notice to proceed + 9 days. End = as-of date. Shown as “date to date”.',
+  },
+  {
+    key: 'contract_duration',
+    label: '2. Contract Duration (days)',
+    type: 'number',
+    hint: 'Enter the contract duration in days.',
+  },
+  {
+    key: 'notice_to_proceed',
+    label: '3. Date of Receipt of Notice to Proceed',
+    type: 'date',
+    hint: 'Filled from the project start date when that date is the NTP.',
+  },
+  { key: 'expiry_date', label: '4. Expiry Date', type: 'date', computed: true, hint: 'Period start + contract duration.' },
+  {
+    key: 'approved_time_extension',
+    label: '5. Approved Time Extension (days)',
+    type: 'number',
+    hint: 'Leave blank when there is no approved extension.',
+  },
+  { key: 'approved_time_suspension', label: '6. Approved Time Suspension (days)', type: 'number' },
+  {
+    key: 'total_time_extension',
+    label: '7. Total Time Extension',
+    type: 'text',
+    computed: true,
+    blankWhenZero: true,
+    hint: 'Equals the approved time extension.',
+  },
+  {
+    key: 'revised_contract_duration',
+    label: '8. Revised Contract Duration',
+    type: 'text',
+    computed: true,
+    blankWhenZero: true,
+    hint: 'Extension + original duration when the extension is greater than 0. Otherwise blank.',
+  },
+  {
+    key: 'revised_expiry_date',
+    label: '9. Revised Expiry Date',
+    type: 'date',
+    computed: true,
+    hint: 'Expiry date + suspension days + extension days.',
+  },
+  {
+    key: 'calendar_days_elapsed',
+    label: '10. Total Calendar days Elapsed to Date',
+    type: 'text',
+    computed: true,
+    hint: 'As-of date − period start + 1 − approved suspension.',
+  },
   {
     key: 'percent_actual',
-    label: 'Work accomplished — Actual',
-    type: 'number',
+    label: '11. Percentage of work accomplished - Actual',
+    type: 'text',
     computed: true,
-    hint: 'From SWA on the same report date (total accomplishment %).',
+    percent: true,
+    hint: 'From the SWA for this as-of date (total weight % accomplished).',
   },
   {
     key: 'percent_planned',
-    label: 'Work accomplished — Planned',
-    type: 'number',
+    label: '12. Percentage of work accomplished - Planned',
+    type: 'text',
     computed: true,
-    hint: 'From SWA on the same report date (target plan %).',
+    percent: true,
+    hint: 'Sine formula on elapsed days and the original contract duration.',
   },
-  { key: 'remarks', label: 'Remarks', type: 'textarea' },
+  {
+    key: 'slippage',
+    label: '13. Slippage',
+    type: 'text',
+    computed: true,
+    percent: true,
+    hint: 'Actual minus planned.',
+  },
+  { key: 'remarks', label: '14. Remarks', type: 'textarea', span2: true },
   { key: 'submitted_by_name', label: 'Submitted by (name)', type: 'text' },
   { key: 'submitted_by_title', label: 'Submitted by (title)', type: 'text' },
   { key: 'noted_by_name', label: 'Noted by (name)', type: 'text' },
@@ -160,6 +232,8 @@ export function SwaStewaEditorPage() {
     typeParam === 'SWA' || typeParam === 'STEWA' || typeParam === 'IAR' ? typeParam : null;
   const [reportType, setReportType] = useState<SwaStewaReportKind>(routeType ?? 'IAR');
   const [reportId, setReportId] = useState<string | undefined>(idParam || undefined);
+  const savedReportIdRef = useRef<string | undefined>(idParam || undefined);
+  const loadedProjectIdRef = useRef<string>(idParam ? 'pending' : '');
   const {
     state: editor,
     set: setEditor,
@@ -184,9 +258,18 @@ export function SwaStewaEditorPage() {
     fieldInstructionsText,
   } = editor;
   const [status, setStatus] = useState('draft');
+  const [emailNotice, setEmailNotice] = useState<{
+    email_status?: SwaStewaReport['email_status'];
+    email_sent_at?: string | null;
+    email_error?: string | null;
+    email_claimed_at?: string | null;
+    email_recipients?: string[];
+  }>({});
   const [reportNumber, setReportNumber] = useState('');
   const [previewHtml, setPreviewHtml] = useState('');
   const [showPreview, setShowPreview] = useState(false);
+  const [iarSourceRefresh, setIarSourceRefresh] = useState(0);
+  const iarProgressRequest = useRef(0);
   const [downloadingPreview, setDownloadingPreview] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -200,6 +283,7 @@ export function SwaStewaEditorPage() {
   const [revisionCount, setRevisionCount] = useState(0);
   const [editableUserIds, setEditableUserIds] = useState<string[]>([]);
   const [projectBoqItems, setProjectBoqItems] = useState<ProjectBoqItem[]>([]);
+  const [projectBoqError, setProjectBoqError] = useState('');
   const autoSaveReady = useRef(false);
   const saveSeq = useRef(0);
   const savingRef = useRef(false);
@@ -243,12 +327,25 @@ export function SwaStewaEditorPage() {
       .then((res) => {
         if (cancelled) return;
         const projects = res.projects;
-        if (!projects.length) return;
-        const current = String(projectId);
-        const currentOk = projects.some((p) => String(p.id) === current);
+        const current = String(projectId || '').trim();
+        const currentOk = Boolean(current) && projects.some((p) => String(p.id) === current);
         if (currentOk) return;
+
+        if (!projects.length) {
+          // Stale localStorage ids (deleted demo/sample projects) must not stay bound —
+          // reading `projects/{missingId}/boqItems` always permission-denies under rules.
+          if (current) {
+            setEditor((s) => (s.projectId === current ? { ...s, projectId: '' } : s));
+            setSelectedProjectId('');
+          }
+          setProjectBoqItems([]);
+          setProjectBoqError('Select a project first. Add or restore a project under Projects.');
+          return;
+        }
+
         const preferred =
-          projects.find((p) => String(p.id) === selectedProjectId) ?? projects[0];
+          projects.find((p) => String(p.id) === String(selectedProjectId || '').trim())
+          ?? projects[0];
         const nextId = String(preferred.id);
         setEditor((s) => ({ ...s, projectId: nextId }));
         setSelectedProjectId(nextId);
@@ -257,14 +354,25 @@ export function SwaStewaEditorPage() {
     return () => {
       cancelled = true;
     };
-    // New reports only: bind to the current project (or the first in the list).
+    // New reports only: bind to an accessible project (never a deleted/missing id).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idParam]);
 
   useEffect(() => {
-    if (idParam) return;
+    const id = String(projectId || '').trim();
+    if (!id || id === '1') return;
+    // Saved SWA/STEWA keep the header already stored on the report.
+    if (idParam && reportType !== 'IAR') return;
+    // Opening a saved IAR keeps its header until the engineer picks another project.
+    if (reportType === 'IAR') {
+      if (loadedProjectIdRef.current === 'pending') return;
+      if (loadedProjectIdRef.current && loadedProjectIdRef.current === id) {
+        loadedProjectIdRef.current = '';
+        return;
+      }
+    }
     let cancelled = false;
-    getProject(projectId)
+    getProject(id)
       .then((res) => {
         if (cancelled) return;
         const d = res.report_defaults;
@@ -273,7 +381,9 @@ export function SwaStewaEditorPage() {
           data: {
             ...s.data,
             project_name: d.project_name || s.data.project_name,
+            project_title: d.project_name || s.data.project_title,
             location: d.location ?? s.data.location,
+            municipality: d.location ?? s.data.municipality,
             contractor: d.contractor || s.data.contractor,
             contract_amount: d.contract_amount || s.data.contract_amount,
             notice_to_proceed: d.start_date || s.data.notice_to_proceed,
@@ -292,38 +402,99 @@ export function SwaStewaEditorPage() {
 
   useEffect(() => {
     // SWA + IAR line items share the project BOQ as the Item No. source of truth
-    // (same snapshots used by PDM / S-Curve / Bar Chart via mergeBoqIntoActivities).
-    if ((reportType !== 'SWA' && reportType !== 'IAR') || !projectId) {
+    // (same `projects/{id}/boqItems` used by PDM / S-Curve / Bar Chart).
+    const id = String(projectId || '').trim();
+    if ((reportType !== 'SWA' && reportType !== 'IAR') || !id || id === '1') {
       setProjectBoqItems([]);
+      if ((reportType === 'SWA' || reportType === 'IAR') && !id) {
+        setProjectBoqError('Select a project first to load Item Nos. from its BOQ.');
+      } else {
+        setProjectBoqError('');
+      }
       return;
     }
     let cancelled = false;
-    listProjectBoq(projectId)
+    setProjectBoqError('');
+    listProjectItemOptions(id)
       .then((items) => {
-        if (!cancelled) setProjectBoqItems(items);
+        if (cancelled) return;
+        setProjectBoqItems(items);
+        if (items.length === 0) {
+          setProjectBoqError(
+            'No Item Nos. yet. They come from this project’s BOQ and from the item numbers on its schedule.',
+          );
+        }
       })
-      .catch(() => {
-        if (!cancelled) setProjectBoqItems([]);
+      .catch((err) => {
+        if (cancelled) return;
+        setProjectBoqItems([]);
+        const raw = err instanceof Error ? err.message : 'Could not load project BOQ items.';
+        setProjectBoqError(
+          /permission|insufficient|not.?found|missing/i.test(raw)
+            ? 'This project is missing or you do not have access to its BOQ. Pick an accessible project (Projects list), then open SWA/IAR again.'
+            : raw,
+        );
       });
     return () => {
       cancelled = true;
     };
   }, [projectId, reportType]);
 
+  const refreshProjectBoq = useCallback(async () => {
+    const id = String(projectId || '').trim();
+    if ((reportType !== 'SWA' && reportType !== 'IAR') || !id || id === '1') {
+      setProjectBoqItems([]);
+      return;
+    }
+    try {
+      const items = await listProjectItemOptions(id);
+      setProjectBoqItems(items);
+      setProjectBoqError(
+        items.length === 0
+          ? 'No Item Nos. yet. They come from this project’s BOQ and from the item numbers on its schedule.'
+          : '',
+      );
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : 'Could not load project BOQ items.';
+      setProjectBoqError(
+        /permission|insufficient|not.?found|missing/i.test(raw)
+          ? 'This project is missing or you do not have access to its BOQ. Pick an accessible project (Projects list), then open SWA/IAR again.'
+          : raw,
+      );
+    }
+  }, [projectId, reportType]);
+
   useEffect(() => {
     if (reportType !== 'STEWA') return;
-    if (!data.report_date && !data.period_covered && !data.notice_to_proceed) return;
     setEditor((s) => {
       const nextData = applyStewaDerivedFields(s.data);
-      if (
-        nextData.contract_duration === s.data.contract_duration &&
-        nextData.calendar_days_elapsed === s.data.calendar_days_elapsed
-      ) {
-        return s;
-      }
-      return { ...s, data: nextData };
+      const changed = (
+        [
+          'period_start',
+          'period_end',
+          'period_covered',
+          'week_covered',
+          'expiry_date',
+          'total_time_extension',
+          'revised_contract_duration',
+          'revised_expiry_date',
+          'calendar_days_elapsed',
+          'percent_planned',
+          'slippage',
+        ] as const
+      ).some((key) => nextData[key] !== s.data[key]);
+      return changed ? { ...s, data: nextData } : s;
     });
-  }, [reportType, data.report_date, data.period_covered, data.notice_to_proceed, setEditor]);
+  }, [
+    reportType,
+    data.report_date,
+    data.contract_duration,
+    data.notice_to_proceed,
+    data.approved_time_extension,
+    data.approved_time_suspension,
+    data.percent_actual,
+    setEditor,
+  ]);
 
   useEffect(() => {
     if (reportType !== 'STEWA' || !data.report_date) return;
@@ -331,18 +502,15 @@ export function SwaStewaEditorPage() {
     getStewaFromSwa(projectId, data.report_date)
       .then((res) => {
         if (cancelled) return;
-        if (res.percent_actual == null && res.percent_planned == null) return;
-        setEditor((s) => ({
-          ...s,
-          data: {
+        if (res.percent_actual == null) return;
+        setEditor((s) => {
+          const nextData = applyStewaDerivedFields({
             ...s.data,
-            percent_actual:
-              res.percent_actual != null ? String(res.percent_actual) : s.data.percent_actual,
-            percent_planned:
-              res.percent_planned != null ? String(res.percent_planned) : s.data.percent_planned,
+            percent_actual: String(res.percent_actual),
             swa_source_report: res.swa_report_number ?? s.data.swa_source_report ?? '',
-          },
-        }));
+          });
+          return { ...s, data: nextData };
+        });
       })
       .catch(() => undefined);
     return () => {
@@ -352,17 +520,15 @@ export function SwaStewaEditorPage() {
 
   useEffect(() => {
     if (reportType !== 'IAR' || !projectId) return;
-    let cancelled = false;
+    const requestId = ++iarProgressRequest.current;
     getIarProgress(projectId, data.report_date)
       .then((progress) => {
-        if (cancelled) return;
+        if (requestId !== iarProgressRequest.current) return;
         setEditor((s) => {
           const nextData = { ...s.data };
           const values: Record<string, number | null> = {
             orig_target: progress.orig_target,
             rev_target: progress.rev_target,
-            actual_progress: progress.actual_progress,
-            variance: progress.variance,
           };
           let changed = false;
           for (const [key, value] of Object.entries(values)) {
@@ -373,8 +539,29 @@ export function SwaStewaEditorPage() {
               changed = true;
             }
           }
-          const source = [progress.source_swa, progress.source_stewa].filter(Boolean).join(' · ');
-          if (source && nextData.progress_source !== source) {
+          const actual =
+            progress.actual_progress == null
+              ? ''
+              : String(Math.round(progress.actual_progress * 100) / 100);
+          if (nextData.actual_progress !== actual) {
+            nextData.actual_progress = actual;
+            changed = true;
+          }
+          const actualNum = Number(actual);
+          const plannedRaw = String(nextData.rev_target || nextData.orig_target || '').trim();
+          const plannedNum = Number(plannedRaw);
+          const variance =
+            actual !== '' && plannedRaw !== '' && Number.isFinite(actualNum) && Number.isFinite(plannedNum)
+              ? String(Math.round((actualNum - plannedNum) * 100) / 100)
+              : '';
+          if ((nextData.variance ?? '') !== variance) {
+            nextData.variance = variance;
+            changed = true;
+          }
+          const source = progress.source_swa
+            ? `SWA ${progress.source_swa}`
+            : '';
+          if (nextData.progress_source !== source) {
             nextData.progress_source = source;
             changed = true;
           }
@@ -382,10 +569,7 @@ export function SwaStewaEditorPage() {
         });
       })
       .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [data.report_date, projectId, reportType, setEditor]);
+  }, [data.report_date, iarSourceRefresh, projectId, reportType, setEditor]);
 
   useEffect(() => {
     if (!idParam) {
@@ -414,6 +598,13 @@ export function SwaStewaEditorPage() {
         setReportType(r.report_type);
         setReportId(r.id);
         setStatus(r.status);
+        setEmailNotice({
+          email_status: r.email_status,
+          email_sent_at: r.email_sent_at,
+          email_error: r.email_error,
+          email_claimed_at: r.email_claimed_at,
+          email_recipients: r.email_recipients,
+        });
         setReportNumber(r.report_number);
         setContractorChanges(r.contractor_changes ?? []);
         setEditableUserIds(r.edit_user_ids ?? []);
@@ -453,60 +644,89 @@ export function SwaStewaEditorPage() {
           activities_text: baselineActivitiesText,
           field_instructions_text: baselineFieldInstructionsText,
         };
+        loadedProjectIdRef.current = String(r.project_id);
+        if (r.report_type === 'IAR') setIarSourceRefresh((n) => n + 1);
         replaceEditor({
           projectId: String(r.project_id),
           data: { ...base.data, ...scalar },
           lineItems: r.line_items?.length
-            ? r.line_items.map((item, i) => ({
+            ? r.line_items.map((item, i) => {
+                const resolved = resolveItemUnit(
+                  String(item.snapshotItemNo || item.itemNo || ''),
+                  String(item.snapshotDescription || item.description || ''),
+                  String(item.snapshotUnit || item.unit || ''),
+                );
+                return {
                 id: String(item.id ?? `wi-${i}`),
                 payItemId: item.payItemId ? String(item.payItemId) : '',
                 payItemVersion: item.payItemVersion != null ? Number(item.payItemVersion) : undefined,
-                snapshotItemNo: item.snapshotItemNo ? String(item.snapshotItemNo) : '',
-                snapshotDescription: item.snapshotDescription ? String(item.snapshotDescription) : '',
-                snapshotUnit: item.snapshotUnit ? String(item.snapshotUnit) : '',
+                snapshotItemNo: item.snapshotItemNo ? String(item.snapshotItemNo) : String(item.itemNo ?? ''),
+                snapshotDescription: resolved.description,
+                snapshotUnit: resolved.unit,
                 itemNo: String(item.itemNo ?? ''),
-                description: String(item.description ?? ''),
-                unit: String(item.unit ?? ''),
+                description: resolved.description,
+                unit: resolved.unit,
                 unitPrice: Number(item.unitPrice ?? 0),
                 programmedQty: Number(item.programmedQty ?? 0),
                 revisedQty: Number(item.revisedQty ?? 0),
                 previous: Number(item.previous ?? 0),
                 thisPeriod: Number(item.thisPeriod ?? 0),
+                toDateInput:
+                  item.toDateInput != null && Number.isFinite(Number(item.toDateInput))
+                    ? Number(item.toDateInput)
+                    : undefined,
                 remarks: String(item.remarks ?? ''),
-              }))
+              };
+              })
             : base.lineItems,
           iarItems: acc?.length
-            ? acc.map((item, i) => ({
+            ? acc.map((item, i) => {
+                const itemNo = String(item.snapshotItemNo || item.itemNo || item.item_no || '');
+                const resolved = resolveItemUnit(
+                  itemNo,
+                  String(item.snapshotDescription || item.description || ''),
+                  String(item.snapshotUnit || item.unit || ''),
+                );
+                return {
                 id: String(item.id ?? `iar-${i}`),
                 payItemId: item.payItemId ? String(item.payItemId) : '',
                 payItemVersion: item.payItemVersion != null ? Number(item.payItemVersion) : undefined,
-                snapshotItemNo: item.snapshotItemNo ? String(item.snapshotItemNo) : '',
-                snapshotDescription: item.snapshotDescription ? String(item.snapshotDescription) : '',
-                snapshotUnit: item.snapshotUnit ? String(item.snapshotUnit) : '',
+                snapshotItemNo: itemNo,
+                snapshotDescription: resolved.description,
+                snapshotUnit: resolved.unit,
                 itemNo: String(item.itemNo ?? item.item_no ?? ''),
-                description: String(item.description ?? ''),
+                description: resolved.description,
                 location: String(item.location ?? ''),
                 physicalQty: (item.physicalQty ?? item.physical_qty ?? '') as number | '',
                 billableQty: (item.billableQty ?? item.billable_qty ?? '') as number | '',
-                unit: String(item.unit ?? ''),
-              }))
+                unit: resolved.unit,
+              };
+              })
             : base.iarItems,
           variationItems: vo?.length
-            ? vo.map((item, i) => ({
+            ? vo.map((item, i) => {
+                const itemNo = String(item.snapshotItemNo || item.itemNo || item.item_no || '');
+                const resolved = resolveItemUnit(
+                  itemNo,
+                  String(item.snapshotDescription || item.description || ''),
+                  String(item.snapshotUnit || item.unit || ''),
+                );
+                return {
                 id: String(item.id ?? `vo-${i}`),
                 payItemId: item.payItemId ? String(item.payItemId) : '',
                 payItemVersion: item.payItemVersion != null ? Number(item.payItemVersion) : undefined,
-                snapshotItemNo: item.snapshotItemNo ? String(item.snapshotItemNo) : '',
-                snapshotDescription: item.snapshotDescription ? String(item.snapshotDescription) : '',
-                snapshotUnit: item.snapshotUnit ? String(item.snapshotUnit) : '',
+                snapshotItemNo: itemNo,
+                snapshotDescription: resolved.description,
+                snapshotUnit: resolved.unit,
                 itemNo: String(item.itemNo ?? item.item_no ?? ''),
-                description: String(item.description ?? ''),
+                description: resolved.description,
                 quantity: (item.quantity ?? '') as number | '',
-                unit: String(item.unit ?? ''),
+                unit: resolved.unit,
                 additive: String(item.additive ?? ''),
                 deductive: String(item.deductive ?? ''),
                 newItem: String(item.newItem ?? item.new_item ?? ''),
-              }))
+              };
+              })
             : base.variationItems,
           manpower: mp?.length
             ? mp.map((m, i) => ({
@@ -541,6 +761,7 @@ export function SwaStewaEditorPage() {
   const markDirty = () => {
     setDirty(true);
     setSuccess('');
+    autoSaveReady.current = true;
   };
 
   const updateContractorChange = useCallback(
@@ -632,13 +853,19 @@ export function SwaStewaEditorPage() {
   const payItemValidationError = useCallback(() => {
     if (reportType === 'SWA') {
       const invalid = lineItems.some(
-        (item) => (item.itemNo || item.description || item.unit || item.programmedQty > 0) && !item.payItemId,
+        (item) =>
+          (item.description || item.unit || item.programmedQty > 0) &&
+          !item.payItemId &&
+          !String(item.itemNo || '').trim(),
       );
       return invalid ? 'Select a standardized Pay Item for every SWA work item before saving.' : '';
     }
     if (reportType === 'IAR') {
       const invalid = iarItems.some(
-        (item) => (item.itemNo || item.description || item.physicalQty !== '' || item.billableQty !== '') && !item.payItemId,
+        (item) =>
+          (item.description || item.physicalQty !== '' || item.billableQty !== '') &&
+          !item.payItemId &&
+          !String(item.itemNo || '').trim(),
       );
       return invalid ? 'Select a standardized Pay Item for every IAR accomplishment row before saving.' : '';
     }
@@ -646,12 +873,16 @@ export function SwaStewaEditorPage() {
   }, [iarItems, lineItems, reportType]);
 
   const payload = useCallback(() => {
+    const source = reportType === 'STEWA' ? applyStewaDerivedFields(data) : data;
     const report_data: Record<string, unknown> = {
-      ...data,
-      slippage: computeStewaSlippage(
-        parseFloat(data.percent_actual || '0'),
-        parseFloat(data.percent_planned || '0'),
-      ),
+      ...source,
+      slippage:
+        reportType === 'STEWA'
+          ? source.slippage
+          : computeStewaSlippage(
+              parseFloat(data.percent_actual || '0'),
+              parseFloat(data.percent_planned || '0'),
+            ),
     };
     if (reportType === 'IAR') {
       report_data.accomplishment_items = iarItems.map((item) => ({
@@ -690,11 +921,20 @@ export function SwaStewaEditorPage() {
         .filter(Boolean);
     }
     return {
-      id: reportId,
+      id: reportId || savedReportIdRef.current,
       report_type: reportType,
       project_id: projectId,
       report_data,
-      line_items: reportType === 'SWA' ? lineItems : [],
+      line_items:
+        reportType === 'SWA'
+          ? computeWorkItems(lineItems).items.map((item) => ({
+              ...item,
+              // Persist Excel-derived accomplishment amounts with the row.
+              thisPeriod: item.thisPeriod,
+              previous: item.previous,
+              remarks: item.remarks?.trim() || item.status,
+            }))
+          : [],
       contractor_changes:
         contractorDraftCommentMode && (reportType === 'IAR' || reportType === 'STEWA')
           ? contractorChanges
@@ -725,11 +965,8 @@ export function SwaStewaEditorPage() {
       if (savingRef.current) return;
 
       const seq = ++saveSeq.current;
-      const validationError = payItemValidationError();
-      if (validationError && !(e && 'silent' in e && e.silent)) {
-        setError(validationError);
-        return;
-      }
+      // Drafts may be incomplete; Pay Item completeness is enforced on Submit only.
+      // (Preview also allows incomplete rows — keep Save Draft aligned with that.)
       savingRef.current = true;
       setSaving(true);
       if (!silent) {
@@ -740,7 +977,8 @@ export function SwaStewaEditorPage() {
       try {
         const res = await saveReport(payload());
         if (seq !== saveSeq.current) return;
-        const wasNew = !reportId;
+        const wasNew = !reportId && !savedReportIdRef.current;
+        savedReportIdRef.current = res.report.id;
         setReportId(res.report.id);
         setReportNumber(res.report.report_number);
         setStatus(res.report.status);
@@ -758,7 +996,16 @@ export function SwaStewaEditorPage() {
         setError('');
       } catch (err) {
         if (seq !== saveSeq.current) return;
-        setError(err instanceof Error ? err.message : 'Save failed');
+        autoSaveReady.current = false;
+        const code =
+          err && typeof err === 'object' && 'code' in err ? String((err as { code?: string }).code) : '';
+        setError(
+          code === 'resource-exhausted'
+            ? 'Firestore quota is exceeded, so this draft could not be written. Save again after the quota resets.'
+            : err instanceof Error
+              ? err.message
+              : 'Save failed',
+        );
       } finally {
         if (seq === saveSeq.current) {
           savingRef.current = false;
@@ -767,37 +1014,40 @@ export function SwaStewaEditorPage() {
         }
       }
     },
-    [idParam, navigate, payload, payItemValidationError, reportId],
+    [idParam, navigate, payload, reportId],
   );
 
-  const handlePreview = async () => {
-    setLoading(true);
+  const handlePreview = () => {
     setError('');
     try {
-      const res = await previewReport(payload());
-      setPreviewHtml(res.preview_html);
+      const body = payload();
+      const reportData = body.report_data;
+      setPreviewHtml(
+        buildOfficialReportHtml({
+          id: reportId || '',
+          report_number: reportNumber || '',
+          project_id: projectId,
+          report_type: reportType,
+          report_data: reportData,
+          line_items: body.line_items ?? [],
+          status: status as SwaStewaStatus,
+          project_name: String(reportData.project_name || reportData.project_title || ''),
+          created_at: '',
+        }),
+      );
       setShowPreview(true);
-      if (!reportId) {
-        setReportId(res.report.id);
-        setReportNumber(res.report.report_number);
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Preview failed');
-    } finally {
-      setLoading(false);
     }
-  };
-
-  const handlePreviewPrint = () => {
-    const frame = document.getElementById('editor-report-preview-frame') as HTMLIFrameElement | null;
-    frame?.contentWindow?.print();
   };
 
   const handlePreviewDownloadPdf = async () => {
     setDownloadingPreview(true);
     setError('');
     try {
-      const frame = document.getElementById('editor-report-preview-frame') as HTMLIFrameElement | null;
+      const frame = document.querySelector(
+        'iframe[title="Preview"]',
+      ) as HTMLIFrameElement | null;
       await downloadReportPreviewPdf({
         fileName: `${reportNumber || reportType || 'report'}-preview.pdf`,
         frame,
@@ -819,15 +1069,19 @@ export function SwaStewaEditorPage() {
         setError(validationError);
         return;
       }
-      let id = reportId;
-      if (!id) {
-        const res = await saveReport(payload());
-        id = res.report.id;
-        setReportId(id);
-        setReportNumber(res.report.report_number);
+      // Write the current SWA onto the existing document first, then move that
+      // same id to Engineer II. A second save must not create another report.
+      const saved = await saveReport(payload());
+      const id = saved.report.id;
+      savedReportIdRef.current = id;
+      setReportId(id);
+      setReportNumber(saved.report.report_number);
+      setStatus(saved.report.status);
+      if (!idParam) {
+        skipNextLoad.current = true;
         navigate(`/swa-stewa/edit?id=${encodeURIComponent(id)}`, { replace: true });
       }
-      await submitReport(id!, user?.id);
+      await submitReport(id, user?.id);
       setStatus('pending_review');
       setSuccess('Submitted successfully. Waiting for Engineer II review.');
       setShowSubmittedModal(true);
@@ -997,9 +1251,19 @@ export function SwaStewaEditorPage() {
     span2 = false,
     computed = false,
     hint?: string,
+    percent = false,
+    blankWhenZero = false,
   ) => {
     const changed = isFieldChanged(key);
     const readOnly = computed;
+    const rawValue = data[key] ?? '';
+    const displayValue = percent
+      ? stewaPercentText(rawValue)
+        ? `${stewaPercentText(rawValue)}%`
+        : ''
+      : blankWhenZero
+        ? stewaDash(rawValue)
+        : rawValue;
     const commentIndex = contractorChanges.findIndex((entry) => entry.field === key) + 1;
     return (
       <FormField key={key} label={label} hint={hint} className={span2 ? 'sm:col-span-2' : ''}>
@@ -1018,7 +1282,7 @@ export function SwaStewaEditorPage() {
             <TextArea
               disabled={!canEditForm}
               rows={3}
-              value={data[key] ?? ''}
+              value={displayValue}
               onChange={(e) => setField(key, e.target.value, label)}
               onFocus={() => changed && setActiveCommentField(key)}
               className={changed ? 'border-amber-400 bg-amber-50 ring-1 ring-amber-300' : undefined}
@@ -1027,8 +1291,8 @@ export function SwaStewaEditorPage() {
             <TextInput
               disabled={!canEditForm}
               readOnly={readOnly}
-              type={type}
-              value={data[key] ?? ''}
+              type={percent || blankWhenZero ? 'text' : type}
+              value={percent || blankWhenZero ? displayValue : rawValue}
               onChange={(e) => setField(key, e.target.value, label)}
               onFocus={() => changed && setActiveCommentField(key)}
               className={
@@ -1063,6 +1327,44 @@ export function SwaStewaEditorPage() {
           </div>
         }
       />
+
+      {(status === 'approved' || status === 'generated') && (
+        <div className="w-full px-8">
+          <EmailNoticeStatus
+            reportStatus={status}
+            emailStatus={emailNotice.email_status}
+            emailSentAt={emailNotice.email_sent_at}
+            emailError={emailNotice.email_error}
+            emailClaimedAt={emailNotice.email_claimed_at}
+            emailRecipients={emailNotice.email_recipients}
+            canRetry={
+              user?.role === 'engineer_2' || user?.role === 'engineer_3' || user?.role === 'engineer_4'
+            }
+            busy={loading}
+            onRetry={() => {
+              if (!reportId) return;
+              setLoading(true);
+              setError('');
+              void retryApprovalEmail(reportId)
+                .then(async () => {
+                  const res = await getReport(reportId);
+                  setEmailNotice({
+                    email_status: res.report.email_status,
+                    email_sent_at: res.report.email_sent_at,
+                    email_error: res.report.email_error,
+                    email_claimed_at: res.report.email_claimed_at,
+                    email_recipients: res.report.email_recipients,
+                  });
+                  setSuccess('Approval email sent.');
+                })
+                .catch((err: unknown) => {
+                  setError(err instanceof Error ? err.message : 'Could not retry the notification.');
+                })
+                .finally(() => setLoading(false));
+            }}
+          />
+        </div>
+      )}
 
       {isViewOnly && (
         <div className="w-full px-8">
@@ -1251,6 +1553,7 @@ export function SwaStewaEditorPage() {
             title="STEWA — Time Elapsed & Work Accomplished"
             step={2}
             accent="warning"
+            description="Same fields as the STEWA sheet. Blue cells in the workbook are the entries below. Planned % uses the sine formula on elapsed days and the original duration. Actual % comes from the SWA for this as-of date."
           >
             <div className="grid gap-5 sm:grid-cols-2">
               {STEWA_FIELDS.map((f) =>
@@ -1258,33 +1561,22 @@ export function SwaStewaEditorPage() {
                   f.key,
                   f.label,
                   f.type === 'textarea' ? 'textarea' : f.type,
-                  f.type === 'textarea',
+                  ('span2' in f && f.span2 === true) || f.type === 'textarea',
                   'computed' in f && f.computed === true,
                   'hint' in f ? f.hint : undefined,
+                  'percent' in f && f.percent === true,
+                  'blankWhenZero' in f && f.blankWhenZero === true,
                 ),
               )}
-              <FormField label="Slippage (Actual − Planned)">
-                <TextInput
-                  readOnly
-                  value={`${computeStewaSlippage(
-                    parseFloat(data.percent_actual || '0'),
-                    parseFloat(data.percent_planned || '0'),
-                  )}%`}
-                  className="bg-surface-muted"
-                />
-                <p className="mt-1 text-[10px] text-text-muted">
-                  Negative when Actual is less than Planned (behind schedule).
-                </p>
-              </FormField>
             </div>
             {data.swa_source_report ? (
               <p className="mt-3 text-xs text-text-muted">
-                Actual and planned % pulled from <strong>{data.swa_source_report}</strong> on the
-                same report date.
+                Actual % is the SWA total weight accomplished from <strong>{data.swa_source_report}</strong>{' '}
+                on this as-of date.
               </p>
             ) : (
               <p className="mt-3 text-xs text-amber-800">
-                No SWA found for this report date — save or create the matching SWA first.
+                No SWA found for this as-of date — save or create the matching SWA first. Planned % still follows the sine formula.
               </p>
             )}
           </FormSection>
@@ -1299,10 +1591,20 @@ export function SwaStewaEditorPage() {
             >
               <div className="grid gap-5 sm:grid-cols-2">
                 {renderField('report_date', 'IAR date (week start)', 'date')}
+                <FormField
+                  label="Project title"
+                  hint="Projects you can access. Municipality and contractor fill in from the project record."
+                >
+                  <ProjectSelect
+                    value={projectId}
+                    disabled={!canEditForm}
+                    onChange={setProjectId}
+                    fallbackLabel={data.project_title || data.project_name || undefined}
+                  />
+                </FormField>
                 {(
                   [
                     ['contract_number', 'Contract No.'],
-                    ['project_title', 'Project title'],
                     ['municipality', 'Municipality'],
                     ['week_covered', 'Week covered'],
                     ['contractor', 'Contractor'],
@@ -1312,11 +1614,17 @@ export function SwaStewaEditorPage() {
               </div>
             </FormSection>
             <FormSection title="Accomplishment" step={2} description="Quantity of work completed this week.">
+              {projectBoqError ? (
+                <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  {projectBoqError}
+                </div>
+              ) : null}
               <IarAccomplishmentTable
                 items={iarItems}
                 onChange={setIarItems}
                 readOnly={!canEditForm || contractorDraftCommentMode}
                 projectBoqItems={projectBoqItems}
+                onRefreshProjectBoq={refreshProjectBoq}
               />
             </FormSection>
             <FormSection title="For variation order" step={3} description="Contract changes — additive, deductive, or new items.">
@@ -1325,6 +1633,7 @@ export function SwaStewaEditorPage() {
                 onChange={setVariationItems}
                 readOnly={!canEditForm || contractorDraftCommentMode}
                 projectBoqItems={projectBoqItems}
+                onRefreshProjectBoq={refreshProjectBoq}
               />
             </FormSection>
             <FormSection title="Site activities & remarks" step={4}>
@@ -1385,10 +1694,16 @@ export function SwaStewaEditorPage() {
                   renderField(
                     key,
                     label,
-                    'number',
+                    key === 'progress_remarks' ? 'text' : 'number',
                     false,
-                    true,
-                    key === 'variance' ? 'Automatically calculated as Actual − Revised target.' : 'Automatically sourced from the matching SWA/STEWA report.',
+                    key !== 'progress_remarks',
+                    key === 'actual_progress'
+                      ? 'From this project’s SWA physical accomplishment %. It updates when that SWA is saved.'
+                      : key === 'variance'
+                        ? 'Automatically calculated as Actual − Revised target.'
+                        : key === 'progress_remarks'
+                          ? 'Optional note. The percentage itself comes from the SWA.'
+                          : 'Automatically sourced from the matching STEWA report.',
                   ),
                 )}
               </div>
@@ -1419,6 +1734,11 @@ export function SwaStewaEditorPage() {
 
         {reportType === 'SWA' && (
           <FormSection title="SWA — Work accomplishment" step={2}>
+            {projectBoqError ? (
+              <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                {projectBoqError}
+              </div>
+            ) : null}
             <WorkItemsTable
               items={lineItems}
               lessReason={data.less_reason ?? ''}
@@ -1435,6 +1755,7 @@ export function SwaStewaEditorPage() {
               onLessAmountChange={(value) => setField('less_amount', String(value))}
               onChange={setLineItems}
               boqItems={projectBoqItems}
+              onRefreshProjectBoq={refreshProjectBoq}
               readOnly={!canEditForm}
             />
           </FormSection>
@@ -1482,11 +1803,12 @@ export function SwaStewaEditorPage() {
                     {reportType === 'IAR' ? 'Confirm SWA and IAR' : 'Confirm SWA/STEWA'}
                   </Button>
                 )}
-              {user?.role === 'engineer_1' &&
-                ((reportType === 'IAR' && status === 'contractor_confirmed') ||
-                  (reportType !== 'IAR' &&
-                    ['draft', 'rejected', 'contractor_confirmed'].includes(status))) && (
-                  <Button type="button" variant="primary" disabled={loading} onClick={handleSubmit}>
+              {((user?.role === 'engineer_1' &&
+                ['draft', 'rejected', 'contractor_confirmed'].includes(status)) ||
+                (user?.role === 'contractor' &&
+                  reportType === 'SWA' &&
+                  (status === 'draft' || status === 'rejected'))) && (
+                  <Button type="button" variant="primary" disabled={loading || saving} onClick={handleSubmit}>
                     Submit for review
                   </Button>
                 )}
@@ -1558,35 +1880,16 @@ export function SwaStewaEditorPage() {
       )}
 
       {showPreview && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
-          <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-surface-muted/50 px-5 py-4">
-              <h3 className="font-semibold text-text">Report preview</h3>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  disabled={downloadingPreview}
-                  onClick={() => void handlePreviewDownloadPdf()}
-                >
-                  {downloadingPreview ? 'Preparing PDF…' : 'Download PDF'}
-                </Button>
-                <Button type="button" variant="ghost" onClick={handlePreviewPrint}>
-                  Print
-                </Button>
-                <Button type="button" variant="ghost" onClick={() => setShowPreview(false)}>
-                  Close
-                </Button>
-              </div>
-            </div>
-            <iframe
-              id="editor-report-preview-frame"
-              title="Preview"
-              srcDoc={previewHtml}
-              className="min-h-[60vh] flex-1 w-full border-0 bg-white"
-            />
-          </div>
-        </div>
+        <PreviewModal
+          title="Report preview"
+          open={showPreview}
+          onClose={() => setShowPreview(false)}
+          iframeSrcDoc={previewHtml}
+          iframeTitle="Preview"
+          downloading={downloadingPreview}
+          onDownload={() => void handlePreviewDownloadPdf()}
+          wide
+        />
       )}
     </main>
   );

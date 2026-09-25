@@ -39,7 +39,7 @@ function addStatusBlock(doc: jsPDF, status: ScheduleStatus | null, y: number): n
   return y + 16;
 }
 
-export function exportSCurvePdf(input: {
+export type SCurvePdfInput = {
   projectLabel?: string;
   points: SCurvePoint[];
   comparisons: SCurveComparison[];
@@ -48,7 +48,20 @@ export function exportSCurvePdf(input: {
   targetPlanPercent?: number | null;
   targetPlanPhp?: number | null;
   actualPlanPercent?: number | null;
-}) {
+};
+
+export type BarChartPdfInput = {
+  projectLabel?: string;
+  tasks: BarChartTask[];
+  totalDays: number;
+  timeNow: number;
+  status: ScheduleStatus | null;
+  targetPlanPercent?: number | null;
+  actualPlanPercent?: number | null;
+};
+
+/** Build the S-Curve PDF from the same synchronized page data used on screen. */
+export function buildSCurvePdf(input: SCurvePdfInput): jsPDF {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   addHeader(doc, `S-Curve Progress — ${input.projectLabel ?? 'Project'}`);
   let y = addStatusBlock(doc, input.status, 40);
@@ -78,7 +91,7 @@ export function exportSCurvePdf(input: {
     doc.setFontSize(8);
     const baselineHeaders = ['Period', 'Date range', 'Target %', 'Target PHP', 'Cumulative %', 'Cumulative PHP'];
     const baselineCols = [14, 36, 98, 126, 162, 190];
-    baselineHeaders.forEach((header, index) => doc.text(header, baselineCols[index], y));
+    baselineHeaders.forEach((header, index) => doc.text(header, baselineCols[index]!, y));
     y += 5;
     doc.setFont('helvetica', 'normal');
 
@@ -95,7 +108,7 @@ export function exportSCurvePdf(input: {
         `${period.cumulativePct.toFixed(2)}%`,
         `P ${formatMoney(period.cumulativePhp)}`,
       ];
-      row.forEach((cell, index) => doc.text(String(cell).slice(0, 30), baselineCols[index], y));
+      row.forEach((cell, index) => doc.text(String(cell).slice(0, 30), baselineCols[index]!, y));
       y += 5;
     }
     y += 4;
@@ -110,7 +123,7 @@ export function exportSCurvePdf(input: {
   doc.setFontSize(8);
   const headers = ['Date', 'Label', 'Target Plan %', 'Target PHP', 'Actual Plan %', 'Variance', 'Status'];
   const cols = [14, 38, 92, 120, 150, 176, 204];
-  headers.forEach((h, i) => doc.text(h, cols[i], y));
+  headers.forEach((h, i) => doc.text(h, cols[i]!, y));
   y += 5;
   doc.setFont('helvetica', 'normal');
 
@@ -144,22 +157,15 @@ export function exportSCurvePdf(input: {
       doc.addPage();
       y = 20;
     }
-    row.forEach((cell, i) => doc.text(String(cell).slice(0, 28), cols[i], y));
+    row.forEach((cell, i) => doc.text(String(cell).slice(0, 28), cols[i]!, y));
     y += 5;
   }
 
-  doc.save(`s-curve-${Date.now()}.pdf`);
+  return doc;
 }
 
-export function exportBarChartPdf(input: {
-  projectLabel?: string;
-  tasks: BarChartTask[];
-  totalDays: number;
-  timeNow: number;
-  status: ScheduleStatus | null;
-  targetPlanPercent?: number | null;
-  actualPlanPercent?: number | null;
-}) {
+/** Build the Bar Chart PDF from the same synchronized page data used on screen. */
+export function buildBarChartPdf(input: BarChartPdfInput): jsPDF {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   addHeader(doc, `Bar Chart Schedule — ${input.projectLabel ?? 'Project'}`);
   let y = addStatusBlock(doc, input.status, 40);
@@ -176,7 +182,7 @@ export function exportBarChartPdf(input: {
   doc.setFontSize(8);
   const cols = [14, 28, 120, 145, 170, 195];
   ['#', 'Task', 'Start', 'End', 'Actual end', 'Critical'].forEach((h, i) =>
-    doc.text(h, cols[i], y),
+    doc.text(h, cols[i]!, y),
   );
   y += 5;
   doc.setFont('helvetica', 'normal');
@@ -194,9 +200,25 @@ export function exportBarChartPdf(input: {
       task.actualEndDay != null ? String(task.actualEndDay) : '—',
       task.isCritical ? 'Yes' : '',
     ];
-    row.forEach((cell, i) => doc.text(cell, cols[i], y));
+    row.forEach((cell, i) => doc.text(cell, cols[i]!, y));
     y += 5;
   }
 
-  doc.save(`bar-chart-${Date.now()}.pdf`);
+  return doc;
+}
+
+export function sCurvePdfObjectUrl(input: SCurvePdfInput): string {
+  return URL.createObjectURL(buildSCurvePdf(input).output('blob'));
+}
+
+export function barChartPdfObjectUrl(input: BarChartPdfInput): string {
+  return URL.createObjectURL(buildBarChartPdf(input).output('blob'));
+}
+
+export function exportSCurvePdf(input: SCurvePdfInput) {
+  buildSCurvePdf(input).save(`s-curve-${Date.now()}.pdf`);
+}
+
+export function exportBarChartPdf(input: BarChartPdfInput) {
+  buildBarChartPdf(input).save(`bar-chart-${Date.now()}.pdf`);
 }

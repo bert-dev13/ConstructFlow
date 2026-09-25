@@ -6,10 +6,12 @@ import { useAuth } from '../context/AuthContext';
 import { useSelectedProject } from '../context/SelectedProjectContext';
 import { ProjectSelect } from '../components/ProjectSelect';
 import { UndoRedoToolbar } from '../components/ui/UndoRedoToolbar';
+import { PreviewModal } from '../components/ui/PreviewModal';
 import { useUndoRedo, useUndoRedoKeyboard } from '../hooks/useUndoRedo';
 import { fetchTemplates, generateReport } from '../lib/api';
 import type { ReportType } from '../types';
 import { CURRENT_PERIOD } from '../data/mockData';
+import { downloadPdfFromUrl } from '../lib/downloadReportPdf';
 
 interface TemplateField {
   key: string;
@@ -60,6 +62,8 @@ export function ReportCreatePage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [previewUrl, setPreviewUrl] = useState('');
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [downloadingPreview, setDownloadingPreview] = useState(false);
 
   useEffect(() => {
     if (!reportType) return;
@@ -105,6 +109,7 @@ export function ReportCreatePage() {
         submit,
       });
       setPreviewUrl(result.preview_url);
+      if (result.preview_url) setPreviewOpen(true);
       if (submit) navigate('/workflow');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed');
@@ -207,11 +212,36 @@ export function ReportCreatePage() {
       {previewUrl && (
         <div className="mt-6 rounded-xl border border-primary/30 bg-primary-light/40 p-4">
           <p className="text-sm font-medium text-primary">Report generated</p>
-          <a href={previewUrl} target="_blank" rel="noreferrer" className="mt-1 text-sm underline">
-            Open preview
-          </a>
+          <button
+            type="button"
+            onClick={() => setPreviewOpen(true)}
+            className="mt-2 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-semibold text-text hover:bg-surface-muted"
+          >
+            Preview
+          </button>
         </div>
       )}
+
+      <PreviewModal
+        title="Generated report preview"
+        open={previewOpen && !!previewUrl}
+        onClose={() => setPreviewOpen(false)}
+        iframeSrc={previewUrl || undefined}
+        iframeTitle="Generated report preview"
+        wide
+        downloading={downloadingPreview}
+        onDownload={() => {
+          void (async () => {
+            if (!previewUrl) return;
+            setDownloadingPreview(true);
+            try {
+              await downloadPdfFromUrl(previewUrl, `${reportType || 'report'}-preview.pdf`);
+            } finally {
+              setDownloadingPreview(false);
+            }
+          })();
+        }}
+      />
 
       <div className="mt-8 rounded-xl border border-border bg-surface-muted/50 p-4 text-sm text-text-muted">
         <strong className="text-text">Using your client template:</strong> place HTML files in{' '}

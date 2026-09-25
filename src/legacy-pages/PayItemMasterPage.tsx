@@ -169,7 +169,7 @@ export function PayItemMasterPage() {
         <PageHeader
           badge="Engineer I · Master data"
           title="Pay Item Master"
-          description="Centralized Item No., Description, and Unit values reused by project BOQs, PDM, S-Curve, and reports."
+          description="Item No., Description, and Unit from the DPWH Revised Standard Pay Item List (DO 143 s. 2017), reused by project BOQs, PDM, S-Curve, and reports."
           actions={
             <button
               type="button"

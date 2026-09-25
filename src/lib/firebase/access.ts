@@ -39,9 +39,9 @@ function normalizeUserIdArray(value: unknown): string[] {
 }
 
 export function roleHasGlobalProjectAccess(role: Role | null | undefined) {
-  // REVISIONS: only Engineer III and IV see every project.
-  // Engineer I / II and contractors are limited to assigned / involved projects.
-  return role === 'engineer_3' || role === 'engineer_4';
+  // Engineer II–IV see every project (review / oversight).
+  // Engineer I and contractors stay limited to assigned / involved projects.
+  return role === 'engineer_2' || role === 'engineer_3' || role === 'engineer_4';
 }
 
 export function buildProjectAccess(input: {

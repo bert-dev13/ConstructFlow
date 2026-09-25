@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useParams } from '../lib/nextRouter';
+import { Link, useParams, useSearchParams } from '../lib/nextRouter';
 import { PayItemSelect } from '../components/PayItemSelect';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Pagination } from '../components/ui/Pagination';
@@ -14,8 +14,7 @@ import {
   type ProjectBoqItem,
 } from '../lib/projectBoqApi';
 import type { PayItem } from '../lib/payItemsApi';
-import { listPayItems } from '../lib/payItemsApi';
-
+import { useSelectedProject } from '../context/SelectedProjectContext';
 function formatMoney(value: number) {
   return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
@@ -40,8 +39,21 @@ function emptyRow(projectId: string): ProjectBoqItem {
 }
 
 export function ProjectBoqPage() {
-  const { projectId } = useParams<{ projectId?: string }>();
-  const id = projectId ?? '';
+  const { projectId: routeProjectId } = useParams<{ projectId?: string }>();
+  const [searchParams] = useSearchParams();
+  const { projectId: selectedProjectId, setProjectId } = useSelectedProject();
+  const id = String(
+    searchParams.get('projectId')
+      || searchParams.get('id')
+      || routeProjectId
+      || selectedProjectId
+      || '',
+  ).trim();
+
+  useEffect(() => {
+    if (id) setProjectId(id);
+  }, [id, setProjectId]);
+
   const [rows, setRows] = useState<ProjectBoqItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -52,27 +64,7 @@ export function ProjectBoqPage() {
     setLoading(true);
     try {
       const boq = await listProjectBoq(id);
-      // Legacy rows may only store payItemId — fill display from master when snapshots are missing.
-      const needsHydration = boq.some((row) => row.payItemId && !row.itemNo);
-      if (needsHydration) {
-        const masters = new Map((await listPayItems(true)).map((item) => [item.id, item]));
-        setRows(
-          boq.map((row) => {
-            if (row.itemNo || !row.payItemId) return row;
-            const master = masters.get(row.payItemId);
-            if (!master) return row;
-            return {
-              ...row,
-              itemNo: master.itemNo,
-              description: master.description,
-              unit: master.unit,
-              payItemVersion: master.version,
-            };
-          }),
-        );
-      } else {
-        setRows(boq);
-      }
+      setRows(boq);
       setError('');
     } catch (err) {
       const raw = err instanceof Error ? err.message : 'Could not load project BOQ.';
@@ -168,15 +160,29 @@ export function ProjectBoqPage() {
           title="Project BOQ"
           description="Select Pay Items from the centralized Pay Item Master. Quantity, Unit Cost, Amount, and WT% stay project-specific."
           actions={
-            <button
-              type="button"
-              onClick={addRow}
-              className="shrink-0 rounded-lg bg-primary px-2.5 py-1.5 text-[11px] font-semibold text-white"
-            >
-              + Add BOQ item
-            </button>
+            <>
+              <Link
+                to="/projects/"
+                className="shrink-0 rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-semibold text-text-muted hover:bg-surface-muted"
+              >
+                Back to projects
+              </Link>
+              <button
+                type="button"
+                onClick={addRow}
+                disabled={!id}
+                className="shrink-0 rounded-lg bg-primary px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"
+              >
+                + Add BOQ item
+              </button>
+            </>
           }
         />
+        {!id ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            No project selected. Open Pay Items from the Projects page.
+          </div>
+        ) : null}
         {error && (
           <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             {error}

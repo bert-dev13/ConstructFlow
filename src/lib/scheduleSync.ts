@@ -45,7 +45,8 @@ export function deriveBarChartFromPdm(
     name: a.name,
     startDay: (a.es ?? 0) + 1,
     endDay: Math.max(a.es ?? 0, a.ef ?? a.duration),
-    actualEndDay: actualByName.get(a.name),
+    // Firestore rejects undefined; keep null when there is no tracked actual.
+    actualEndDay: actualByName.get(a.name) ?? null,
     isCritical: !!a.isCritical,
   }));
 

@@ -40,4 +40,5 @@ storage/reports/*
 .firebase-tmp/
 .firebase-cli/
 .firebase-tmp/
+.env*
 !.env.example

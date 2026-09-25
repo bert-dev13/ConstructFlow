@@ -26,9 +26,9 @@ service cloud.firestore {
     }
 
     function hasGlobalProjectAccess() {
-      // REVISIONS: Engineer III and IV may access all projects.
-      // Engineer I / II and contractors are limited to assigned / involved projects.
-      return role() in ['engineer_3', 'engineer_4'];
+      // Engineer II–IV may read all projects for review / oversight.
+      // Engineer I and contractors remain limited to assigned / involved projects.
+      return role() in ['engineer_2', 'engineer_3', 'engineer_4'];
     }
 
     function listHasUid(listValue) {
@@ -144,29 +144,32 @@ service cloud.firestore {
     }
 
     function canSubmitForReview() {
-      return role() == 'engineer_1'
-        && request.resource.data.projectId == resource.data.projectId
+      return request.resource.data.projectId == resource.data.projectId
         && request.resource.data.status == 'pending_review'
         && hasProjectAccess(resource.data.projectId)
         && (
-          (resource.data.reportType == 'IAR' && resource.data.status == 'contractor_confirmed')
-          || (resource.data.reportType != 'IAR' && resource.data.status in ['draft', 'rejected', 'contractor_confirmed'])
+          (
+            role() == 'engineer_1'
+            && resource.data.status in ['draft', 'rejected', 'contractor_confirmed']
+          )
+          || (
+            role() == 'contractor'
+            && resource.data.reportType == 'SWA'
+            && resource.data.status in ['draft', 'rejected']
+            && request.auth.uid == projectData(resource.data.projectId).contractorId
+          )
         );
     }
 
     function canApproveEngineer2() {
       return role() == 'engineer_2'
-        && resource.data.status == 'pending_review'
+        && resource.data.status in ['pending_review', 'contractor_confirmed']
         && request.resource.data.status == 'with_engineer_3'
         && request.resource.data.projectId == resource.data.projectId
         && hasProjectAccess(resource.data.projectId)
         && (
           resource.data.reportType != 'IAR'
-          || (
-            request.resource.data.approvalFlow.contractorConfirmation.confirmsSwa == true
-            && request.resource.data.approvalFlow.contractorConfirmation.confirmsIar == true
-            && request.resource.data.approvalFlow.engineer2.approvedBy == request.auth.uid
-          )
+          || request.resource.data.approvalFlow.engineer2.approvedBy == request.auth.uid
         );
     }
 
@@ -185,6 +188,32 @@ service cloud.firestore {
         );
     }
 
+    function canRecordApprovalEmail() {
+      return role() in ['engineer_2', 'engineer_3', 'engineer_4']
+        && resource.data.status in ['approved', 'generated']
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.projectId == resource.data.projectId
+        && request.resource.data.emailStatus in ['SENT', 'FAILED']
+        && hasProjectAccess(resource.data.projectId)
+        && reportChangedKeys().hasOnly([
+          'emailStatus',
+          'emailSentAt',
+          'emailError',
+          'emailMessageId',
+          'emailClaimedAt',
+          'emailRecipients',
+          'updatedAt'
+        ]);
+    }
+
+    function canMarkReportGenerated() {
+      return role() == 'engineer_4'
+        && resource.data.status == 'approved'
+        && request.resource.data.status == 'generated'
+        && request.resource.data.projectId == resource.data.projectId
+        && hasProjectAccess(resource.data.projectId);
+    }
+
     function canApproveEngineer4() {
       return role() == 'engineer_4'
         && resource.data.status == 'with_engineer_4'
@@ -197,10 +226,27 @@ service cloud.firestore {
             resource.data.approvalFlow.engineer2.approvedBy is string
             && resource.data.approvalFlow.engineer3.approvedBy is string
             && request.resource.data.approvalFlow.engineer4.approvedBy == request.auth.uid
-            && request.resource.data.approvalFlow.contractorConfirmation.confirmsSwa == true
-            && request.resource.data.approvalFlow.contractorConfirmation.confirmsIar == true
           )
         );
+    }
+
+    function clientKeepsEmailClaim() {
+      return request.resource.data.get('emailStatus', null) == resource.data.get('emailStatus', null)
+        && request.resource.data.get('emailSentAt', null) == resource.data.get('emailSentAt', null)
+        && request.resource.data.get('emailError', null) == resource.data.get('emailError', null)
+        && request.resource.data.get('emailMessageId', null) == resource.data.get('emailMessageId', null)
+        && request.resource.data.get('emailClaimedAt', null) == resource.data.get('emailClaimedAt', null)
+        && request.resource.data.get('emailRecipients', null) == resource.data.get('emailRecipients', null);
+    }
+
+    function clientResetsEmailClaim() {
+      return request.resource.data.status == 'rejected'
+        && request.resource.data.get('emailStatus', 'NOT_SENT') == 'NOT_SENT'
+        && request.resource.data.get('emailSentAt', null) == null
+        && request.resource.data.get('emailMessageId', null) == null
+        && request.resource.data.get('emailError', null) == null
+        && request.resource.data.get('emailClaimedAt', null) == null
+        && request.resource.data.get('emailRecipients', []) == [];
     }
 
     function canRejectReport() {
@@ -210,7 +256,7 @@ service cloud.firestore {
         && hasProjectAccess(resource.data.projectId)
         && request.resource.data.rejectionReason is string
         && (
-          (role() == 'engineer_2' && resource.data.status == 'pending_review')
+          (role() == 'engineer_2' && resource.data.status in ['pending_review', 'contractor_confirmed'])
           || (role() == 'engineer_3' && resource.data.status == 'with_engineer_3')
           || (role() == 'engineer_4' && resource.data.status == 'with_engineer_4')
         );
@@ -229,6 +275,11 @@ service cloud.firestore {
           'location',
           'startDate',
           'plannedEndDate',
+          'baselineMode',
+          'contactDetails',
+          'revisedCompletionDate',
+          'suspensionStartDate',
+          'suspensionEndDate',
           'status',
           'contractorId',
           'contractorName',
@@ -239,6 +290,19 @@ service cloud.firestore {
           'updatedAt'
         ])
         && hasProjectAccess(projectId);
+    }
+
+    // Engineer IV may repair reviewer membership without changing lifecycle.
+    function canRepairProjectAccess(projectId) {
+      return role() == 'engineer_4'
+        && projectLifecycleState(resource.data) != 'archived'
+        && projectLifecycleState(request.resource.data) == projectLifecycleState(resource.data)
+        && projectChangedKeys().hasOnly([
+          'assignedUserIds',
+          'involvedUserIds',
+          'accessUserIds',
+          'updatedAt'
+        ]);
     }
 
     function canRequestProjectArchive(projectId) {
@@ -302,10 +366,17 @@ service cloud.firestore {
 
     match /projects/{projectId} {
       allow read: if canReadProjectDoc(resource.data);
+      // Membership list queries must be provable from the query constraints.
+      // `listHasUid` also requires `is list`, which array-contains cannot prove,
+      // so contractors were denied even when their uid is on the project.
+      allow list: if signedIn() && request.auth.uid == resource.data.contractorId;
+      allow list: if signedIn() && request.auth.uid in resource.data.accessUserIds;
+      allow list: if signedIn() && request.auth.uid in resource.data.assignedUserIds;
       allow create: if isRole('engineer_1')
         && listHasUid(request.resource.data.accessUserIds)
         && projectLifecycleState(request.resource.data) == 'active';
       allow update: if canEditProjectMetadata(projectId)
+        || canRepairProjectAccess(projectId)
         || canRequestProjectArchive(projectId)
         || canApproveProjectArchive(projectId)
         || canDirectArchiveProject(projectId)
@@ -342,6 +413,16 @@ service cloud.firestore {
       allow read: if activeProjectReadable(projectData(projectId));
       allow write: if (isRole('contractor') || isRole('engineer_1'))
         && activeProjectReadable(projectData(projectId));
+
+      match /versions/{versionId} {
+        allow read: if activeProjectReadable(projectData(projectId));
+        allow create: if (isRole('contractor') || isRole('engineer_1'))
+          && activeProjectReadable(projectData(projectId));
+        allow update: if (isRole('contractor') || isRole('engineer_1'))
+          && activeProjectReadable(projectData(projectId))
+          && resource.data.frozen != true;
+        allow delete: if false;
+      }
     }
 
     match /sCurves/{projectId} {
@@ -370,17 +451,30 @@ service cloud.firestore {
       allow update: if isStaff()
         && request.resource.data.projectId == resource.data.projectId
         && (
-          canMarkReportViewed()
-          || canSaveEditableReport()
-          || canSendToContractor()
-          || canContractorConfirm()
-          || canSubmitForReview()
-          || canApproveEngineer2()
-          || canApproveEngineer3()
-          || canApproveEngineer4()
-          || canRejectReport()
+          canRecordApprovalEmail()
+          || (
+            (clientKeepsEmailClaim() || clientResetsEmailClaim())
+            && (
+              canMarkReportViewed()
+              || canSaveEditableReport()
+              || canSendToContractor()
+              || canContractorConfirm()
+              || canSubmitForReview()
+              || canApproveEngineer2()
+              || canApproveEngineer3()
+              || canApproveEngineer4()
+              || canMarkReportGenerated()
+              || canRejectReport()
+            )
+          )
         );
-      allow delete: if isRole('engineer_4');
+      allow delete: if isRole('engineer_4')
+        || (
+          isRole('engineer_1')
+          && resource.data.status == 'draft'
+          && resource.data.createdBy == request.auth.uid
+          && hasProjectAccess(resource.data.projectId)
+        );
 
       match /audit/{entryId} {
         allow read, write: if isStaff() && hasProjectAccess(reportData(reportId).projectId);
@@ -399,6 +493,11 @@ service cloud.firestore {
     match /emailQueue/{id} {
       allow read: if isEngineer();
       allow write: if isStaff();
+    }
+
+    match /emailNotifications/{id} {
+      allow read: if role() in ['engineer_3', 'engineer_4'];
+      allow write: if false;
     }
 
     match /counters/{id} {

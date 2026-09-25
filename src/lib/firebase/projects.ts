@@ -33,6 +33,28 @@ function lifecycleStateOf(data: Record<string, unknown>): LifecycleState {
   return 'active';
 }
 
+/** Calendar day as YYYY-MM-DD. A date-only string is kept as written so it cannot shift a day. */
+export function toCalendarDate(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return match ? `${match[1]}-${match[2]}-${match[3]}` : null;
+  }
+  if (typeof value === 'object' && 'toDate' in value) {
+    const toDate = (value as { toDate?: unknown }).toDate;
+    if (typeof toDate === 'function') {
+      const date = (toDate as () => Date).call(value);
+      if (date instanceof Date && !Number.isNaN(date.getTime())) {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      }
+    }
+  }
+  return null;
+}
+
 function futureIso(days: number) {
   const date = new Date();
   date.setDate(date.getDate() + days);
@@ -79,8 +101,13 @@ function mapProject(id: string, data: Record<string, unknown>): ProjectRow {
     purge_after: (data.purgeAfter as string | null) ?? null,
     deletion_approval:
       (data.deletionApproval as Record<string, unknown> | null | undefined) ?? null,
-    start_date: (data.startDate as string | null) ?? null,
-    planned_end_date: (data.plannedEndDate as string | null) ?? null,
+    start_date: toCalendarDate(data.startDate),
+    planned_end_date: toCalendarDate(data.plannedEndDate),
+    baseline_mode: data.baselineMode === 'prior_suspension' ? 'prior_suspension' : 'active',
+    contact_details: data.contactDetails != null ? String(data.contactDetails) : null,
+    revised_completion_date: toCalendarDate(data.revisedCompletionDate),
+    suspension_start_date: toCalendarDate(data.suspensionStartDate),
+    suspension_end_date: toCalendarDate(data.suspensionEndDate),
     contractor_id: data.contractorId != null ? asId(data.contractorId as string) : null,
     contractor_name: (data.contractorName as string | null) ?? null,
     contract_amount: data.contractAmount != null ? Number(data.contractAmount) : null,
@@ -170,12 +197,14 @@ export async function listProjectsFs(options?: ProjectListOptions): Promise<Proj
   const view = options?.view ?? 'active';
   const cacheKey = `projects:${access.uid}:${view}`;
   const cached = readListCache<ProjectRow[]>(cacheKey);
-  if (cached) return cached;
+  // An empty cache is not reused. A denied membership query used to cache []
+  // and Prepare Schedule then stayed on "Waiting for a project".
+  if (cached && cached.length > 0) return cached;
 
   // Reuse the unfiltered set when another view was already loaded.
   const allKey = `projects:${access.uid}:all`;
   const allCached = readListCache<ProjectRow[]>(allKey);
-  if (allCached) {
+  if (allCached && allCached.length > 0) {
     const filteredFromAll = allCached.filter((row) => matchesProjectView(row, view));
     filteredFromAll.sort((a, b) =>
       (b.updated_at ?? b.created_at ?? '').localeCompare(a.updated_at ?? a.created_at ?? ''),
@@ -221,30 +250,105 @@ export async function listProjectsFs(options?: ProjectListOptions): Promise<Proj
       rows = await loadByPointers();
     }
   } else {
-    // Merge profile pointers with live membership so Eng I/II see every
-    // project they are assigned/involved in even if user pointers lag.
+    // Merge profile pointers with live membership so assigned users see every
+    // project even when user-doc pointers lag behind the project document.
     const byId = new Map<string, ProjectRow>();
-    for (const row of await loadByPointers()) byId.set(row.id, row);
+    const addDocs = (docs: Array<{ id: string; data: () => Record<string, unknown> }>) => {
+      for (const d of docs) byId.set(d.id, mapProject(d.id, d.data()));
+    };
+
+    // Contractors are stored on contractorId (auth uid). That equality query is
+    // allowed by project read rules. The accessUserIds array-contains query is
+    // denied, and syncing the contractor's user doc from Engineer I is also
+    // denied, so profile pointers stay empty. Run this first.
+    if (access.role === 'contractor') {
+      try {
+        const snap = await getDocs(
+          query(collection(db, COLLECTIONS.projects), where('contractorId', '==', access.uid)),
+        );
+        addDocs(snap.docs);
+      } catch {
+        /* fall through to pointer / accessUserIds membership */
+      }
+    }
+
+    try {
+      for (const row of await loadByPointers()) byId.set(row.id, row);
+    } catch {
+      /* profile pointers are optional */
+    }
     try {
       const snap = await getDocs(
         query(collection(db, COLLECTIONS.projects), where('accessUserIds', 'array-contains', access.uid)),
       );
-      for (const d of snap.docs) {
-        byId.set(d.id, mapProject(d.id, d.data() as Record<string, unknown>));
-      }
+      addDocs(snap.docs);
     } catch {
-      /* rules or index may block; pointer path still used */
+      /* rules may reject this list shape; contractorId query still applies */
+    }
+    if (access.role === 'contractor') {
+      try {
+        const snap = await getDocs(
+          query(collection(db, COLLECTIONS.projects), where('assignedUserIds', 'array-contains', access.uid)),
+        );
+        addDocs(snap.docs);
+      } catch {
+        /* optional; contractorId is the assignment field */
+      }
     }
     rows = [...byId.values()];
+    if (access.role === 'contractor' && rows.length > 0) {
+      void rememberContractorProjectIds(
+        access.uid,
+        rows.map((row) => row.id),
+      );
+    }
   }
 
   // Cache the unfiltered accessible set, then return the requested view.
-  writeListCache(allKey, rows, 20_000);
+  // Never cache an empty list — that hid newly assigned projects for the TTL.
+  if (rows.length > 0) writeListCache(allKey, rows, 20_000);
   const filtered = rows.filter((row) => matchesProjectView(row, view));
   filtered.sort((a, b) =>
     (b.updated_at ?? b.created_at ?? '').localeCompare(a.updated_at ?? a.created_at ?? ''),
   );
+  if (filtered.length === 0) return filtered;
   return writeListCache(cacheKey, filtered, 20_000);
+}
+
+/** Contractor can update their own user doc. Engineer I cannot, so pointers lag. */
+async function rememberContractorProjectIds(uid: string, projectIds: string[]) {
+  const userRef = doc(db, COLLECTIONS.users, uid);
+  const snap = await getDoc(userRef);
+  if (!snap.exists()) return;
+  const data = snap.data() as Record<string, unknown>;
+  const accessible = new Set(
+    Array.isArray(data.accessibleProjectIds) ? data.accessibleProjectIds.map(String) : [],
+  );
+  const assigned = new Set(
+    Array.isArray(data.assignedProjectIds) ? data.assignedProjectIds.map(String) : [],
+  );
+  let changed = false;
+  for (const projectId of projectIds) {
+    if (!accessible.has(projectId)) {
+      accessible.add(projectId);
+      changed = true;
+    }
+    if (!assigned.has(projectId)) {
+      assigned.add(projectId);
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  try {
+    await updateDoc(userRef, {
+      accessibleProjectIds: [...accessible],
+      assignedProjectIds: [...assigned],
+      updatedAt: nowIso(),
+    });
+    invalidateListCache(`projectIds:${uid}`);
+  } catch {
+    /* The signed-in contractor may be offline. The contractorId query still lists projects. */
+  }
 }
 
 async function listUsersByRole(role: 'contractor' | 'engineer_1' | 'engineer_2'): Promise<ContractorOption[]> {
@@ -354,9 +458,19 @@ export async function createProjectFs(input: ProjectInput, actorName?: string) {
   const assignedFromInput = Array.isArray(input.assigned_user_ids)
     ? input.assigned_user_ids.map((id) => asId(id))
     : [];
-  const involvedFromInput = Array.isArray(input.involved_user_ids)
+  let involvedFromInput = Array.isArray(input.involved_user_ids)
     ? input.involved_user_ids.map((id) => asId(id))
     : [];
+  // New projects always need Engineer II reviewers on involvedUserIds so they can
+  // see pending reports, PDM, S-Curve, and Bar Chart for the project.
+  if (!involvedFromInput.length) {
+    try {
+      const eng2 = await listUsersByRole('engineer_2');
+      involvedFromInput = eng2.map((user) => asId(user.id));
+    } catch {
+      /* keep empty; UI should still prompt for reviewers */
+    }
+  }
   const projectAccess = buildProjectAccess({
     contractorId,
     assignedUserIds: uniqueUserIds([...(access ? [access.uid] : []), ...assignedFromInput]),
@@ -366,8 +480,13 @@ export async function createProjectFs(input: ProjectInput, actorName?: string) {
   const payload = omitUndefined({
     name: input.name,
     location: input.location ?? null,
-    startDate: input.start_date ?? null,
-    plannedEndDate: input.planned_end_date ?? null,
+    startDate: toCalendarDate(input.start_date),
+    plannedEndDate: toCalendarDate(input.planned_end_date),
+    baselineMode: input.baseline_mode === 'prior_suspension' ? 'prior_suspension' : 'active',
+    contactDetails: input.contact_details ?? null,
+    revisedCompletionDate: toCalendarDate(input.revised_completion_date),
+    suspensionStartDate: toCalendarDate(input.suspension_start_date),
+    suspensionEndDate: toCalendarDate(input.suspension_end_date),
     status: input.status ?? 'active',
     lifecycleState: 'active' as LifecycleState,
     contractorId: projectAccess.contractorId,
@@ -438,9 +557,34 @@ export async function updateProjectFs(id: string | number, input: ProjectInput, 
   const updates = omitUndefined({
     name: input.name ?? prev.name,
     location: input.location !== undefined ? input.location ?? null : prev.location,
-    startDate: input.start_date !== undefined ? input.start_date ?? null : prev.startDate,
+    startDate:
+      input.start_date !== undefined ? toCalendarDate(input.start_date) : toCalendarDate(prev.startDate),
     plannedEndDate:
-      input.planned_end_date !== undefined ? input.planned_end_date ?? null : prev.plannedEndDate,
+      input.planned_end_date !== undefined
+        ? toCalendarDate(input.planned_end_date)
+        : toCalendarDate(prev.plannedEndDate),
+    baselineMode:
+      input.baseline_mode !== undefined
+        ? input.baseline_mode === 'prior_suspension'
+          ? 'prior_suspension'
+          : 'active'
+        : prev.baselineMode === 'prior_suspension'
+          ? 'prior_suspension'
+          : 'active',
+    contactDetails:
+      input.contact_details !== undefined ? input.contact_details ?? null : (prev.contactDetails ?? null),
+    revisedCompletionDate:
+      input.revised_completion_date !== undefined
+        ? toCalendarDate(input.revised_completion_date)
+        : toCalendarDate(prev.revisedCompletionDate),
+    suspensionStartDate:
+      input.suspension_start_date !== undefined
+        ? toCalendarDate(input.suspension_start_date)
+        : toCalendarDate(prev.suspensionStartDate),
+    suspensionEndDate:
+      input.suspension_end_date !== undefined
+        ? toCalendarDate(input.suspension_end_date)
+        : toCalendarDate(prev.suspensionEndDate),
     status: input.status ?? prev.status,
     contractorId: projectAccess.contractorId,
     contractorName,
@@ -460,12 +604,23 @@ export async function updateProjectFs(id: string | number, input: ProjectInput, 
     ['contractAmount', prev.contractAmount, updates.contractAmount],
     ['startDate', prev.startDate, updates.startDate],
     ['plannedEndDate', prev.plannedEndDate, updates.plannedEndDate],
+    ['baselineMode', prev.baselineMode, updates.baselineMode],
+    ['contactDetails', prev.contactDetails, updates.contactDetails],
+    ['revisedCompletionDate', prev.revisedCompletionDate, updates.revisedCompletionDate],
+    ['suspensionStartDate', prev.suspensionStartDate, updates.suspensionStartDate],
+    ['suspensionEndDate', prev.suspensionEndDate, updates.suspensionEndDate],
     ['assignedUserIds', prevAccess.assignedUserIds.join(','), projectAccess.assignedUserIds.join(',')],
     ['involvedUserIds', prevAccess.involvedUserIds.join(','), projectAccess.involvedUserIds.join(',')],
   ];
+  await updateDoc(ref, updates);
+
   for (const [field, oldVal, newVal] of auditFields) {
     if (String(oldVal ?? '') === String(newVal ?? '')) continue;
-    await writeProjectAudit(projectId, field, oldVal, newVal, actorName);
+    try {
+      await writeProjectAudit(projectId, field, oldVal, newVal, actorName);
+    } catch {
+      /* The project document is already updated. A failed audit entry must not undo it. */
+    }
   }
 
   if (input.contract_amount != null && Number(prev.contractAmount ?? 0) !== Number(input.contract_amount)) {
@@ -479,7 +634,6 @@ export async function updateProjectFs(id: string | number, input: ProjectInput, 
     });
   }
 
-  await updateDoc(ref, updates);
   try {
     await syncUserProjectMembership(projectId, projectAccess, prevAccess);
   } catch {
@@ -489,6 +643,9 @@ export async function updateProjectFs(id: string | number, input: ProjectInput, 
   invalidateListCache('projectIds:');
   invalidateListCache('reports:');
   invalidateListCache('dashboard:');
+  invalidateListCache(`chartContext:${projectId}`);
+  invalidateListCache(`reportProgress:${projectId}`);
+  invalidateListCache(`sCurveVersions:${projectId}`);
   return mapProject(projectId, { ...prev, ...updates });
 }
 

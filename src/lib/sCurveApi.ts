@@ -3,7 +3,16 @@ import type { SCurvePoint } from '../types';
 import type { SCurveCostItem } from './sCurveItems';
 export type { SCurveCostItem } from './sCurveItems';
 export type { SCurvePeriodRow, SCurveReportingInterval } from './sCurvePeriods';
-import { getSCurveFs, saveSCurveCostItemsFs, saveSCurveSettingsFs } from './firebase/sCurves';
+import {
+  generateSwaStewaSCurveFs,
+  getSCurveFs,
+  saveSCurveCostItemsFs,
+  saveSCurveSettingsFs,
+} from './firebase/sCurves';
+
+export function generateSwaStewaSCurve(projectId: string | number) {
+  return generateSwaStewaSCurveFs(projectId);
+}
 
 export interface SCurveActivity {
   id: string;

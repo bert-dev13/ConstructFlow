@@ -67,7 +67,11 @@ function mapPayItem(id: string, data: Record<string, unknown>): PayItem {
   };
 }
 
+/** Bumped on every mutation so in-flight list fetches cannot re-cache stale snapshots. */
+let payItemsEpoch = 0;
+
 function bumpPayItemsCache() {
+  payItemsEpoch += 1;
   invalidateListCache('payItems:');
 }
 
@@ -94,28 +98,47 @@ export async function getPayItem(id: string): Promise<PayItem | null> {
   return mapPayItem(snap.id, snap.data() as Record<string, unknown>);
 }
 
+/** One in-flight scan per key so several dropdowns cannot each read the whole master list. */
+const pendingPayItemLists = new Map<string, Promise<PayItem[]>>();
+
 export async function listPayItems(includeInactive = true): Promise<PayItem[]> {
   const cacheKey = `payItems:${includeInactive ? 'all' : 'active'}`;
   const cached = readListCache<PayItem[]>(cacheKey);
   if (cached) return cached;
 
+  const inflight = pendingPayItemLists.get(cacheKey);
+  if (inflight) return inflight;
+
+  const epoch = payItemsEpoch;
   const source = includeInactive
     ? collection(db, COLLECTIONS.payItems)
     : query(collection(db, COLLECTIONS.payItems), where('active', '==', true));
-  const snap = await getDocs(source);
-  const items = snap.docs
-    .map((item) => mapPayItem(item.id, item.data() as Record<string, unknown>))
-    .sort((a, b) => a.itemNo.localeCompare(b.itemNo, undefined, { numeric: true }));
+  const promise = getDocs(source).then((snap) => {
+    const items = snap.docs
+      .map((item) => mapPayItem(item.id, item.data() as Record<string, unknown>))
+      .sort((a, b) => a.itemNo.localeCompare(b.itemNo, undefined, { numeric: true }));
 
-  writeListCache(cacheKey, items, 30_000);
-  if (includeInactive) {
-    writeListCache(
-      'payItems:active',
-      items.filter((item) => item.active),
-      30_000,
-    );
-  }
-  return items;
+    // Mutation landed while this fetch was in flight — discard and re-read.
+    if (epoch !== payItemsEpoch) {
+      pendingPayItemLists.delete(cacheKey);
+      return listPayItems(includeInactive);
+    }
+
+    writeListCache(cacheKey, items, 30_000);
+    if (includeInactive) {
+      writeListCache(
+        'payItems:active',
+        items.filter((item) => item.active),
+        30_000,
+      );
+    }
+    return items;
+  }).finally(() => {
+    if (pendingPayItemLists.get(cacheKey) === promise) pendingPayItemLists.delete(cacheKey);
+  });
+
+  pendingPayItemLists.set(cacheKey, promise);
+  return promise;
 }
 
 export async function createPayItem(input: PayItemInput, actorId: string): Promise<PayItem> {
@@ -159,6 +182,8 @@ export async function createPayItem(input: PayItemInput, actorId: string): Promi
   };
   await setDoc(ref, payload);
   bumpPayItemsCache();
+  // Warm cache from Firestore so selectors see the new row immediately.
+  await listPayItems(true).catch(() => undefined);
   return mapPayItem(ref.id, payload);
 }
 
@@ -216,6 +241,7 @@ export async function updatePayItem(
   };
   await updateDoc(doc(db, COLLECTIONS.payItems, id), payload);
   bumpPayItemsCache();
+  await listPayItems(true).catch(() => undefined);
   return { ...current, ...payload, createdBy: current.createdBy };
 }
 
@@ -225,6 +251,7 @@ export async function setPayItemActive(id: string, active: boolean): Promise<voi
     updatedAt: nowIso(),
   });
   bumpPayItemsCache();
+  await listPayItems(true).catch(() => undefined);
 }
 
 /** Soft-delete: keeps the row in Firestore (Inactive) so project snapshots remain valid. */
@@ -240,4 +267,5 @@ export async function deletePayItem(id: string): Promise<void> {
     deletedAt: nowIso(),
   });
   bumpPayItemsCache();
+  await listPayItems(true).catch(() => undefined);
 }
