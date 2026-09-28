@@ -976,7 +976,7 @@ export function ProjectsPage() {
                 <div className="mt-3 grid gap-4 sm:grid-cols-2">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">Engineer I (assigned)</p>
-                    <div className="mt-2 max-h-40 space-y-2 overflow-y-auto rounded-lg border border-border p-3">
+                    <div className="mt-2 space-y-3 rounded-lg border border-border p-3">
                       {engineerOnes.length === 0 ? (
                         <p className="text-xs text-text-muted">No Engineer I accounts found.</p>
                       ) : (
@@ -984,21 +984,23 @@ export function ProjectsPage() {
                           const checked = assignedUserIds.includes(eng.id) || eng.id === user?.id;
                           const locked = eng.id === user?.id;
                           return (
-                            <label key={eng.id} className="flex items-start gap-2 text-sm text-text">
-                              <input
-                                type="checkbox"
-                                className="mt-0.5"
-                                checked={checked}
-                                disabled={locked}
-                                onChange={(e) =>
-                                  setAssignedUserIds((current) => toggleId(current, eng.id, e.target.checked))
-                                }
-                              />
-                              <span>
-                                {eng.full_name}
-                                <span className="block text-xs text-text-muted">{eng.email}</span>
-                              </span>
-                            </label>
+                            <div key={eng.id} className="text-sm text-text">
+                              <label className="flex items-start gap-2">
+                                <input
+                                  type="checkbox"
+                                  className="mt-0.5"
+                                  checked={checked}
+                                  disabled={locked}
+                                  onChange={(e) =>
+                                    setAssignedUserIds((current) => toggleId(current, eng.id, e.target.checked))
+                                  }
+                                />
+                                <span>
+                                  {eng.full_name}
+                                  <span className="block text-xs text-text-muted">{eng.email}</span>
+                                </span>
+                              </label>
+                            </div>
                           );
                         })
                       )}
@@ -1006,25 +1008,27 @@ export function ProjectsPage() {
                   </div>
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">Engineer II (reviewers)</p>
-                    <div className="mt-2 max-h-40 space-y-2 overflow-y-auto rounded-lg border border-border p-3">
+                    <div className="mt-2 space-y-3 rounded-lg border border-border p-3">
                       {engineerTwos.length === 0 ? (
                         <p className="text-xs text-text-muted">No Engineer II accounts found.</p>
                       ) : (
                         engineerTwos.map((eng) => (
-                          <label key={eng.id} className="flex items-start gap-2 text-sm text-text">
-                            <input
-                              type="checkbox"
-                              className="mt-0.5"
-                              checked={involvedUserIds.includes(eng.id)}
-                              onChange={(e) =>
-                                setInvolvedUserIds((current) => toggleId(current, eng.id, e.target.checked))
-                              }
-                            />
-                            <span>
-                              {eng.full_name}
-                              <span className="block text-xs text-text-muted">{eng.email}</span>
-                            </span>
-                          </label>
+                          <div key={eng.id} className="text-sm text-text">
+                            <label className="flex items-start gap-2">
+                              <input
+                                type="checkbox"
+                                className="mt-0.5"
+                                checked={involvedUserIds.includes(eng.id)}
+                                onChange={(e) =>
+                                  setInvolvedUserIds((current) => toggleId(current, eng.id, e.target.checked))
+                                }
+                              />
+                              <span>
+                                {eng.full_name}
+                                <span className="block text-xs text-text-muted">{eng.email}</span>
+                              </span>
+                            </label>
+                          </div>
                         ))
                       )}
                     </div>

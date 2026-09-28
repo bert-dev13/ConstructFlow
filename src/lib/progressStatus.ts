@@ -92,8 +92,8 @@ export function swaStewaChronological(feed: ReportProgressEntry[]): ReportProgre
 }
 
 /**
- * First SWA/STEWA progress = Target Plan.
- * Latest SWA/STEWA progress = Actual Plan.
+ * Approved SWA/STEWA percents are actual accomplishment only.
+ * The original Target Plan comes from the baseline S-Curve, not from these reports.
  */
 export function resolveTargetAndActual(feed: ReportProgressEntry[]): {
   targetPct: number | null;
@@ -105,9 +105,7 @@ export function resolveTargetAndActual(feed: ReportProgressEntry[]): {
   const chronological = swaStewaChronological(feed);
   const firstReport = chronological[0] ?? null;
   const latestReport = chronological.length ? chronological[chronological.length - 1] : null;
-  const targetPct = firstReport != null ? firstReport.percent : null;
-  // Actual Plan comes from succeeding updates (2nd+ SWA/STEWA).
-  const actualPct = chronological.length >= 2 ? latestReport!.percent : null;
+  const actualPct = latestReport != null ? latestReport.percent : null;
 
-  return { targetPct, actualPct, firstReport, latestReport, chronological };
+  return { targetPct: null, actualPct, firstReport, latestReport, chronological };
 }

@@ -36,6 +36,8 @@ export interface ProjectRow {
   contract_amount?: number | null;
   assigned_user_ids?: string[];
   involved_user_ids?: string[];
+  /** Printed name and initials for each assigned user, keyed by user id. */
+  signatories?: Record<string, { name: string; initials: string }>;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -88,6 +90,7 @@ export interface ProjectInput {
   contract_amount?: number | null;
   assigned_user_ids?: string[];
   involved_user_ids?: string[];
+  signatories?: Record<string, { name: string; initials: string }>;
 }
 
 export interface ProjectListOptions {

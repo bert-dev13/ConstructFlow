@@ -4,8 +4,10 @@ import type { ReportProgressEntry } from '../../components/ReportProgressFeed';
 import { applyPdmDerivatives, applyReportProgressToBarChart } from '../scheduleSync';
 import { resolveTargetAndActual, compareTargetVsActual } from '../progressStatus';
 import {
+  dedupeAndSortSCurveVersions,
   originalBarChartTasks,
   readSuspensionWindow,
+  reportingDateFromSCurveLabel,
   revisedBarChartTasks,
 } from '../scheduleBaselines';
 import type { SCurveReportingInterval } from '../sCurvePeriods';
@@ -149,9 +151,9 @@ export function applyFeedToSchedule(
     barChartTasks: applied.tasks,
     barChartTimeNow: applied.timeNow,
     reportFeed: feed,
-    latestReportPercent: applied.latestPercent ?? actualPct ?? targetPct,
+    latestReportPercent: applied.latestPercent ?? actualPct,
     latestReportDate: applied.latestReportDate,
-    targetPlanPercent: targetPct,
+    targetPlanPercent: null,
     actualPlanPercent: actualPct,
     progressStatus,
   };
@@ -312,6 +314,11 @@ export async function loadSCurveVersions(projectId: string) {
       captured_at: string;
       trigger_type: string;
       trigger_label: string | null;
+      as_of_date: string;
+      as_of_label: string | null;
+      source_report_id: string | null;
+      source_report_type: string | null;
+      revision: number | null;
       schedule_status: string | null;
       slippage_pct: number | null;
       planned_pct: number | null;
@@ -324,19 +331,29 @@ export async function loadSCurveVersions(projectId: string) {
     const versionsSnap = await getDocs(collection(db, sCurveSnapshotsPath(id)));
     const versions = versionsSnap.docs.map((d) => {
       const data = d.data() as Record<string, unknown>;
+      const triggerLabel = (data.triggerLabel as string | null) ?? null;
+      const storedAsOf = String(data.asOfDate ?? '').slice(0, 10);
+      const asOfDate =
+        /^\d{4}-\d{2}-\d{2}$/.test(storedAsOf)
+          ? storedAsOf
+          : reportingDateFromSCurveLabel(triggerLabel ?? '') ?? '';
       return {
         id: d.id,
         captured_at: String(data.capturedAt ?? ''),
         trigger_type: String(data.triggerType ?? 'manual'),
-        trigger_label: (data.triggerLabel as string | null) ?? null,
+        trigger_label: triggerLabel,
+        as_of_date: asOfDate,
+        as_of_label: (data.asOfLabel as string | null) ?? null,
+        source_report_id: (data.sourceReportId as string | null) ?? null,
+        source_report_type: (data.sourceReportType as string | null) ?? null,
+        revision: data.revision != null ? Number(data.revision) : null,
         schedule_status: (data.scheduleStatus as string | null) ?? null,
         slippage_pct: data.slippagePct != null ? Number(data.slippagePct) : null,
         planned_pct: data.plannedPct != null ? Number(data.plannedPct) : null,
         actual_pct: data.actualPct != null ? Number(data.actualPct) : null,
       };
     });
-    versions.sort((a, b) => b.captured_at.localeCompare(a.captured_at));
-    return writeListCache(cacheKey, versions, 20_000);
+    return writeListCache(cacheKey, dedupeAndSortSCurveVersions(versions), 20_000);
   } catch {
     return writeListCache(cacheKey, [], 5_000);
   }

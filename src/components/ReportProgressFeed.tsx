@@ -1,9 +1,12 @@
 'use client';
 
 export interface ReportProgressEntry {
+  id?: string;
   reportNumber: string;
   reportType: string;
   date: string;
+  /** Printed reporting period, such as "July 6–10, 2026" or "July 20, 2026". */
+  asOfLabel?: string;
   percent: number;
   label: string;
   status: string;

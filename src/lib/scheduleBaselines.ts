@@ -320,3 +320,118 @@ export function sCurveRecordLabel(asOfDate: string): string {
   });
   return `S-Curve - As of ${pretty}`;
 }
+
+/** `SWA – As of July 6–10, 2026`, with a revision only after an intentional regenerate. */
+export function sCurveSourceVersionLabel(
+  reportType: string,
+  asOfText: string,
+  revision = 1,
+): string {
+  const type = reportType === 'STEWA' ? 'STEWA' : reportType === 'SWA' ? 'SWA' : reportType;
+  const period = asOfText.trim() || 'undated';
+  const base = `${type} – As of ${period}`;
+  const rev = Math.max(1, Math.floor(revision) || 1);
+  return rev > 1 ? `${base} (rev ${rev})` : base;
+}
+
+const LABEL_MONTHS: Record<string, number> = {
+  january: 1,
+  february: 2,
+  march: 3,
+  april: 4,
+  may: 5,
+  june: 6,
+  july: 7,
+  august: 8,
+  september: 9,
+  october: 10,
+  november: 11,
+  december: 12,
+};
+
+function isoFromParts(year: number, month: number, day: number): string | null {
+  if (!year || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+/** End date of a stored or legacy version label, used to sort history. */
+export function reportingDateFromSCurveLabel(label: string): string | null {
+  const text = label
+    .replace(/\s*\(rev\s+\d+\)\s*$/i, '')
+    .replace(/^S-Curve\s*-\s*/i, '')
+    .replace(/^(SWA|STEWA)\s*[–-]\s*/i, '')
+    .replace(/^As of\s+/i, '')
+    .trim();
+  if (!text) return null;
+
+  const crossYear = text.match(
+    /^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})\s*[–-]\s*([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$/,
+  );
+  if (crossYear) {
+    const month = LABEL_MONTHS[crossYear[4].toLowerCase()];
+    return isoFromParts(Number(crossYear[6]), month, Number(crossYear[5]));
+  }
+
+  const crossMonth = text.match(
+    /^([A-Za-z]+)\s+(\d{1,2})\s*[–-]\s*([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$/,
+  );
+  if (crossMonth) {
+    const month = LABEL_MONTHS[crossMonth[3].toLowerCase()];
+    return isoFromParts(Number(crossMonth[5]), month, Number(crossMonth[4]));
+  }
+
+  const sameMonth = text.match(/^([A-Za-z]+)\s+(\d{1,2})\s*[–-]\s*(\d{1,2}),?\s+(\d{4})$/);
+  if (sameMonth) {
+    const month = LABEL_MONTHS[sameMonth[1].toLowerCase()];
+    return isoFromParts(Number(sameMonth[4]), month, Number(sameMonth[3]));
+  }
+
+  const single = text.match(/^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$/);
+  if (single) {
+    const month = LABEL_MONTHS[single[1].toLowerCase()];
+    return isoFromParts(Number(single[3]), month, Number(single[2]));
+  }
+
+  const monthYear = text.match(/^([A-Za-z]+)\s+(\d{4})$/);
+  if (monthYear) {
+    const month = LABEL_MONTHS[monthYear[1].toLowerCase()];
+    return isoFromParts(Number(monthYear[2]), month, 1);
+  }
+  return null;
+}
+
+export interface SCurveVersionIdentity {
+  id: string;
+  captured_at: string;
+  trigger_label: string | null;
+  as_of_date: string;
+  source_report_id: string | null;
+}
+
+/** One row per source report. Legacy snapshots with the same label or date collapse to the newest. */
+export function dedupeAndSortSCurveVersions<T extends SCurveVersionIdentity>(versions: T[]): T[] {
+  const newestByKey = new Map<string, T>();
+  for (const version of versions) {
+    const key = version.source_report_id
+      ? `report:${version.source_report_id}`
+      : `legacy:${version.as_of_date || (version.trigger_label ?? version.id).trim().toLowerCase()}`;
+    const current = newestByKey.get(key);
+    if (!current || version.captured_at > current.captured_at) newestByKey.set(key, version);
+  }
+
+  const sourcedDates = new Set(
+    [...newestByKey.values()]
+      .filter((version) => version.source_report_id && version.as_of_date)
+      .map((version) => version.as_of_date),
+  );
+
+  return [...newestByKey.values()]
+    .filter(
+      (version) =>
+        Boolean(version.source_report_id) || !version.as_of_date || !sourcedDates.has(version.as_of_date),
+    )
+    .sort((a, b) => {
+      const byDate = (b.as_of_date || b.captured_at).localeCompare(a.as_of_date || a.captured_at);
+      return byDate !== 0 ? byDate : b.captured_at.localeCompare(a.captured_at);
+    });
+}

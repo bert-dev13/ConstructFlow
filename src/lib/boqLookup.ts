@@ -23,6 +23,23 @@ function wordsOf(text: string): string[] {
   return text.trim().split(/\s+/).filter(Boolean);
 }
 
+/**
+ * The pay-item list sometimes continues into a footnote, the next item
+ * number, a division title, a signature block, or a repeated column header.
+ * The unit sits at the end of the item text, before that extra text.
+ */
+function payItemBody(description: string): string {
+  let text = description.trim();
+  const stops = [
+    text.search(/\*/),
+    text.search(/\bDIVISION\b/i),
+    text.search(/\s\d{3,4}[A-Za-z]?\s*\(\s*\d+/),
+    text.search(/\bDirector\b/),
+  ].filter((index) => index > 0);
+  if (stops.length) text = text.slice(0, Math.min(...stops)).trim();
+  return text.replace(/(?:Thickness\/Sizes\s+)?Size Class Others\s*$/i, '').trim();
+}
+
 function wordKey(word: string): string {
   return word.toLowerCase().replace(/[^a-z.-]/g, '');
 }
@@ -39,7 +56,8 @@ function discoverUnitPhrases(rows: ReferenceBoqRow[]): string[] {
   const bump = (map: Map<string, number>, key: string) => map.set(key, (map.get(key) ?? 0) + 1);
 
   for (const row of rows) {
-    const parts = wordsOf(row.description);
+    const source = isPlaceholderUnit(row.unit) ? payItemBody(row.description) : row.description;
+    const parts = wordsOf(source);
     parts.forEach((word, index) => {
       const key = wordKey(word);
       if (!key) return;
@@ -51,7 +69,7 @@ function discoverUnitPhrases(rows: ReferenceBoqRow[]): string[] {
   const unitWords = new Set<string>();
   for (const [key, count] of endCount) {
     if (!/^[a-z][a-z.-]*$/.test(key)) continue;
-    if (count >= 2 && count > (otherCount.get(key) ?? 0)) unitWords.add(key);
+    if (count >= 1 && count > (otherCount.get(key) ?? 0)) unitWords.add(key);
   }
   for (const row of rows) {
     if (isPlaceholderUnit(row.unit)) continue;
@@ -65,7 +83,7 @@ function discoverUnitPhrases(rows: ReferenceBoqRow[]): string[] {
   const beforeOther = new Map<string, number>();
   for (const row of rows) {
     if (!isPlaceholderUnit(row.unit)) continue;
-    const parts = wordsOf(row.description).map(wordKey);
+    const parts = wordsOf(payItemBody(row.description)).map(wordKey);
     for (let index = 0; index < parts.length; index += 1) {
       const key = parts[index] ?? '';
       if (!key || unitWords.has(key)) continue;
@@ -82,7 +100,7 @@ function discoverUnitPhrases(rows: ReferenceBoqRow[]): string[] {
   const phraseCount = new Map<string, number>();
   for (const row of rows) {
     if (!isPlaceholderUnit(row.unit)) continue;
-    const parts = wordsOf(row.description);
+    const parts = wordsOf(payItemBody(row.description));
     const keys = parts.map(wordKey);
     for (let size = 1; size <= 3 && size <= parts.length; size += 1) {
       const slice = keys.slice(-size);
@@ -100,7 +118,7 @@ function discoverUnitPhrases(rows: ReferenceBoqRow[]): string[] {
   }
 
   const phrases = [...phraseCount.entries()]
-    .filter(([, count]) => count >= 2)
+    .filter(([id, count]) => count >= (id.includes(' ') ? 2 : 1))
     .map(([id]) => surface.get(id) ?? id);
   for (const unit of canonical.values()) {
     if (!phrases.some((phrase) => phrase.toLowerCase() === unit.toLowerCase())) phrases.push(unit);
@@ -110,6 +128,33 @@ function discoverUnitPhrases(rows: ReferenceBoqRow[]): string[] {
 }
 
 const UNIT_PHRASES = discoverUnitPhrases([...CUSTOM_BOQ, ...REFERENCE_BOQ]);
+
+/** Words that only ever introduce a meter measure, such as Cubic or Square. */
+function meterModifiers(rows: ReferenceBoqRow[]): Set<string> {
+  const followedBy = new Map<string, Set<string>>();
+  const seen = new Map<string, number>();
+  for (const row of rows) {
+    const parts = wordsOf(`${row.description} ${row.unit}`).map(wordKey);
+    for (let index = 0; index < parts.length; index += 1) {
+      const word = parts[index] ?? '';
+      if (!word) continue;
+      seen.set(word, (seen.get(word) ?? 0) + 1);
+      const next = followedBy.get(word) ?? new Set<string>();
+      next.add(parts[index + 1] ?? '');
+      followedBy.set(word, next);
+    }
+  }
+  const modifiers = new Set<string>();
+  for (const [word, next] of followedBy) {
+    const meterOnly = [...next].every(
+      (token) => token === 'meter' || token === 'meters' || token.startsWith('meter'),
+    );
+    if (meterOnly && (seen.get(word) ?? 0) >= 2) modifiers.add(word);
+  }
+  return modifiers;
+}
+
+const METER_MODIFIERS = meterModifiers([...CUSTOM_BOQ, ...REFERENCE_BOQ]);
 const CANONICAL_UNITS = new Map<string, string>();
 for (const row of [...CUSTOM_BOQ, ...REFERENCE_BOQ]) {
   const unit = String(row.unit ?? '').trim();
@@ -118,24 +163,81 @@ for (const row of [...CUSTOM_BOQ, ...REFERENCE_BOQ]) {
   }
 }
 
-function peelEmbeddedUnit(description: string, unit: string): { description: string; unit: string } {
-  const text = description.trim();
-  const current = String(unit ?? '').trim();
-  if (!isPlaceholderUnit(current)) return { description: text, unit: current };
+function unitSuffix(text: string): { description: string; unit: string } | null {
   const lower = text.toLowerCase();
-  const phrase = UNIT_PHRASES.find((candidate) => {
+  let phrase = UNIT_PHRASES.find((candidate) => {
     const needle = candidate.toLowerCase();
     if (!lower.endsWith(needle)) return false;
     const start = lower.length - needle.length;
     return start === 0 || /\s/.test(lower.charAt(start - 1));
   });
-  if (!phrase) return { description: text, unit: '' };
+  if (!phrase) return null;
+  const parts = wordsOf(text);
+  const phraseWords = wordsOf(phrase);
+  if (phraseWords.length === 1 && /^(meter|meters)$/i.test(phrase)) {
+    const previous = parts[parts.length - phraseWords.length - 1];
+    if (previous && METER_MODIFIERS.has(wordKey(previous))) {
+      phrase = `${previous} ${phrase}`;
+    }
+  }
   const nextDescription = text.slice(0, text.length - phrase.length).trim();
   const resolved = CANONICAL_UNITS.get(phrase.toLowerCase()) ?? text.slice(text.length - phrase.length);
   return {
     description: nextDescription || text,
     unit: resolved,
   };
+}
+
+function peelEmbeddedUnit(description: string, unit: string): { description: string; unit: string } {
+  const text = description.trim();
+  const current = String(unit ?? '').trim();
+  if (!isPlaceholderUnit(current)) return { description: text, unit: current };
+  const direct = unitSuffix(text);
+  if (direct && !isPlaceholderUnit(direct.unit)) return direct;
+  const body = payItemBody(text);
+  const source = body || text;
+  if (source !== text) {
+    const recovered = unitSuffix(source);
+    if (recovered && !isPlaceholderUnit(recovered.unit)) return recovered;
+  }
+  const lone = loneMeasure(source);
+  if (lone) return lone;
+  const sibling = unitFromSiblingDescription(source);
+  if (sibling) return sibling;
+  return { description: text, unit: '' };
+}
+
+/** A description that is only the measure, such as "Kilometer". */
+function loneMeasure(text: string): { description: string; unit: string } | null {
+  const parts = wordsOf(text);
+  if (parts.length !== 1) return null;
+  const word = parts[0]!;
+  const key = wordKey(word);
+  if (!key) return null;
+  const alreadyADescriptionEnding = CATALOG.some((row) => {
+    if (isPlaceholderUnit(row.unit)) return false;
+    const desc = wordsOf(row.description);
+    return wordKey(desc[desc.length - 1] ?? '') === key;
+  });
+  if (alreadyADescriptionEnding) return null;
+  return { description: text, unit: word };
+}
+
+/**
+ * "Structure Span" next to a sibling whose description is "Structure"
+ * means the extra word is the unit the list failed to split off.
+ */
+function unitFromSiblingDescription(text: string): { description: string; unit: string } | null {
+  const parts = wordsOf(text);
+  if (parts.length < 2) return null;
+  const stem = parts.slice(0, -1).join(' ');
+  const token = parts[parts.length - 1]!;
+  const stemKey = stem.toLowerCase();
+  const sibling = CATALOG.some(
+    (row) => !isPlaceholderUnit(row.unit) && row.description.trim().toLowerCase() === stemKey,
+  );
+  if (!sibling) return null;
+  return { description: stem, unit: token };
 }
 
 /** Use the stored unit, or the measure that was left on the description. */

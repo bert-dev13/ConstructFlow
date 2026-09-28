@@ -4,7 +4,9 @@ const PRINT_BASE_CSS = `
   html, body { margin: 0; padding: 0; background: #fff; color: #0f172a; }
   body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 16px; }
   table { border-collapse: collapse; width: 100%; font-size: 12px; margin-top: 12px; }
-  th, td { border: 1px solid #e2e8f0; padding: 6px 8px; text-align: left; vertical-align: top; }
+  th, td { border: 1px solid #e2e8f0; padding: 6px 8px; text-align: left; vertical-align: top; white-space: normal; overflow-wrap: anywhere; word-wrap: break-word; height: auto; line-height: 1.35; }
+  tr, thead, tbody { break-inside: avoid; page-break-inside: avoid; }
+  thead { display: table-header-group; }
   th { background: #f8fafc; }
   h1 { font-size: 18px; margin: 0 0 8px; }
   h2 { font-size: 15px; margin: 16px 0 8px; }

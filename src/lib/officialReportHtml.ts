@@ -1,6 +1,6 @@
 import type { SwaStewaReport } from './swaStewaApi';
 import { BASE_URL } from './paths';
-import { formatExcelDate, stewaDash, stewaPercentText } from './stewaCalculations';
+import { formatExcelDate, formatSwaAsOfLabel, stewaDash, stewaPercentText } from './stewaCalculations';
 import {
   computeWorkItems,
   isSwaSectionRow,
@@ -9,6 +9,7 @@ import {
   type WorkItem,
   type WorkItemComputed,
 } from './workItems';
+import { signatureSectionHtml } from './signatories';
 
 function escapeHtml(value: string): string {
   return value
@@ -119,20 +120,40 @@ const SHARED_CSS = `
   .letterhead .addr { font-size: 8pt; margin-top: 1px; }
   .letterhead .office { font-size: 9.5pt; font-weight: bold; text-decoration: underline; margin-top: 2px; }
   table.grid { width: 100%; border-collapse: collapse; }
-  table.grid th, table.grid td { border: 1px solid #000; padding: 4px 5px; text-align: center; vertical-align: middle; font-size: 7.5pt; }
+  table.grid th, table.grid td { border: 1px solid #000; padding: 4px 5px; text-align: center; vertical-align: top; font-size: 7.5pt; white-space: normal; overflow-wrap: anywhere; word-wrap: break-word; height: auto; line-height: 1.3; }
   table.grid th { background: #f0f0f0; font-size: 7pt; }
   td.left { text-align: left; }
   td.right { text-align: right; }
   .total-row { font-weight: bold; }
   table.form { width: 100%; border-collapse: collapse; margin: 6px 0 10px; }
-  table.form td { border: none; padding: 5px 4px; vertical-align: bottom; font-size: 10pt; }
-  table.form td.lbl { width: 46%; white-space: nowrap; padding-right: 6px; }
+  table.form td { border: none; padding: 5px 4px; vertical-align: top; font-size: 10pt; white-space: normal; overflow-wrap: anywhere; word-wrap: break-word; height: auto; line-height: 1.3; }
+  table.form td.lbl { width: 46%; white-space: normal; padding-right: 6px; }
   table.form td.colon { width: 12px; text-align: center; }
   table.form td.val { width: auto; border-bottom: 1px solid #000; min-height: 16px; padding-left: 4px; padding-bottom: 3px; }
   table.form tr.emphasis td.val { font-weight: bold; text-transform: uppercase; }
   .signatures { clear: both; margin-top: 32px; width: 100%; font-size: 8pt; display: flex; justify-content: space-between; gap: 12px; }
-  .sig { flex: 1; text-align: center; vertical-align: top; }
-  .sig-name { font-weight: bold; text-decoration: underline; margin-top: 30px; min-height: 1.2em; text-transform: uppercase; }
+  .sig { flex: 1; text-align: center; vertical-align: top; overflow-wrap: anywhere; }
+  .sig-mark { min-height: 36px; margin-top: 8px; display: flex; align-items: flex-end; justify-content: center; }
+  .sig-image { max-width: 120px; max-height: 36px; object-fit: contain; }
+  .sig-initials { font-family: "Segoe Script", "Brush Script MT", cursive; font-size: 13pt; line-height: 1; letter-spacing: 0.5px; }
+  .sig-name { font-weight: bold; text-decoration: underline; margin-top: 4px; min-height: 1.2em; text-transform: uppercase; overflow-wrap: anywhere; }
+  .sig-title { margin-top: 2px; }
+  .sig-date { font-size: 7pt; margin-top: 2px; }
+  .two-col td, .meta-table td, .summary td, .lined-box, .problems-box, .lined-box p {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-wrap: break-word;
+    height: auto;
+  }
+  tr, .signatures, .section-lbl, .summary, .lined-box, .problems-box {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  thead { display: table-header-group; }
+  @media print {
+    html, body { overflow: visible; }
+    table.grid th, table.grid td, table.form td, .meta-table td { overflow: visible; height: auto; }
+  }
 `;
 
 function isSectionRow(row: WorkItemComputed): boolean {
@@ -216,7 +237,7 @@ function formRow(label: string, value: string, emphasis = false): string {
 }
 
 export function buildOfficialSwaHtml(
-  report: Pick<SwaStewaReport, 'report_number' | 'report_data' | 'line_items' | 'project_name'>,
+  report: Pick<SwaStewaReport, 'report_number' | 'report_data' | 'line_items' | 'project_name' | 'approval_flow'>,
 ): string {
   const data = (report.report_data ?? {}) as Record<string, unknown>;
   const showRevised = truthyFlag(data.show_revised_quantity ?? data.showRevisedQuantity);
@@ -231,8 +252,8 @@ export function buildOfficialSwaHtml(
     .map((row) => {
       const section = isSectionRow(row);
       let html = '<tr>';
-      html += `<td>${escapeHtml(String(row.snapshotItemNo || row.itemNo || ''))}</td>`;
-      html += `<td class="left">${escapeHtml(String(row.snapshotDescription || row.description || ''))}</td>`;
+      html += `<td>${escapeHtml(String(row.itemNo || row.snapshotItemNo || ''))}</td>`;
+      html += `<td class="left">${escapeHtml(String(row.description || row.snapshotDescription || ''))}</td>`;
       if (row.isSection) {
         const blanks = showRevised ? 13 : 10;
         html += '<td></td>'.repeat(blanks);
@@ -241,7 +262,7 @@ export function buildOfficialSwaHtml(
       }
       html += `<td class="right">${qtyCell(row.programmedQty, section)}</td>`;
       html += `<td class="right">${moneyCell(row.unitPrice, section)}</td>`;
-      html += `<td>${escapeHtml(String(row.snapshotUnit || row.unit || ''))}</td>`;
+      html += `<td>${escapeHtml(String(row.unit || row.snapshotUnit || ''))}</td>`;
       html += `<td class="right">${moneyCell(row.contractAmount, section)}</td>`;
       html += `<td class="right">${qtyCell(row.weightPct, section)}</td>`;
       if (showRevised) {
@@ -254,7 +275,7 @@ export function buildOfficialSwaHtml(
       html += `<td class="right">${moneyCell(row.thisPeriod, section || row.thisPeriod === 0)}</td>`;
       html += `<td class="right">${moneyCell(row.toDate, section || row.toDate === 0)}</td>`;
       html += `<td class="right">${qtyCell(row.accomplishmentWeightPct, section)}</td>`;
-      html += `<td>${escapeHtml(String(row.status || row.remarks || ''))}</td>`;
+      html += `<td>${escapeHtml(String(row.remarks || ''))}</td>`;
       html += '</tr>';
       return html;
     })
@@ -280,9 +301,11 @@ body { font-size: 7pt; }
 ${letterheadHtml()}
 <h3>STATEMENT OF WORK ACCOMPLISHMENT</h3>
 <div class="meta">
-  As of <u>${escapeHtml(formatReportDate(data.report_date))}</u><br>
+  As of <u>${escapeHtml(formatSwaAsOfLabel(data))}</u><br>
   <strong>${projectName}</strong><br>
-  ${location}
+  ${location}<br>
+  Contractor: ${escapeHtml(field(data, 'contractor'))}<br>
+  Contract amount: ${moneyField(data, 'contract_amount')}
 </div>
 <table class="grid">
   <thead>
@@ -317,7 +340,9 @@ ${letterheadHtml()}
           ? `<td></td><td class="right">${formatMoney(totals.totalRevisedAmount)}</td><td class="right">${formatPct(totals.totalRevisedWeightPct)}</td>`
           : ''
       }
-      <td colspan="3"></td>
+      <td></td>
+      <td class="right">${formatMoney(totals.totalThisAccomplishment)}</td>
+      <td></td>
       <td class="right">${formatPct(totals.totalToDateWeightPct)}</td>
       <td></td>
     </tr>
@@ -330,17 +355,12 @@ ${letterheadHtml()}
   <tr><td class="label">LESS: ${lessReason}</td><td class="val">P ${formatMoney(lessAmount)}</td></tr>
   <tr><td class="label">TOTAL VOUCHER</td><td class="val">P ${formatMoney(totals.totalVoucher)}</td></tr>
 </table>
-<div class="signatures">
-  <div class="sig"><div>Prepared by:</div><div class="sig-name">${escapeHtml(field(data, 'prepared_by_name'))}</div><div>${escapeHtml(field(data, 'prepared_by_title') || 'Engineer I')}</div></div>
-  <div class="sig"><div>Checked by:</div><div class="sig-name">${escapeHtml(field(data, 'checked_by_name'))}</div><div>${escapeHtml(field(data, 'checked_by_title') || 'Chief of Construction Division')}</div></div>
-  <div class="sig"><div>Recommending Approval:</div><div class="sig-name">${escapeHtml(field(data, 'recommending_name'))}</div><div>${escapeHtml(field(data, 'recommending_title') || 'Provincial Engineer')}</div></div>
-  <div class="sig"><div>Approved:</div><div class="sig-name">${escapeHtml(field(data, 'approved_by_name'))}</div><div>${escapeHtml(field(data, 'approved_by_title') || 'Governor')}</div></div>
-</div>
+${signatureSectionHtml('SWA', report.approval_flow, data)}
 </body></html>`;
 }
 
 export function buildOfficialStewaHtml(
-  report: Pick<SwaStewaReport, 'report_number' | 'report_data' | 'project_name'>,
+  report: Pick<SwaStewaReport, 'report_number' | 'report_data' | 'project_name' | 'approval_flow'>,
 ): string {
   const data = (report.report_data ?? {}) as Record<string, unknown>;
   const projectName = escapeHtml(
@@ -400,28 +420,19 @@ ${letterheadHtml()}
   ${formRow('12. Percentage of work accomplished - Planned', pct('percent_planned'))}
   ${formRow('13. Slippage', pct('slippage'))}
   ${formRow('14. Remarks', escapeHtml(field(data, 'remarks')))}
+  ${formRow('Submitted by', escapeHtml(field(data, 'submitted_by_name')))}
+  ${formRow('Submitted by title', escapeHtml(field(data, 'submitted_by_title')))}
+  ${formRow('Noted by', escapeHtml(field(data, 'noted_by_name')))}
+  ${formRow('Noted by title', escapeHtml(field(data, 'noted_by_title')))}
 </table>
 
-<table class="sig-table">
-  <tr>
-    <td>
-      <div>Submitted by:</div>
-      <div class="sig-name">${escapeHtml(field(data, 'submitted_by_name', 'prepared_by_name'))}</div>
-      <div>${escapeHtml(field(data, 'submitted_by_title', 'prepared_by_title') || 'Engineer II')}</div>
-    </td>
-    <td>
-      <div>Noted by:</div>
-      <div class="sig-name">${escapeHtml(field(data, 'noted_by_name', 'checked_by_name'))}</div>
-      <div>${escapeHtml(field(data, 'noted_by_title', 'checked_by_title') || 'Engineer IV (Chief-Construction Division)')}</div>
-    </td>
-  </tr>
-</table>
+${signatureSectionHtml('STEWA', report.approval_flow, data)}
 <div class="email-footer">EMAIL: peo@cagayan.gov.ph</div>
 </body></html>`;
 }
 
 export function buildOfficialIarHtml(
-  report: Pick<SwaStewaReport, 'report_number' | 'report_data' | 'project_name'>,
+  report: Pick<SwaStewaReport, 'report_number' | 'report_data' | 'project_name' | 'approval_flow'>,
 ): string {
   const data = (report.report_data ?? {}) as Record<string, unknown>;
   const accomplishment = padRows(asRowArray(data.accomplishment_items), 10);
@@ -431,25 +442,25 @@ export function buildOfficialIarHtml(
 
   const accomplishmentRows = accomplishment
     .map((item) => {
-      const itemNo = escapeHtml(String(item.item_no ?? item.itemNo ?? ''));
-      const desc = escapeHtml(String(item.description ?? ''));
-      const location = escapeHtml(String(item.location ?? ''));
-      const physical = escapeHtml(String(item.physical_qty ?? item.physicalQty ?? ''));
-      const billable = escapeHtml(String(item.billable_qty ?? item.billableQty ?? ''));
-      const unit = escapeHtml(String(item.unit ?? ''));
+      const itemNo = escapeHtml(field(item, 'item_no', 'itemNo', 'snapshotItemNo'));
+      const desc = escapeHtml(field(item, 'description', 'snapshotDescription'));
+      const location = escapeHtml(field(item, 'location'));
+      const physical = escapeHtml(field(item, 'physical_qty', 'physicalQty'));
+      const billable = escapeHtml(field(item, 'billable_qty', 'billableQty'));
+      const unit = escapeHtml(field(item, 'unit', 'snapshotUnit'));
       return `<tr><td>${itemNo}</td><td class="left">${desc}</td><td>${location}</td><td class="right">${physical}</td><td class="right">${billable}</td><td>${unit}</td></tr>`;
     })
     .join('');
 
   const variationRows = variation
     .map((item) => {
-      const itemNo = escapeHtml(String(item.item_no ?? item.itemNo ?? ''));
-      const desc = escapeHtml(String(item.description ?? ''));
-      const qty = escapeHtml(String(item.quantity ?? ''));
-      const unit = escapeHtml(String(item.unit ?? ''));
-      const additive = escapeHtml(String(item.additive ?? ''));
-      const deductive = escapeHtml(String(item.deductive ?? ''));
-      const newItem = escapeHtml(String(item.new_item ?? item.newItem ?? ''));
+      const itemNo = escapeHtml(field(item, 'item_no', 'itemNo', 'snapshotItemNo'));
+      const desc = escapeHtml(field(item, 'description', 'snapshotDescription'));
+      const qty = escapeHtml(field(item, 'quantity'));
+      const unit = escapeHtml(field(item, 'unit', 'snapshotUnit'));
+      const additive = escapeHtml(field(item, 'additive'));
+      const deductive = escapeHtml(field(item, 'deductive'));
+      const newItem = escapeHtml(field(item, 'new_item', 'newItem'));
       return `<tr><td>${itemNo}</td><td class="left">${desc}</td><td class="right">${qty}</td><td>${unit}</td><td>${additive}</td><td>${deductive}</td><td>${newItem}</td></tr>`;
     })
     .join('');
@@ -476,7 +487,8 @@ body { font-size: 7.5pt; }
 .lined-box p { margin: 0 0 6px; border-bottom: 1px solid #ccc; min-height: 10px; }
 .meta-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; font-size: 7.5pt; }
 .meta-table td { padding: 3px 4px; vertical-align: bottom; border: none; }
-.meta-table .lbl { font-weight: bold; white-space: nowrap; width: 1%; }
+.meta-table td { white-space: normal; overflow-wrap: anywhere; word-wrap: break-word; height: auto; }
+.meta-table .lbl { font-weight: bold; white-space: normal; width: 1%; }
 .meta-table .val { border-bottom: 1px solid #000; }
 </style></head><body>
 <div class="report-no">${escapeHtml(report.report_number)}</div>
@@ -494,6 +506,10 @@ ${letterheadHtml()}
   <tr>
     <td class="lbl">Contractor:</td><td class="val">${escapeHtml(field(data, 'contractor'))}</td>
     <td class="lbl">Week Covered:</td><td class="val">${escapeHtml(field(data, 'week_covered', 'period_covered'))}</td>
+  </tr>
+  <tr>
+    <td class="lbl">Date:</td><td class="val">${escapeHtml(field(data, 'report_date') ? formatExcelDate(field(data, 'report_date')) : '')}</td>
+    <td class="lbl">Representative:</td><td class="val">${escapeHtml(field(data, 'contractor_representative'))}</td>
   </tr>
 </table>
 <table class="grid">
@@ -552,12 +568,7 @@ ${letterheadHtml()}
     </tr>
   </tbody>
 </table>
-<div class="signatures">
-  <div class="sig"><div>Prepared by:</div><div class="sig-name">${escapeHtml(field(data, 'prepared_by_name'))}</div><div>PEO Engineer I</div></div>
-  <div class="sig"><div>Checked by:</div><div class="sig-name">${escapeHtml(field(data, 'checked_by_name'))}</div><div>PEO Engineer II</div></div>
-  <div class="sig"><div>Noted by:</div><div class="sig-name">${escapeHtml(field(data, 'noted_by_name'))}</div><div>PEO Engineer III</div></div>
-  <div class="sig"><div>Conforme:</div><div class="sig-name">${escapeHtml(field(data, 'contractor_representative'))}</div><div>Contractor's Representative</div></div>
-</div>
+${signatureSectionHtml('IAR', report.approval_flow, data)}
 </body></html>`;
 }
 

@@ -1,0 +1,55 @@
+Total Project Cost = 68309.85750000001
+B.7 L.S. TO DATE: got=7780.5 expect=7780.5 ok=true
+B.7 L.S. THIS PERIOD: got=7780.5 expect=7780.5 ok=true
+B.7 L.S. WEIGHT %: got=22.78 expect=22.78 ok=true
+B.7 L.S. WT% ACCOMP: got=11.39 expect=11.39 ok=true
+B.7 L.S. Remarks: got="On going" expect="On going" ok=true
+101(3)b1 sqm TO DATE: got=51508.857500000006 expect=51508.857500000006 ok=true
+101(3)b1 sqm THIS PERIOD: got=51508.857500000006 expect=51508.857500000006 ok=true
+101(3)b1 sqm WEIGHT %: got=75.405 expect=75.405 ok=true
+101(3)b1 sqm WT% ACCOMP: got=75.405 expect=75.405 ok=true
+101(3)b1 sqm Remarks: got="COMPLETED" expect="COMPLETED" ok=true
+each TO DATE: got=1000 expect=1000 ok=true
+each THIS PERIOD: got=900 expect=900 ok=true
+each WEIGHT %: got=1.464 expect=1.464 ok=true
+each WT% ACCOMP: got=1.464 expect=1.464 ok=true
+each Remarks: got="COMPLETED" expect="COMPLETED" ok=true
+cum TO DATE: got=240 expect=240 ok=true
+cum THIS PERIOD: got=240 expect=240 ok=true
+cum WEIGHT %: got=0.35100000000000003 expect=0.35100000000000003 ok=true
+cum WT% ACCOMP: got=0.35100000000000003 expect=0.35100000000000003 ok=true
+cum Remarks: got="COMPLETED" expect="COMPLETED" ok=true
+unit "L.S." toDate=100 expect=100 ok=true
+unit "LS" toDate=100 expect=100 ok=true
+unit "l.s." toDate=100 expect=100 ok=true
+unit "lump sum" toDate=100 expect=100 ok=true
+unit "sq.m." toDate=200 expect=200 ok=true
+unit "sqm" toDate=200 expect=200 ok=true
+unit "each" toDate=200 expect=200 ok=true
+unit "cum" toDate=200 expect=200 ok=true
+unit "cu.m." toDate=200 expect=200 ok=true
+existing sqm 101(3)b1 toDate=51508.857500000006 contract=51508.857500000006 ok=true
+manual to-date override=40 thisPeriod=40 ok=true
+section rows blank=true excluded from total=true
+heading "I. OTHER GENERAL REQUIREMENTS" section=true expect=true ok=true
+heading "II. SITE WORKS" section=true expect=true ok=true
+heading "III." section=true expect=true ok=true
+heading "IV." section=true expect=true ok=true
+heading "V. SURFACE COURSE" section=true expect=true ok=true
+heading "I" section=true expect=true ok=true
+heading "II." section=true expect=true ok=true
+heading "101(3)b1" section=false expect=false ok=true
+heading "B.5" section=false expect=false ok=true
+heading "C.1" section=false expect=false ok=true
+excel total=2987425.2641999996 app=2987425.2641999996 ok=true
+B.5 weight app=0.415 excel=0.415 display 0.42 vs 0.42 ok=true
+B.7 weight app=0.521 excel=0.521 display 0.52 vs 0.52 ok=true
+B.9 weight app=0.987 excel=0.987 display 0.99 vs 0.99 ok=true
+101(3)b1 weight app=1.7239999999999998 excel=1.7239999999999998 display 1.72 vs 1.72 ok=true
+101(6) weight app=0.9209999999999999 excel=0.9209999999999999 display 0.92 vs 0.92 ok=true
+103(1)a weight app=0.562 excel=0.562 display 0.56 vs 0.56 ok=true
+105(1) weight app=0.7929999999999999 excel=0.7929999999999999 display 0.79 vs 0.79 ok=true
+200(1) weight app=1.346 excel=1.346 display 1.35 vs 1.35 ok=true
+311(1)c weight app=10.943999999999999 excel=10.943999999999999 display 10.94 vs 10.94 ok=true
+excel section rows blank=true
+SWA_FORMULA_OK

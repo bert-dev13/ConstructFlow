@@ -287,6 +287,7 @@ service cloud.firestore {
           'involvedUserIds',
           'accessUserIds',
           'contractAmount',
+          'signatories',
           'updatedAt'
         ])
         && hasProjectAccess(projectId);
@@ -425,10 +426,41 @@ service cloud.firestore {
       }
     }
 
+    function canEditSCurvePeriodFields() {
+      return role() in ['contractor', 'engineer_1', 'engineer_2', 'engineer_3', 'engineer_4'];
+    }
+
+    function sCurvePeriodFieldKeys() {
+      return [
+        'periodEdits',
+        'baselinePeriods',
+        'theoreticalTotalPeriods',
+        'periodsCustomized',
+        'periodCountCustomized',
+        'updatedAt',
+        'projectId'
+      ];
+    }
+
     match /sCurves/{projectId} {
       allow read: if activeProjectReadable(projectData(projectId));
-      allow write: if (isRole('contractor') || isRole('engineer_1'))
-        && activeProjectReadable(projectData(projectId));
+      allow create: if activeProjectReadable(projectData(projectId))
+        && (
+          isRole('contractor') || isRole('engineer_1')
+          || (
+            canEditSCurvePeriodFields()
+            && request.resource.data.keys().hasOnly(sCurvePeriodFieldKeys())
+          )
+        );
+      allow update: if activeProjectReadable(projectData(projectId))
+        && (
+          isRole('contractor') || isRole('engineer_1')
+          || (
+            canEditSCurvePeriodFields()
+            && request.resource.data.diff(resource.data).changedKeys().hasOnly(sCurvePeriodFieldKeys())
+          )
+        );
+      allow delete: if false;
 
       match /snapshots/{snapId} {
         allow read: if activeProjectReadable(projectData(projectId));

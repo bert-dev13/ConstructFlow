@@ -90,6 +90,45 @@ export function formatExcelDate(value: string): string {
   return `${MONTHS[parts.m - 1]} ${String(parts.d).padStart(2, '0')}, ${parts.y}`;
 }
 
+/**
+ * Printed SWA "As of" text, without the "As of" prefix.
+ * A single date stays in the workbook format. A range is "July 6–10, 2026"
+ * in one month, or "July 30 – August 5, 2026" when the months differ.
+ */
+export function formatSwaAsOfLabel(data: Record<string, unknown> | null | undefined): string {
+  const record = data ?? {};
+  const single = String(record.report_date ?? '').trim();
+  const rangeOn = String(record.as_of_range ?? '') === '1';
+  const startRaw = String(record.as_of_start ?? '').trim();
+  const endRaw = String(record.as_of_end ?? '').trim();
+  if (rangeOn && startRaw && endRaw) {
+    const ranged = formatSwaDateRange(startRaw, endRaw);
+    if (ranged) return ranged;
+  }
+  return single ? formatExcelDate(single) : '';
+}
+
+function formatSwaDateRange(startRaw: string, endRaw: string): string | null {
+  const start = dateParts(startRaw);
+  const end = dateParts(endRaw);
+  if (!start || !end) return null;
+  const [from, to] = utcMs(start) <= utcMs(end) ? [start, end] : [end, start];
+  if (from.y === to.y && from.m === to.m && from.d === to.d) {
+    return formatExcelDate(
+      `${from.y}-${String(from.m).padStart(2, '0')}-${String(from.d).padStart(2, '0')}`,
+    );
+  }
+  const fromMonth = MONTHS[from.m - 1];
+  const toMonth = MONTHS[to.m - 1];
+  if (from.y === to.y && from.m === to.m) {
+    return `${fromMonth} ${from.d}\u2013${to.d}, ${from.y}`;
+  }
+  if (from.y === to.y) {
+    return `${fromMonth} ${from.d} \u2013 ${toMonth} ${to.d}, ${to.y}`;
+  }
+  return `${fromMonth} ${from.d}, ${from.y} \u2013 ${toMonth} ${to.d}, ${to.y}`;
+}
+
 function optionalNumber(value: string | undefined): number | null {
   const raw = String(value ?? '').trim();
   if (!raw || raw === '-' || raw === '—') return null;
@@ -111,6 +150,32 @@ export function plannedSinePercent(elapsed: number, duration: number): number | 
   const radians = ((180 * (elapsed / duration) - 90) * EXCEL_PI) / 180;
   const fraction = ((Math.sin(radians) + 1) * 50) / 100;
   return fraction * 100;
+}
+
+/**
+ * Planned % for a date using the STEWA sheet (D17 = NTP+9, D27 = as-of − D17 + 1 − suspension, D29 = I29 sine).
+ * Suspension days are ignored for the original schedule and counted only through `asOf` for the revised schedule.
+ * The curve is 0 before the STEWA period starts and 100 once elapsed reaches the contract duration.
+ */
+export function stewaPlannedFromSchedule(input: {
+  noticeToProceed: string;
+  contractDurationDays: number;
+  asOf: string;
+  suspensionDays?: number;
+}): number {
+  const duration = Math.floor(input.contractDurationDays);
+  const periodStart = addCalendarDays(input.noticeToProceed, 9);
+  if (!periodStart || duration <= 0) return 0;
+  const asOf = input.asOf.slice(0, 10);
+  if (asOf < periodStart) return 0;
+  const span = excelDateDiff(asOf, periodStart);
+  if (span == null) return 0;
+  const elapsed = span + 1 - Math.max(0, Math.floor(input.suspensionDays ?? 0));
+  if (elapsed <= 0) return 0;
+  if (elapsed >= duration) return 100;
+  const planned = plannedSinePercent(elapsed, duration);
+  if (planned == null || !Number.isFinite(planned)) return 0;
+  return Math.round(Math.min(100, Math.max(0, planned)) * 100) / 100;
 }
 
 function round2(value: number): string {

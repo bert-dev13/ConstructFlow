@@ -35,6 +35,7 @@ import { syncProgressCharts } from './sCurves';
 import { getPayItem, type PayItem } from './payItems';
 import { BASE_URL } from '../paths';
 import { pickProjectSwa, swaPhysicalAccomplishmentPct } from '../iarProgress';
+import { designationForRole, safeSignatureSrc } from '../signatories';
 
 function enrichReportData(
   reportType: 'SWA' | 'STEWA' | 'IAR',
@@ -73,6 +74,15 @@ function stringArray(value: unknown): string[] {
     .filter((item) => item.length > 0);
 }
 
+function signatoryFields(data: Record<string, unknown>) {
+  return {
+    signatory_name: data.signatoryName != null ? String(data.signatoryName) : null,
+    signatory_designation: data.signatoryDesignation != null ? String(data.signatoryDesignation) : null,
+    signatory_initials: data.signatoryInitials != null ? String(data.signatoryInitials) : null,
+    signatory_signature: data.signatorySignature != null ? String(data.signatorySignature) : null,
+  };
+}
+
 function actorState(value: unknown): ApprovalActorState | null {
   if (!value || typeof value !== 'object') return null;
   const data = value as Record<string, unknown>;
@@ -80,6 +90,7 @@ function actorState(value: unknown): ApprovalActorState | null {
     approved_by: data.approvedBy != null ? String(data.approvedBy) : null,
     approved_role: data.approvedRole != null ? String(data.approvedRole) : null,
     approved_at: data.approvedAt != null ? String(data.approvedAt) : null,
+    ...signatoryFields(data),
   };
 }
 
@@ -92,7 +103,67 @@ function contractorConfirmationState(value: unknown): ContractorConfirmationStat
     confirmed_at: data.confirmedAt != null ? String(data.confirmedAt) : null,
     confirms_swa: data.confirmsSwa === true,
     confirms_iar: data.confirmsIar === true,
+    ...signatoryFields(data),
   };
+}
+
+const SIGNATORY_SLOTS = ['engineer_1', 'engineer_2', 'engineer_3', 'engineer_4', 'contractor'] as const;
+
+function typedSignatory(role: Role, reportData: unknown): { name: string; initials: string } {
+  const data =
+    reportData && typeof reportData === 'object' ? (reportData as Record<string, unknown>) : {};
+  return {
+    name: String(data[`sig_${role}_name`] ?? '').trim(),
+    initials: String(data[`sig_${role}_initials`] ?? '').trim(),
+  };
+}
+
+/** Keep every other role's saved name and initials. A save may change only the saver's slot. */
+function retainOtherSignatories(next: Record<string, unknown>, previous: unknown, role: string | undefined) {
+  const prev = previous && typeof previous === 'object' ? (previous as Record<string, unknown>) : {};
+  for (const slot of SIGNATORY_SLOTS) {
+    if (slot === role) continue;
+    for (const key of [`sig_${slot}_name`, `sig_${slot}_initials`]) {
+      if (Object.prototype.hasOwnProperty.call(prev, key)) next[key] = prev[key];
+      else delete next[key];
+    }
+  }
+}
+
+function reportDataWithOwnSignatory(
+  reportData: unknown,
+  role: Role,
+  entered: { name?: string; initials?: string },
+): Record<string, unknown> {
+  const next =
+    reportData && typeof reportData === 'object' ? { ...(reportData as Record<string, unknown>) } : {};
+  next[`sig_${role}_name`] = String(entered.name ?? '').trim();
+  next[`sig_${role}_initials`] = String(entered.initials ?? '').trim();
+  return next;
+}
+
+async function actingSignatory(role: Role, entered?: { name?: string; initials?: string }) {
+  const approvedAt = nowIso();
+  const uid = auth.currentUser?.uid ?? null;
+  let designation = '';
+  let signature: string | null = null;
+  if (uid) {
+    const snap = await getDoc(doc(db, COLLECTIONS.users, uid));
+    if (snap.exists()) {
+      const data = snap.data() as Record<string, unknown>;
+      designation = String(data.designation ?? data.position ?? data.title ?? '').trim();
+      signature = safeSignatureSrc(String(data.signature ?? data.signatureUrl ?? ''));
+    }
+  }
+  return omitUndefined({
+    approvedBy: uid,
+    approvedRole: role,
+    approvedAt,
+    signatoryName: String(entered?.name ?? '').trim(),
+    signatoryDesignation: designationForRole(role, designation),
+    signatoryInitials: String(entered?.initials ?? '').trim(),
+    signatorySignature: signature,
+  });
 }
 
 function approvalFlowState(value: unknown): ReportApprovalFlow | undefined {
@@ -100,6 +171,7 @@ function approvalFlowState(value: unknown): ReportApprovalFlow | undefined {
   const data = value as Record<string, unknown>;
   return {
     contractor_confirmation: contractorConfirmationState(data.contractorConfirmation),
+    engineer_1: actorState(data.engineer1),
     engineer_2: actorState(data.engineer2),
     engineer_3: actorState(data.engineer3),
     engineer_4: actorState(data.engineer4),
@@ -720,6 +792,7 @@ export async function saveReportFs(payload: {
   const lineItems = sanitizeLineItemsForFirestore(
     standardized.lineItems ?? payload.line_items,
   );
+  const saver = await getAccessContext();
 
   if (payload.id) {
     const id = asId(payload.id);
@@ -727,6 +800,7 @@ export async function saveReportFs(payload: {
     const existing = await getDoc(ref);
     if (!existing.exists()) throw new Error('Report not found');
     const prev = existing.data() as Record<string, unknown>;
+    retainOtherSignatories(reportData, prev.reportData, saver?.role);
     const existingEditUserIds = stringArray(prev.editUserIds);
     const nextEditUserIds =
       existingEditUserIds.length > 0
@@ -779,6 +853,7 @@ export async function saveReportFs(payload: {
     return { report: mapReport(snap.id, snap.data() as Record<string, unknown>) };
   }
 
+  retainOtherSignatories(reportData, undefined, saver?.role);
   const reportNumber = await nextReportNumber(
     payload.report_type,
     String(reportData.report_date ?? '') || null,
@@ -908,33 +983,29 @@ export async function contractorConfirmFs(reportId: string | number, actorName?:
   if (String(data.status) !== 'pending_contractor') {
     throw new Error('Report is not awaiting contractor confirmation');
   }
+  const previousFlow = ((data.approvalFlow as Record<string, unknown> | undefined) ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const contractorMark = await actingSignatory('contractor', typedSignatory('contractor', data.reportData));
   await updateDoc(ref, {
     status: 'contractor_confirmed',
-    approvalFlow:
-      data.reportType === 'IAR'
-        ? {
-            contractorConfirmation: {
-              confirmedBy: access?.uid ?? null,
-              confirmedRole: access?.role ?? 'contractor',
-              confirmedAt: nowIso(),
-              confirmsSwa: true,
-              confirmsIar: true,
-            },
-            engineer2: null,
-            engineer3: null,
-            engineer4: null,
-            currentStage: 'engineer_2',
-            correctionCycle: Number(
-              (data.approvalFlow as Record<string, unknown> | undefined)?.correctionCycle ?? 0,
-            ),
-            lastCorrectionReason:
-              (data.approvalFlow as Record<string, unknown> | undefined)?.lastCorrectionReason ?? null,
-            lastCorrectionBy:
-              (data.approvalFlow as Record<string, unknown> | undefined)?.lastCorrectionBy ?? null,
-            lastCorrectionRole:
-              (data.approvalFlow as Record<string, unknown> | undefined)?.lastCorrectionRole ?? null,
-          }
-        : data.approvalFlow ?? null,
+    approvalFlow: {
+      ...previousFlow,
+      contractorConfirmation: {
+        ...contractorMark,
+        confirmedBy: contractorMark.approvedBy ?? access?.uid ?? null,
+        confirmedRole: 'contractor',
+        confirmedAt: contractorMark.approvedAt,
+        confirmsSwa: true,
+        confirmsIar: true,
+      },
+      currentStage: 'engineer_2',
+      correctionCycle: Number(previousFlow.correctionCycle ?? 0),
+      lastCorrectionReason: previousFlow.lastCorrectionReason ?? null,
+      lastCorrectionBy: previousFlow.lastCorrectionBy ?? null,
+      lastCorrectionRole: previousFlow.lastCorrectionRole ?? null,
+    },
     updatedAt: nowIso(),
   });
   await writeAudit(id, 'contractor_confirmed', {}, actorName);
@@ -974,16 +1045,36 @@ export async function submitReportFs(
     /* keep prior accessUserIds */
   }
 
+  const submitAccess = await getAccessContext();
+  const previousFlow = ((data.approvalFlow as Record<string, unknown> | undefined) ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const submitterRole = submitAccess?.role;
+  const submitterMark =
+    submitterRole === 'engineer_1' || submitterRole === 'contractor'
+      ? await actingSignatory(submitterRole, typedSignatory(submitterRole, data.reportData))
+      : null;
   await updateDoc(ref, {
     status: 'pending_review',
     accessUserIds,
-    approvalFlow:
-      String(data.reportType) === 'IAR'
+    approvalFlow: {
+      ...previousFlow,
+      ...(submitterRole === 'engineer_1' && submitterMark ? { engineer1: submitterMark } : {}),
+      ...(submitterRole === 'contractor' && submitterMark
         ? {
-            ...((data.approvalFlow as Record<string, unknown> | undefined) ?? {}),
-            currentStage: 'engineer_2',
+            contractorConfirmation: {
+              ...submitterMark,
+              confirmedBy: submitterMark.approvedBy,
+              confirmedRole: 'contractor',
+              confirmedAt: submitterMark.approvedAt,
+              confirmsSwa: true,
+              confirmsIar: true,
+            },
           }
-        : (data.approvalFlow ?? null),
+        : {}),
+      currentStage: 'engineer_2',
+    },
     updatedAt: nowIso(),
   });
   await writeAudit(id, 'submitted', {}, actorName);
@@ -1097,6 +1188,7 @@ export async function approveReportFs(
   actorRole?: string,
   _generate?: { s_curve?: boolean; pdm?: boolean; bar_chart?: boolean; swa?: boolean; stewa?: boolean },
   actorName?: string,
+  signatory?: { name?: string; initials?: string },
 ) {
   const access = await getAccessContext();
   const id = asId(reportId);
@@ -1116,15 +1208,15 @@ export async function approveReportFs(
     if (status !== 'pending_review' && status !== 'contractor_confirmed') {
       throw new Error('Report is not pending Engineer II review');
     }
+    const engineer2Mark = await actingSignatory('engineer_2', signatory);
     await updateDoc(ref, {
       status: 'with_engineer_3',
-      approvalFlow: isIar
-        ? {
-            ...approvalFlowData,
-            engineer2: { approvedBy: actorId, approvedRole: role, approvedAt: nowIso() },
-            currentStage: 'engineer_3',
-          }
-        : data.approvalFlow ?? null,
+      reportData: reportDataWithOwnSignatory(data.reportData, 'engineer_2', signatory ?? {}),
+      approvalFlow: {
+        ...approvalFlowData,
+        engineer2: { ...engineer2Mark, approvedBy: actorId, approvedRole: role },
+        currentStage: 'engineer_3',
+      },
       updatedAt: nowIso(),
     });
     await writeAudit(id, 'approved_forwarded_e3', {}, actorName);
@@ -1138,15 +1230,15 @@ export async function approveReportFs(
     if (isIar && !approvalFlowData.engineer2) {
       throw new Error('Engineer II approval is required first');
     }
+    const engineer3Mark = await actingSignatory('engineer_3', signatory);
     await updateDoc(ref, {
       status: 'with_engineer_4',
-      approvalFlow: isIar
-        ? {
-            ...approvalFlowData,
-            engineer3: { approvedBy: actorId, approvedRole: role, approvedAt: nowIso() },
-            currentStage: 'engineer_4',
-          }
-        : data.approvalFlow ?? null,
+      reportData: reportDataWithOwnSignatory(data.reportData, 'engineer_3', signatory ?? {}),
+      approvalFlow: {
+        ...approvalFlowData,
+        engineer3: { ...engineer3Mark, approvedBy: actorId, approvedRole: role },
+        currentStage: 'engineer_4',
+      },
       updatedAt: nowIso(),
     });
     await writeAudit(id, 'approved_forwarded_e4', {}, actorName);
@@ -1162,15 +1254,15 @@ export async function approveReportFs(
     if (isIar && (!approvalFlowData.engineer2 || !approvalFlowData.engineer3)) {
       throw new Error('Engineer II and Engineer III approvals are required first');
     }
+    const engineer4Mark = await actingSignatory('engineer_4', signatory);
     await updateDoc(ref, {
       status: 'approved',
-      approvalFlow: isIar
-        ? {
-            ...approvalFlowData,
-            engineer4: { approvedBy: actorId, approvedRole: role, approvedAt: nowIso() },
-            currentStage: 'engineer_4',
-          }
-        : data.approvalFlow ?? null,
+      reportData: reportDataWithOwnSignatory(data.reportData, 'engineer_4', signatory ?? {}),
+      approvalFlow: {
+        ...approvalFlowData,
+        engineer4: { ...engineer4Mark, approvedBy: actorId, approvedRole: role },
+        currentStage: 'engineer_4',
+      },
       releaseState: isIar
         ? {
             ...((data.releaseState as Record<string, unknown> | undefined) ?? {}),
@@ -1232,20 +1324,18 @@ export async function rejectReportFs(
     status: 'rejected',
     rejectionReason: reason,
     editUserIds: reopenedEditors,
-    approvalFlow:
-      String(data.reportType) === 'IAR'
-        ? {
-            contractorConfirmation: null,
-            engineer2: null,
-            engineer3: null,
-            engineer4: null,
-            currentStage: 'draft',
-            correctionCycle: Number(prevApprovalFlow.correctionCycle ?? 0) + 1,
-            lastCorrectionReason: reason,
-            lastCorrectionBy: _actorId != null ? asId(_actorId) : access?.uid ?? null,
-            lastCorrectionRole: access?.role ?? null,
-          }
-        : data.approvalFlow ?? null,
+    approvalFlow: {
+      contractorConfirmation: null,
+      engineer1: null,
+      engineer2: null,
+      engineer3: null,
+      engineer4: null,
+      currentStage: 'draft',
+      correctionCycle: Number(prevApprovalFlow.correctionCycle ?? 0) + 1,
+      lastCorrectionReason: reason,
+      lastCorrectionBy: _actorId != null ? asId(_actorId) : access?.uid ?? null,
+      lastCorrectionRole: access?.role ?? null,
+    },
     emailStatus: 'NOT_SENT',
     emailSentAt: null,
     emailError: null,

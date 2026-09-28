@@ -25,6 +25,7 @@ import { Pagination } from '../components/ui/Pagination';
 import { PreviewModal } from '../components/ui/PreviewModal';
 import { EmailNoticeStatus } from '../components/EmailNoticeStatus';
 import { usePagination } from '../hooks/usePagination';
+import { documentSignatories } from '../lib/signatories';
 import { buildOfficialReportHtml } from '../lib/officialReportHtml';
 import { buildReportPreviewHtml } from '../lib/reportVerification';
 import { downloadReportPreviewPdf } from '../lib/downloadReportPdf';
@@ -71,6 +72,7 @@ export function WorkflowPage() {
   const [reports, setReports] = useState<SwaStewaReport[]>([]);
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [comments, setComments] = useState<Record<string, string>>({});
+  const [signatoryDrafts, setSignatoryDrafts] = useState<Record<string, { name: string; initials: string }>>({});
   const [releaseSelections, setReleaseSelections] = useState<
     Record<string, { pdm?: boolean; bar_chart?: boolean; s_curve?: boolean; swa?: boolean; stewa?: boolean }>
   >({});
@@ -298,11 +300,13 @@ export function WorkflowPage() {
     setError('');
     setSuccess('');
     try {
+      const draft = signatoryDrafts[reportId] ?? { name: '', initials: '' };
       const result = await approveReport(
         reportId,
         actorId,
         user?.role,
         releaseSelections[reportId],
+        draft,
       );
       if (result.status === 'with_engineer_3') {
         setSuccess('Report approved. Forwarded to Engineer III.');
@@ -597,43 +601,81 @@ export function WorkflowPage() {
                   subtitle="No reports are pending your review."
                 />
               ) : (
-                <div className="space-y-3">
-                  {pendingPaging.pageItems.map((rpt) => (
-                    <div key={rpt.id} className="rounded-xl border border-border bg-surface/40 p-4">
-                      <div className="flex flex-wrap items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="font-semibold text-text">{rpt.report_number}</p>
-                          <p className="mt-0.5 text-sm text-text-muted">
-                            {rpt.report_type} · {reportTitle(rpt)}
-                          </p>
-                          <p className="mt-0.5 text-xs text-text-muted">
-                            By {reportAuthor(rpt)} · {reportPeriod(rpt)}
-                          </p>
-                        </div>
-                        <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] font-semibold uppercase text-amber-800">
+                <div className="space-y-2">
+                  {pendingPaging.pageItems.map((rpt) => {
+                    const mine = documentSignatories(rpt.report_type).find((slot) => slot.slot === user?.role);
+                    const draft = signatoryDrafts[rpt.id] ?? { name: '', initials: '' };
+                    const period = reportPeriod(rpt);
+                    const roleLabel = mine?.label.replace(/:$/, '') ?? '';
+                    return (
+                    <div key={rpt.id} className="@container rounded-xl border border-border bg-card px-3 py-2.5">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <span className="rounded-md bg-surface-muted px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-text-muted">
+                          {rpt.report_type}
+                        </span>
+                        <p className="font-semibold leading-tight text-text">{rpt.report_number}</p>
+                        <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-800">
                           {STATUS_LABELS[rpt.status] ?? rpt.status.replace(/_/g, ' ')}
                         </span>
                       </div>
+                      <p className="mt-1 truncate text-sm text-text">{reportTitle(rpt)}</p>
+                      <p className="truncate text-xs text-text-muted">
+                        By {reportAuthor(rpt)}
+                        {period !== rpt.report_number ? ` · ${period}` : ''}
+                      </p>
 
-                      <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-start">
+                      {mine ? (
+                        <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface/70 px-2 py-1.5">
+                          <div className="min-w-[6.5rem] shrink-0">
+                            <p className="truncate text-xs font-semibold leading-tight text-text">{roleLabel}</p>
+                            <p className="truncate text-[11px] leading-tight text-text-muted">{mine.officeTitle}</p>
+                          </div>
+                          <input
+                            value={draft.name}
+                            placeholder="Name"
+                            aria-label={`${roleLabel} name`}
+                            onChange={(e) =>
+                              setSignatoryDrafts((current) => ({
+                                ...current,
+                                [rpt.id]: { ...draft, name: e.target.value },
+                              }))
+                            }
+                            className="h-8 min-w-[8rem] flex-1 rounded-md border border-border bg-card px-2 text-sm text-text outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                          />
+                          <input
+                            value={draft.initials}
+                            placeholder="Init."
+                            aria-label={`${roleLabel} initials`}
+                            onChange={(e) =>
+                              setSignatoryDrafts((current) => ({
+                                ...current,
+                                [rpt.id]: { ...draft, initials: e.target.value },
+                              }))
+                            }
+                            className="h-8 w-16 shrink-0 rounded-md border border-border bg-card px-2 text-sm text-text outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                          />
+                        </div>
+                      ) : null}
+
+                      <div className="mt-2 flex flex-col gap-2 @min-[42rem]:flex-row @min-[42rem]:items-center">
                         <textarea
                           value={comments[rpt.id] ?? ''}
                           onChange={(e) => setComments((c) => ({ ...c, [rpt.id]: e.target.value }))}
                           placeholder="Revision comment…"
-                          className="min-h-[64px] flex-1 rounded-lg border border-border bg-card p-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
-                          rows={2}
+                          className="h-8 min-h-8 flex-1 resize-y rounded-md border border-border bg-card px-2 py-1.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                          rows={1}
                         />
-                        <div className="flex flex-wrap gap-2 lg:w-40 lg:flex-col">
+                        <div className="flex flex-wrap items-center gap-1.5">
                           <button
                             type="button"
                             onClick={() => void openReportPreview(rpt)}
-                            className="rounded-lg border border-border px-3 py-2 text-center text-xs font-semibold text-text-muted hover:bg-surface-muted"
+                            className="rounded-md border border-border px-2.5 py-1.5 text-xs font-semibold text-text-muted hover:bg-surface-muted"
                           >
                             Preview
                           </button>
                           <Link
                             to={`/swa-stewa/edit?id=${encodeURIComponent(rpt.id)}`}
-                            className="rounded-lg border border-border px-3 py-2 text-center text-xs font-semibold text-text-muted hover:bg-surface-muted"
+                            className="rounded-md border border-border px-2.5 py-1.5 text-xs font-semibold text-text-muted hover:bg-surface-muted"
                           >
                             Open
                           </Link>
@@ -641,7 +683,7 @@ export function WorkflowPage() {
                             type="button"
                             disabled={actionId === rpt.id}
                             onClick={() => handleApprove(rpt.id)}
-                            className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                            className="rounded-md bg-primary px-2.5 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
                           >
                             {actionId === rpt.id ? 'Approving…' : 'Approve'}
                           </button>
@@ -649,7 +691,7 @@ export function WorkflowPage() {
                             type="button"
                             disabled={actionId === rpt.id}
                             onClick={() => handleRevise(rpt.id)}
-                            className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 disabled:opacity-50"
+                            className="rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs font-semibold text-red-700 disabled:opacity-50"
                           >
                             Request revision
                           </button>
@@ -657,7 +699,7 @@ export function WorkflowPage() {
                       </div>
 
                       {user?.role === 'engineer_4' && rpt.report_type === 'IAR' && (
-                        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
+                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
                           {([
                             ['swa', 'SWA'],
                             ['stewa', 'STEWA'],
@@ -685,7 +727,8 @@ export function WorkflowPage() {
                         </div>
                       )}
                     </div>
-                  ))}
+                    );
+                  })}
                   <Pagination
                     page={pendingPaging.page}
                     totalPages={pendingPaging.totalPages}
@@ -818,6 +861,14 @@ export function WorkflowPage() {
                           </td>
                           <td className="px-4 py-3 text-right">
                             <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                              {canUserCreateReportType(user?.role, rpt.report_type) && (
+                                <Link
+                                  to={`/swa-stewa/new/${rpt.report_type}/?copy=${encodeURIComponent(rpt.id)}`}
+                                  className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted"
+                                >
+                                  Copy
+                                </Link>
+                              )}
                               {showEditActions ? (
                                 <Link
                                   to={`/swa-stewa/edit?id=${encodeURIComponent(rpt.id)}`}

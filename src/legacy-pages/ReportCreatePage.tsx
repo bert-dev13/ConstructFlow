@@ -48,7 +48,6 @@ export function ReportCreatePage() {
   const {
     state: form,
     set: setForm,
-    replace: replaceForm,
     undo,
     redo,
     canUndo,
@@ -67,18 +66,31 @@ export function ReportCreatePage() {
 
   useEffect(() => {
     if (!reportType) return;
+    let cancelled = false;
     fetchTemplates(reportType)
       .then((data) => {
+        if (cancelled) return;
         setConfig(data.config as unknown as TemplateConfig);
-        const initial: Record<string, string> = { period: CURRENT_PERIOD };
-        if (user?.name) initial.prepared_by = user.name;
-        (data.config.fields as unknown as TemplateField[]).forEach((f) => {
-          if (f.key === 'period') initial.period = CURRENT_PERIOD;
+        const templateFields = data.config.fields as unknown as TemplateField[];
+        setForm((prev) => {
+          const nextFields = { ...prev.fields };
+          if (!String(nextFields.period ?? '').trim()) nextFields.period = CURRENT_PERIOD;
+          if (user?.name && !String(nextFields.prepared_by ?? '').trim()) {
+            nextFields.prepared_by = user.name;
+          }
+          templateFields.forEach((field) => {
+            if (field.key === 'period' && !String(nextFields.period ?? '').trim()) {
+              nextFields.period = CURRENT_PERIOD;
+            }
+          });
+          return { ...prev, fields: nextFields };
         });
-        replaceForm({ fields: initial, projectId: initialProjectRef.current, period: CURRENT_PERIOD });
       })
       .catch(() => setError('Could not load template. Check that templates/manifest.json exists.'));
-  }, [reportType, user, replaceForm]);
+    return () => {
+      cancelled = true;
+    };
+  }, [reportType, setForm, user?.name]);
 
   useUndoRedoKeyboard(undo, redo, !!reportType);
 

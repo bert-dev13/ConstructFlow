@@ -20,35 +20,26 @@ export function useUndoRedo<T>(initial: T) {
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
 
-  const syncMeta = useCallback(() => {
+  useEffect(() => {
     setCanUndo(pastRef.current.length > 0);
     setCanRedo(futureRef.current.length > 0);
+  }, [present]);
+
+  const set = useCallback((updater: T | ((prev: T) => T)) => {
+    setPresent((prev) => {
+      const next = typeof updater === 'function' ? (updater as (p: T) => T)(prev) : updater;
+      if (sameSnapshot(prev, next)) return prev;
+      pastRef.current = [...pastRef.current, clone(prev)].slice(-MAX_HISTORY);
+      futureRef.current = [];
+      return next;
+    });
   }, []);
 
-  const set = useCallback(
-    (updater: T | ((prev: T) => T)) => {
-      setPresent((prev) => {
-        const next = typeof updater === 'function' ? (updater as (p: T) => T)(prev) : updater;
-        if (sameSnapshot(prev, next)) return prev;
-        pastRef.current = [...pastRef.current, clone(prev)].slice(-MAX_HISTORY);
-        futureRef.current = [];
-        syncMeta();
-        // Updater already returns a new object — avoid a second deep clone on every keystroke.
-        return next;
-      });
-    },
-    [syncMeta],
-  );
-
-  const replace = useCallback(
-    (next: T) => {
-      pastRef.current = [];
-      futureRef.current = [];
-      setPresent(clone(next));
-      syncMeta();
-    },
-    [syncMeta],
-  );
+  const replace = useCallback((next: T) => {
+    pastRef.current = [];
+    futureRef.current = [];
+    setPresent(clone(next));
+  }, []);
 
   const undo = useCallback(() => {
     if (pastRef.current.length === 0) return;
@@ -56,10 +47,9 @@ export function useUndoRedo<T>(initial: T) {
       const previous = pastRef.current[pastRef.current.length - 1];
       pastRef.current = pastRef.current.slice(0, -1);
       futureRef.current = [clone(current), ...futureRef.current];
-      syncMeta();
       return clone(previous);
     });
-  }, [syncMeta]);
+  }, []);
 
   const redo = useCallback(() => {
     if (futureRef.current.length === 0) return;
@@ -67,10 +57,9 @@ export function useUndoRedo<T>(initial: T) {
       const next = futureRef.current[0];
       futureRef.current = futureRef.current.slice(1);
       pastRef.current = [...pastRef.current, clone(current)];
-      syncMeta();
       return clone(next);
     });
-  }, [syncMeta]);
+  }, []);
 
   return { state: present, set, replace, undo, redo, canUndo, canRedo };
 }

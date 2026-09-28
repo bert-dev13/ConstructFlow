@@ -353,11 +353,12 @@ export function WorkItemsTable({
                   <input
                     type="number"
                     step="0.01"
-                    className="w-24 rounded border border-border bg-surface-muted px-1 py-0.5 text-right text-text-muted"
+                    className="w-24 rounded border border-border px-1 py-0.5 text-right"
                     value={row.thisPeriod ? Number(row.thisPeriod.toFixed(2)) : ''}
-                    readOnly
-                    disabled
-                    title="Auto: TO DATE − PREVIOUS"
+                    onChange={(e) =>
+                      update(row.id, { thisPeriod: parseFloat(e.target.value) || 0 })
+                    }
+                    title="This period accomplishment amount (peso)"
                   />
                 )}
               </td>
@@ -421,7 +422,8 @@ export function WorkItemsTable({
                 <td className="p-2 text-right">{formatPct(totals.totalRevisedWeightPct)}</td>
               </>
             )}
-            <td colSpan={2} />
+            <td />
+            <td className="p-2 text-right">{formatMoney(totals.totalThisAccomplishment)}</td>
             <td />
             <td className="p-2 text-right">{formatPct(totals.totalToDateWeightPct)}</td>
             <td colSpan={readOnly ? 1 : 2} />
@@ -450,8 +452,8 @@ export function WorkItemsTable({
             )}
           </p>
           <p className="mt-1 text-xs text-text-muted">
-            <strong>Formulas:</strong> TO DATE is entered manually; THIS PERIOD = TO DATE −
-            PREVIOUS; Weight % = (Contract Amt ÷ Total Project Cost) × 100;
+            <strong>Formulas:</strong> TO DATE and THIS PERIOD are entered manually.
+            Weight % = (Contract Amt ÷ Total Project Cost) × 100;
             WT% Accomp. = (TO DATE ÷ Total Project Cost) × 100; Remarks default to the Excel status
             rule and can be edited.
           </p>

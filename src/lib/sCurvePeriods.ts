@@ -234,6 +234,144 @@ export function buildTheoreticalSCurvePeriods(input: {
   return rows;
 }
 
+export interface SCurvePeriodEdit {
+  targetAccomplishmentPct: number;
+}
+
+/** Read a saved period-edit map. Keys are 1-based period indexes. */
+export function readSCurvePeriodEdits(raw: unknown): Record<string, SCurvePeriodEdit> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const edits: Record<string, SCurvePeriodEdit> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const pct =
+      value && typeof value === 'object'
+        ? Number((value as { targetAccomplishmentPct?: unknown }).targetAccomplishmentPct)
+        : Number(value);
+    if (!Number.isFinite(pct)) continue;
+    edits[key] = { targetAccomplishmentPct: round4(Math.max(0, pct)) };
+  }
+  return edits;
+}
+
+export function readStoredSCurvePeriods(raw: unknown): SCurvePeriodRow[] {
+  if (!Array.isArray(raw)) return [];
+  const rows: SCurvePeriodRow[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const item = entry as Record<string, unknown>;
+    const periodIndex = Number(item.periodIndex);
+    if (!Number.isFinite(periodIndex)) continue;
+    rows.push({
+      periodIndex,
+      label: String(item.label ?? periodLabel('30_day', periodIndex)),
+      startDate: String(item.startDate ?? ''),
+      endDate: String(item.endDate ?? ''),
+      targetAccomplishmentPct: Number(item.targetAccomplishmentPct) || 0,
+      targetAccomplishmentPhp: Number(item.targetAccomplishmentPhp) || 0,
+      cumulativePct: Number(item.cumulativePct) || 0,
+      cumulativePhp: Number(item.cumulativePhp) || 0,
+    });
+  }
+  return rows.sort((a, b) => a.periodIndex - b.periodIndex);
+}
+
+function baselineKnots(baseline: SCurvePeriodRow[]): { date: string; pct: number; php: number }[] {
+  const first = baseline[0];
+  return [
+    { date: first.startDate, pct: 0, php: 0 },
+    ...baseline.map((row) => ({
+      date: row.endDate,
+      pct: row.cumulativePct,
+      php: row.cumulativePhp,
+    })),
+  ];
+}
+
+function sampleBaselineAt(
+  baseline: SCurvePeriodRow[],
+  date: string,
+): { pct: number; php: number } {
+  const knots = baselineKnots(baseline);
+  const last = knots[knots.length - 1];
+  if (date <= knots[0].date) return { pct: 0, php: 0 };
+  if (date >= last.date) return { pct: last.pct, php: last.php };
+  for (let index = 1; index < knots.length; index += 1) {
+    const next = knots[index];
+    if (date > next.date) continue;
+    const prev = knots[index - 1];
+    const span = Date.parse(`${next.date}T00:00:00Z`) - Date.parse(`${prev.date}T00:00:00Z`);
+    if (span <= 0) return { pct: next.pct, php: next.php };
+    const t = (Date.parse(`${date}T00:00:00Z`) - Date.parse(`${prev.date}T00:00:00Z`)) / span;
+    return {
+      pct: prev.pct + (next.pct - prev.pct) * t,
+      php: prev.php + (next.php - prev.php) * t,
+    };
+  }
+  return { pct: last.pct, php: last.php };
+}
+
+/**
+ * Split the frozen baseline into `periodCount` rows.
+ * Cumulative % and PHP stay on the original curve. Only the checkpoint dates change.
+ */
+export function sampleBaselinePeriods(input: {
+  baseline: SCurvePeriodRow[];
+  periodCount: number;
+  reportingInterval: SCurveReportingInterval;
+}): SCurvePeriodRow[] {
+  const baseline = input.baseline;
+  if (baseline.length === 0) return [];
+  const count = Math.max(1, Math.floor(input.periodCount) || baseline.length);
+  if (count === baseline.length) return baseline.map((row) => ({ ...row }));
+
+  const startMs = Date.parse(`${baseline[0].startDate}T00:00:00Z`);
+  const endMs = Date.parse(`${baseline[baseline.length - 1].endDate}T00:00:00Z`);
+  const last = baseline[baseline.length - 1];
+  const rows: SCurvePeriodRow[] = [];
+  let previousPct = 0;
+  let previousPhp = 0;
+
+  for (let periodIndex = 1; periodIndex <= count; periodIndex += 1) {
+    const segStart = periodIndex === 1 ? startMs : startMs + Math.round(((periodIndex - 1) / count) * (endMs - startMs));
+    const segEnd = periodIndex === count ? endMs : startMs + Math.round((periodIndex / count) * (endMs - startMs));
+    const endDate = new Date(segEnd).toISOString().slice(0, 10);
+    const sampled = periodIndex === count ? { pct: last.cumulativePct, php: last.cumulativePhp } : sampleBaselineAt(baseline, endDate);
+    const cumulativePct = round4(sampled.pct);
+    const cumulativePhp = round4(sampled.php);
+    rows.push({
+      periodIndex,
+      label: periodLabel(input.reportingInterval, periodIndex),
+      startDate: new Date(segStart).toISOString().slice(0, 10),
+      endDate,
+      cumulativePct,
+      cumulativePhp,
+      targetAccomplishmentPct: round4(cumulativePct - previousPct),
+      targetAccomplishmentPhp: round4(cumulativePhp - previousPhp),
+    });
+    previousPct = cumulativePct;
+    previousPhp = cumulativePhp;
+  }
+  return rows;
+}
+
+/** Replace this-period target % without moving cumulative Target Plan values. */
+export function applySCurvePeriodEdits(
+  rows: SCurvePeriodRow[],
+  edits: Record<string, SCurvePeriodEdit>,
+  totalContractAmount: number,
+): SCurvePeriodRow[] {
+  return rows.map((row) => {
+    const edit = edits[String(row.periodIndex)];
+    if (!edit) return row;
+    const pct = round4(Math.max(0, edit.targetAccomplishmentPct));
+    return {
+      ...row,
+      targetAccomplishmentPct: pct,
+      targetAccomplishmentPhp: round4((pct * Math.max(0, totalContractAmount)) / 100),
+    };
+  });
+}
+
 export function buildTheoreticalBarChartTasks(input: {
   totalPeriods: number;
   reportingInterval?: SCurveReportingInterval;

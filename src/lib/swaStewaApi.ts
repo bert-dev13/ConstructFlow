@@ -40,6 +40,10 @@ export interface ApprovalActorState {
   approved_by?: string | null;
   approved_role?: string | null;
   approved_at?: string | null;
+  signatory_name?: string | null;
+  signatory_designation?: string | null;
+  signatory_initials?: string | null;
+  signatory_signature?: string | null;
 }
 
 export interface ContractorConfirmationState {
@@ -48,10 +52,15 @@ export interface ContractorConfirmationState {
   confirmed_at?: string | null;
   confirms_swa: boolean;
   confirms_iar: boolean;
+  signatory_name?: string | null;
+  signatory_designation?: string | null;
+  signatory_initials?: string | null;
+  signatory_signature?: string | null;
 }
 
 export interface ReportApprovalFlow {
   contractor_confirmation?: ContractorConfirmationState | null;
+  engineer_1?: ApprovalActorState | null;
   engineer_2?: ApprovalActorState | null;
   engineer_3?: ApprovalActorState | null;
   engineer_4?: ApprovalActorState | null;
@@ -180,8 +189,9 @@ export function approveReport(
   actorId?: string | number,
   actorRole?: string,
   generate?: { s_curve?: boolean; pdm?: boolean; bar_chart?: boolean; swa?: boolean; stewa?: boolean },
+  signatory?: { name?: string; initials?: string },
 ): Promise<{ status: string; message?: string; pdf_url?: string; public_url?: string }> {
-  return approveReportFs(reportId, actorId, actorRole, generate);
+  return approveReportFs(reportId, actorId, actorRole, generate, undefined, signatory);
 }
 
 export function rejectReport(reportId: string | number, reason: string, actorId?: string | number) {

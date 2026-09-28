@@ -264,7 +264,15 @@ export function ReportsPage() {
                     <td className="px-5 py-4"><StatusBadge status={rpt.status} /></td>
                     <td className="px-5 py-4"><div className="flex flex-wrap justify-end gap-2">
                       {canEditReport(rpt) && <Link to={`/swa-stewa/edit?id=${encodeURIComponent(rpt.id)}`} className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted hover:bg-surface-muted">Edit</Link>}
-                      {(reportIsViewOnly(user?.role, rpt.report_type) || isReviewer || isApprovedReport(rpt.status)) && (
+                      {canUserCreateReportType(user?.role, rpt.report_type) && (
+                        <Link
+                          to={`/swa-stewa/new/${rpt.report_type}/?copy=${encodeURIComponent(rpt.id)}`}
+                          className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted hover:bg-surface-muted"
+                        >
+                          Copy
+                        </Link>
+                      )}
+                      {(isContractor || reportIsViewOnly(user?.role, rpt.report_type) || isReviewer || isApprovedReport(rpt.status)) && (
                         <>
                           <button
                             type="button"
@@ -274,7 +282,14 @@ export function ReportsPage() {
                             Preview
                           </button>
                           <Link
-                            to={`/reports/view?id=${encodeURIComponent(rpt.id)}`}
+                            to={
+                              isContractor &&
+                              (rpt.status === 'draft' ||
+                                rpt.status === 'rejected' ||
+                                rpt.status === 'pending_contractor')
+                                ? `/swa-stewa/edit?id=${encodeURIComponent(rpt.id)}`
+                                : `/reports/view?id=${encodeURIComponent(rpt.id)}`
+                            }
                             className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-dark"
                           >
                             Open

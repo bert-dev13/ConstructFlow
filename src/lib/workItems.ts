@@ -13,6 +13,7 @@ export interface WorkItem {
   /** Optional revised quantity — used when showRevisedQuantity is on. */
   revisedQty?: number;
   previous: number;
+  /** Manually entered THIS PERIOD amount (peso). */
   thisPeriod: number;
   /** Manually entered TO DATE amount (peso). */
   toDateInput?: number;
@@ -186,8 +187,7 @@ export function computeWorkItems(
       item.toDateInput != null && Number.isFinite(Number(item.toDateInput))
         ? Number(item.toDateInput)
         : 0;
-    // THIS PERIOD = TO DATE − PREVIOUS
-    const thisPeriod = swaThisPeriodAmount(toDate, previous);
+    const thisPeriod = Number(item.thisPeriod) || 0;
 
     // WEIGHT % ACCOMPLISHMENT = (TO DATE / Total Project Cost) × 100
     const accomplishmentWeightPct = swaWeightPct(toDate, totalProjectCost);

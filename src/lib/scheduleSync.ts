@@ -87,8 +87,8 @@ export function applyPdmDerivatives<T extends {
 }
 
 /**
- * Map latest SWA/STEWA Actual Plan % onto bar-chart tasks (PHP ScheduleSync port).
- * Clears actuals when there is no Actual Plan yet (Target Plan only).
+ * Map the latest SWA/STEWA accomplishment onto bar-chart tasks.
+ * Planned bars stay on the original schedule. Actual bars appear once a progress percent is saved.
  */
 export function applyReportProgressToBarChart(
   barChartTasks: BarChartTask[],
@@ -104,7 +104,7 @@ export function applyReportProgressToBarChart(
   const chrono = swaStewaChronological(reportFeed);
   const tasks = barChartTasks.map((t) => ({ ...t, actualEndDay: null as number | null }));
 
-  if (chrono.length < 2) {
+  if (chrono.length < 1) {
     return {
       tasks,
       timeNow: 0,

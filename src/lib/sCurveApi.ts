@@ -2,16 +2,17 @@ import type { ReportProgressEntry } from '../components/ReportProgressFeed';
 import type { SCurvePoint } from '../types';
 import type { SCurveCostItem } from './sCurveItems';
 export type { SCurveCostItem } from './sCurveItems';
-export type { SCurvePeriodRow, SCurveReportingInterval } from './sCurvePeriods';
+export type { SCurvePeriodEdit, SCurvePeriodRow, SCurveReportingInterval } from './sCurvePeriods';
 import {
   generateSwaStewaSCurveFs,
   getSCurveFs,
   saveSCurveCostItemsFs,
+  saveSCurvePeriodsFs,
   saveSCurveSettingsFs,
 } from './firebase/sCurves';
 
-export function generateSwaStewaSCurve(projectId: string | number) {
-  return generateSwaStewaSCurveFs(projectId);
+export function generateSwaStewaSCurve(projectId: string | number, reportId: string) {
+  return generateSwaStewaSCurveFs(projectId, reportId);
 }
 
 export interface SCurveActivity {
@@ -41,6 +42,11 @@ export interface SCurveSnapshotSummary {
   captured_at: string;
   trigger_type: string;
   trigger_label: string | null;
+  as_of_date?: string;
+  as_of_label?: string | null;
+  source_report_id?: string | null;
+  source_report_type?: string | null;
+  revision?: number | null;
   schedule_status: string | null;
   slippage_pct: number | null;
   planned_pct: number | null;
@@ -75,6 +81,7 @@ export function getSCurve(
     activities: SCurveActivity[];
     cost_items: SCurveCostItem[];
     periods: import('./sCurvePeriods').SCurvePeriodRow[];
+    period_edits: Record<string, import('./sCurvePeriods').SCurvePeriodEdit>;
     total_contract_amount: number;
     total_weight_pct: number;
     synced_from_pdm: boolean;
@@ -99,6 +106,14 @@ export function getSCurve(
   }>;
 }
 
+export function saveSCurvePeriods(payload: {
+  project_id: string | number;
+  theoretical_total_periods?: number;
+  period_edits?: Record<string, import('./sCurvePeriods').SCurvePeriodEdit>;
+}) {
+  return saveSCurvePeriodsFs(payload);
+}
+
 export function saveSCurveSettings(payload: {
   project_id: string | number;
   curve_type: SCurveType;
@@ -115,7 +130,13 @@ export function saveSCurveSettings(payload: {
 
 export function saveSCurveCostItems(payload: {
   project_id: string | number;
-  items: Array<{ activityId: string; quantity: number; unitCost: number }>;
+  items: Array<{
+    activityId: string;
+    itemNo?: string;
+    description?: string;
+    quantity: number;
+    unitCost: number;
+  }>;
 }) {
   return saveSCurveCostItemsFs(payload) as Promise<{
     cost_items: SCurveCostItem[];

@@ -1,16 +1,21 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CartesianGrid,
+  DefaultZIndexes,
   Legend,
   Line,
   LineChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
+  usePlotArea,
+  useXAxisScale,
+  useYAxisScale,
   XAxis,
   YAxis,
+  ZIndexLayer,
 } from 'recharts';
 import { ProjectSelect } from '../components/ProjectSelect';
 import { DocumentsBackLink } from '../components/DocumentsBackLink';
@@ -20,10 +25,12 @@ import { useSelectedProject } from '../context/SelectedProjectContext';
 import { generateSwaStewaSCurve,
   getSCurve,
   saveSCurveCostItems,
+  saveSCurvePeriods,
   saveSCurveSettings,
   type SCurveActivity,
   type SCurveCostItem,
   type SCurveComparison,
+  type SCurvePeriodEdit,
   type SCurvePeriodRow,
   type SCurveReportingInterval,
   type ScheduleStatus,
@@ -32,12 +39,12 @@ import { generateSwaStewaSCurve,
 } from '../lib/sCurveApi';
 import { computeSCurveCostSummary } from '../lib/sCurveItems';
 import type { SCurvePoint } from '../types';
-import { exportSCurvePdf } from '../lib/chartPdfExport';
+import { exportSCurvePdf, formatChartPercent, placePercentLabels } from '../lib/chartPdfExport';
 import { NavIcon, type NavIconName } from '../components/NavIcon';
 import { Pagination } from '../components/ui/Pagination';
 import { PreviewModal } from '../components/ui/PreviewModal';
 import { usePagination } from '../hooks/usePagination';
-import { canEditProjectCharts } from '../lib/chartPermissions';
+import { canEditProjectCharts, canEditSCurvePeriods } from '../lib/chartPermissions';
 
 const STATUS_STYLES: Record<string, { badge: string; label: string }> = {
   target_only: { badge: 'bg-blue-50 text-blue-800', label: 'Target Plan only' },
@@ -47,16 +54,150 @@ const STATUS_STYLES: Record<string, { badge: string; label: string }> = {
   unknown: { badge: 'bg-surface-muted text-text-muted', label: 'Status unknown' },
 };
 
-const INTERVAL_LABELS: Record<SCurveReportingInterval, string> = {
-  '10_day': '10-Day Interval',
-  '30_day': '30-Day / Monthly',
-};
-
 function formatSnapshotLabel(version: SCurveSnapshotSummary): string {
-  const label = version.trigger_label ?? version.trigger_type.replace(/_/g, ' ');
-  if (label.startsWith('S-Curve')) return label;
-  const when = new Date(version.captured_at).toLocaleString();
-  return `${when} — ${label}`;
+  const label = version.trigger_label?.trim() ?? '';
+  if (label) return label;
+  const when = version.captured_at ? new Date(version.captured_at).toLocaleString() : 'Saved';
+  return `${when} — ${version.trigger_type.replace(/_/g, ' ')}`;
+}
+
+function sourceOptionLabel(entry: ReportProgressEntry): string {
+  const type = entry.reportType === 'STEWA' ? 'STEWA' : 'SWA';
+  const period = entry.asOfLabel?.trim() || entry.date;
+  return `${type} – As of ${period}`;
+}
+
+function SeriesDot({
+  cx,
+  cy,
+  payload,
+  series,
+  showDot,
+}: {
+  cx?: number;
+  cy?: number;
+  payload?: SCurvePoint;
+  series: 'target' | 'actual';
+  showDot: boolean;
+}) {
+  if (cx == null || cy == null || !Number.isFinite(cx) || !Number.isFinite(cy)) return <g />;
+  const target = payload?.originalPlan;
+  const actual = payload?.actual;
+  const close =
+    target != null &&
+    actual != null &&
+    Number.isFinite(target) &&
+    Number.isFinite(actual) &&
+    Math.abs(target - actual) <= 2;
+  if (!showDot && !close) return <g />;
+  if (close && series === 'target') {
+    return <circle cx={cx} cy={cy} r={7} fill="#2563eb" />;
+  }
+  if (close && series === 'actual') {
+    return <circle cx={cx} cy={cy} r={3.5} fill="#f97316" stroke="#ffffff" strokeWidth={1.5} />;
+  }
+  return <circle cx={cx} cy={cy} r={4} fill={series === 'target' ? '#2563eb' : '#f97316'} />;
+}
+
+function PlanLine({
+  dataKey,
+  name,
+  stroke,
+  strokeWidth = 2,
+  series,
+  showDot,
+}: {
+  dataKey: 'originalPlan' | 'actual';
+  name: string;
+  stroke: string;
+  strokeWidth?: number;
+  series: 'target' | 'actual';
+  showDot: boolean;
+}) {
+  return (
+    <Line
+      type="monotone"
+      dataKey={dataKey}
+      name={name}
+      stroke={stroke}
+      strokeWidth={strokeWidth}
+      dot={(props) => (
+        <SeriesDot
+          cx={props.cx}
+          cy={props.cy}
+          payload={props.payload as SCurvePoint | undefined}
+          series={series}
+          showDot={showDot}
+        />
+      )}
+      activeDot={(props) => (
+        <SeriesDot
+          cx={props.cx}
+          cy={props.cy}
+          payload={props.payload as SCurvePoint | undefined}
+          series={series}
+          showDot
+        />
+      )}
+      connectNulls
+    />
+  );
+}
+
+function PercentLabels({ points, show }: { points: SCurvePoint[]; show: boolean }) {
+  const xScale = useXAxisScale();
+  const yScale = useYAxisScale();
+  const plot = usePlotArea();
+  if (!show || !xScale || !yScale) return null;
+  const fontSize = 10;
+  const seeds = points.flatMap((point) =>
+    (['original', 'revised', 'actual'] as const).flatMap((series) => {
+      const value =
+        series === 'original' ? point.originalPlan : series === 'revised' ? point.currentPlan : point.actual;
+      if (value == null || !Number.isFinite(value)) return [];
+      if (
+        series === 'revised' &&
+        point.originalPlan != null &&
+        Math.abs(value - point.originalPlan) < 0.05
+      ) {
+        return [];
+      }
+      const x = xScale(point.date, { position: 'middle' });
+      const y = yScale(value);
+      if (x == null || y == null || !Number.isFinite(x) || !Number.isFinite(y)) return [];
+      const text = formatChartPercent(value);
+      return [{ x, y, value, series, width: Math.max(fontSize, text.length * fontSize * 0.72) }];
+    }),
+  );
+  const placed = placePercentLabels(seeds, {
+    fontSize,
+    plotTop: plot?.y,
+    plotBottom: plot ? plot.y + plot.height : undefined,
+  });
+  return (
+    <ZIndexLayer zIndex={DefaultZIndexes.label}>
+      <g>
+        {placed.map((label) => (
+          <text
+            key={`${label.series}-${label.x}-${label.value}`}
+            x={label.labelX}
+            y={label.labelY}
+            textAnchor="middle"
+            fill={
+              label.series === 'actual' ? '#f97316' : label.series === 'revised' ? '#7c3aed' : '#2563eb'
+            }
+            stroke="#ffffff"
+            strokeWidth={3}
+            fontSize={fontSize}
+            fontWeight={600}
+            style={{ paintOrder: 'stroke' }}
+          >
+            {label.text}
+          </text>
+        ))}
+      </g>
+    </ZIndexLayer>
+  );
 }
 
 type SCurveTab = 'curve' | 'baseline' | 'cost' | 'activities' | 'history';
@@ -75,13 +216,17 @@ export function SCurvePage() {
   const [reportingInterval, setReportingInterval] = useState<SCurveReportingInterval>('30_day');
   const [theoreticalTotalPeriods, setTheoreticalTotalPeriods] = useState(1);
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [periodSaveError, setPeriodSaveError] = useState('');
   const [generatingCurve, setGeneratingCurve] = useState(false);
+  const [generateOpen, setGenerateOpen] = useState(false);
+  const [selectedSourceId, setSelectedSourceId] = useState('');
   const [generateMessage, setGenerateMessage] = useState('');
   const [settingsVersion, setSettingsVersion] = useState(0);
   const [points, setPoints] = useState<SCurvePoint[]>([]);
   const [activities, setActivities] = useState<SCurveActivity[]>([]);
   const [costItems, setCostItems] = useState<SCurveCostItem[]>([]);
   const [periods, setPeriods] = useState<SCurvePeriodRow[]>([]);
+  const [periodEdits, setPeriodEdits] = useState<Record<string, SCurvePeriodEdit>>({});
   const [criticalPath, setCriticalPath] = useState<string[]>([]);
   const [syncedFromPdm, setSyncedFromPdm] = useState(false);
   const [hasActualProgress, setHasActualProgress] = useState(false);
@@ -103,10 +248,13 @@ export function SCurvePage() {
   const [exporting, setExporting] = useState(false);
   const [chartReady, setChartReady] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [showPercentLabels, setShowPercentLabels] = useState(false);
   const [costSaving, setCostSaving] = useState(false);
   const [costDirty, setCostDirty] = useState(false);
   const [costMessage, setCostMessage] = useState('');
+  const savedPeriodCountRef = useRef(1);
   const canEditCharts = canEditProjectCharts(user?.role);
+  const canEditPeriods = canEditSCurvePeriods(user?.role);
   const canEditCostItems = canEditCharts;
   const costSummary = useMemo(() => computeSCurveCostSummary(costItems), [costItems]);
   const [activeTab, setActiveTab] = useState<SCurveTab>('curve');
@@ -115,9 +263,26 @@ export function SCurvePage() {
   const periodPaging = usePagination(periods, { resetKey: `${projectId}-${reportingInterval}` });
   const comparisonPaging = usePagination(comparisons, { resetKey: projectId });
 
+  const sourceReports = useMemo(
+    () =>
+      reportFeed.filter(
+        (entry) => (entry.reportType === 'SWA' || entry.reportType === 'STEWA') && entry.id,
+      ),
+    [reportFeed],
+  );
+
   useEffect(() => {
     setViewingSnapshotId(null);
+    setGenerateOpen(false);
+    setSelectedSourceId('');
   }, [projectId]);
+
+  useEffect(() => {
+    if (!generateOpen) return;
+    setSelectedSourceId((current) =>
+      sourceReports.some((entry) => entry.id === current) ? current : sourceReports[0]?.id ?? '',
+    );
+  }, [generateOpen, sourceReports]);
 
   useEffect(() => {
     setChartReady(true);
@@ -127,14 +292,18 @@ export function SCurvePage() {
     projectLabel: `Project ${projectId}`,
     points,
     comparisons,
-    periods,
+    periods: curveType === 'pdm_based' ? [] : periods,
     status: scheduleStatus,
     targetPlanPercent,
     targetPlanPhp,
     actualPlanPercent,
+    showPercentLabels,
   });
 
-  const updateCostItem = (activityId: string, patch: Partial<Pick<SCurveCostItem, 'quantity' | 'unitCost'>>) => {
+  const updateCostItem = (
+    activityId: string,
+    patch: Partial<Pick<SCurveCostItem, 'itemNo' | 'description' | 'quantity' | 'unitCost'>>,
+  ) => {
     setCostItems((current) =>
       current.map((item) => (item.activityId === activityId ? { ...item, ...patch } : item)),
     );
@@ -172,6 +341,51 @@ export function SCurvePage() {
     }
   };
 
+  const persistPeriodCount = async (count: number) => {
+    if (viewingSnapshotId || !canEditPeriods) return;
+    const next = Math.max(1, Math.floor(count) || 1);
+    if (next === savedPeriodCountRef.current) return;
+    setTheoreticalTotalPeriods(next);
+    setPeriodSaveError('');
+    setSettingsSaving(true);
+    try {
+      await saveSCurvePeriods({
+        project_id: projectId,
+        theoretical_total_periods: next,
+        period_edits: periodEdits,
+      });
+      setSettingsVersion((value) => value + 1);
+    } catch (err) {
+      setPeriodSaveError(err instanceof Error ? err.message : 'Could not save S-Curve periods.');
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
+  const persistPeriodTarget = async (periodIndex: number, raw: string) => {
+    if (viewingSnapshotId || !canEditPeriods) return;
+    const pct = Number(raw);
+    if (!Number.isFinite(pct)) return;
+    const nextEdits = {
+      ...periodEdits,
+      [String(periodIndex)]: { targetAccomplishmentPct: Math.max(0, pct) },
+    };
+    setPeriodEdits(nextEdits);
+    setPeriodSaveError('');
+    setSettingsSaving(true);
+    try {
+      await saveSCurvePeriods({
+        project_id: projectId,
+        period_edits: nextEdits,
+      });
+      setSettingsVersion((value) => value + 1);
+    } catch (err) {
+      setPeriodSaveError(err instanceof Error ? err.message : 'Could not save S-Curve periods.');
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
   useEffect(() => {
     setLoading(true);
     getSCurve(projectId, viewingSnapshotId)
@@ -180,6 +394,7 @@ export function SCurvePage() {
         setActivities(res.activities);
         setCostItems(res.cost_items ?? []);
         setPeriods(res.periods ?? []);
+        setPeriodEdits(res.period_edits ?? {});
         setCriticalPath(res.critical_path);
         setSyncedFromPdm(res.synced_from_pdm);
         setHasActualProgress(res.has_actual_progress);
@@ -196,6 +411,7 @@ export function SCurvePage() {
         setCurveType(res.curve_type);
         setReportingInterval(res.reporting_interval);
         setTheoreticalTotalPeriods(res.theoretical_total_periods);
+        savedPeriodCountRef.current = res.theoretical_total_periods;
         setTargetPlanPercent(res.target_plan_percent ?? null);
         setTargetPlanPhp(res.target_plan_php ?? null);
         setActualPlanPercent(res.actual_plan_percent ?? null);
@@ -207,6 +423,7 @@ export function SCurvePage() {
         setActivities([]);
         setCostItems([]);
         setPeriods([]);
+        setPeriodEdits({});
         setCriticalPath([]);
         setSyncedFromPdm(false);
         setHasActualProgress(false);
@@ -242,6 +459,8 @@ export function SCurvePage() {
             project_id: projectId,
             items: costItems.map((item) => ({
               activityId: item.activityId,
+              itemNo: item.itemNo,
+              description: item.description,
               quantity: item.quantity,
               unitCost: item.unitCost,
             })),
@@ -262,7 +481,7 @@ export function SCurvePage() {
   const statusStyle = STATUS_STYLES[scheduleStatus?.status ?? 'unknown'] ?? STATUS_STYLES.unknown;
   const variance =
     targetPlanPercent != null && actualPlanPercent != null
-      ? actualPlanPercent - targetPlanPercent
+      ? Math.round((actualPlanPercent - targetPlanPercent) * 100) / 100
       : null;
 
   return (
@@ -374,16 +593,6 @@ export function SCurvePage() {
                   </select>
                 </label>
 
-                {curveType === 'ideal_theoretical' && (
-                  <span className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                      Periods
-                    </span>
-                    <span className="font-semibold text-text" title="Derived from project/activity duration">
-                      {periods.length > 0 ? periods.length : theoreticalTotalPeriods}
-                    </span>
-                  </span>
-                )}
               </>
             ) : (
               <div className="flex shrink-0 flex-wrap items-center gap-1.5 text-xs">
@@ -397,6 +606,24 @@ export function SCurvePage() {
                   View only
                 </span>
               </div>
+            )}
+
+            {curveType === 'ideal_theoretical' && canEditPeriods && !viewingSnapshotId && (
+              <label className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs transition focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/20">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                  Periods
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  value={theoreticalTotalPeriods}
+                  disabled={settingsSaving}
+                  aria-label="S-Curve periods"
+                  onChange={(e) => setTheoreticalTotalPeriods(Math.max(1, Number(e.target.value || 1)))}
+                  onBlur={(e) => void persistPeriodCount(Number(e.currentTarget.value || 1))}
+                  className="w-12 bg-transparent text-xs font-semibold text-text outline-none"
+                />
+              </label>
             )}
 
             <div className="relative z-30 min-w-[180px] sm:w-[220px]">
@@ -433,7 +660,7 @@ export function SCurvePage() {
       <div className="space-y-3">
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {([
-            ['Target plan', targetPlanPercent != null ? `${targetPlanPercent}%` : '—', `Current cumulative target from ${INTERVAL_LABELS[reportingInterval].toLowerCase()} grouping`, 'planned'],
+            ['Target plan', targetPlanPercent != null ? `${targetPlanPercent}%` : '—', curveType === 'pdm_based' ? 'STEWA planned % on the revised schedule. Accomplishment does not change it.' : 'Original baseline cumulative for this period. Accomplishment does not change it.', 'planned'],
             ['Target plan (PHP)', targetPlanPhp != null ? `P ${formatMoney(targetPlanPhp)}` : '—', 'Current cumulative target amount', 'reports'],
             ['Actual progress', actualPlanPercent != null ? `${actualPlanPercent}%` : '—', latestReportDate ? `Latest report ${latestReportDate}` : 'No approved report yet', 'actual'],
             ['Schedule variance', variance != null ? `${variance > 0 ? '+' : ''}${variance}%` : '—', variance == null ? 'Waiting for actual progress' : variance < 0 ? 'Behind target plan' : variance > 0 ? 'Ahead of target plan' : 'Matching target plan', 's-curve'],
@@ -521,25 +748,31 @@ export function SCurvePage() {
                             <p className="mt-1 text-sm text-text-muted">Cumulative progress against the approved baseline and latest reports.</p>
                           </div>
                           <div className="flex flex-wrap items-center gap-2">
+                            <label className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-text">
+                              <input
+                                type="checkbox"
+                                checked={showPercentLabels}
+                                onChange={(event) => setShowPercentLabels(event.target.checked)}
+                              />
+                              Show percentage labels
+                            </label>
                             {canEditCharts && (
                               <button
                                 type="button"
-                                disabled={generatingCurve || !!viewingSnapshotId}
+                                disabled={generatingCurve}
                                 onClick={() => {
-                                  setGeneratingCurve(true);
                                   setGenerateMessage('');
-                                  void generateSwaStewaSCurve(projectId)
-                                    .then((saved) => {
-                                      setGenerateMessage(`Saved ${saved.label}.`);
-                                      setViewingSnapshotId(null);
-                                      setSettingsVersion((value) => value + 1);
-                                    })
-                                    .catch((err: unknown) => {
-                                      setGenerateMessage(
-                                        err instanceof Error ? err.message : 'Could not generate the S-Curve.',
+                                  setGenerateOpen((open) => {
+                                    const next = !open;
+                                    if (next) {
+                                      setSelectedSourceId((current) =>
+                                        sourceReports.some((entry) => entry.id === current)
+                                          ? current
+                                          : sourceReports[0]?.id ?? '',
                                       );
-                                    })
-                                    .finally(() => setGeneratingCurve(false));
+                                    }
+                                    return next;
+                                  });
                                 }}
                                 className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
                               >
@@ -571,16 +804,75 @@ export function SCurvePage() {
                           )}
                           </div>
                         </div>
+                        {generateOpen && canEditCharts && (
+                          <div className="mt-3 rounded-xl border border-border bg-surface-muted/40 p-3">
+                            <p className="text-sm font-medium text-text">Choose the SWA or STEWA reporting period</p>
+                            <p className="mt-1 text-xs text-text-muted">
+                              The S-Curve date comes from the selected report. Target Plan stays on the original baseline.
+                            </p>
+                            {sourceReports.length === 0 ? (
+                              <p className="mt-2 text-xs text-red-600">
+                                Save an approved SWA or STEWA for this project before generating an S-Curve.
+                              </p>
+                            ) : (
+                              <div className="mt-2 space-y-1">
+                                {sourceReports.map((entry) => (
+                                  <label
+                                    key={entry.id}
+                                    className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-card"
+                                  >
+                                    <input
+                                      type="radio"
+                                      name="scurve-source-report"
+                                      checked={selectedSourceId === entry.id}
+                                      onChange={() => setSelectedSourceId(entry.id ?? '')}
+                                    />
+                                    <span className="font-medium">{sourceOptionLabel(entry)}</span>
+                                    <span className="text-xs text-text-muted">{entry.percent}%</span>
+                                  </label>
+                                ))}
+                                <button
+                                  type="button"
+                                  disabled={generatingCurve || !selectedSourceId}
+                                  onClick={() => {
+                                    setGeneratingCurve(true);
+                                    setGenerateMessage('');
+                                    void generateSwaStewaSCurve(projectId, selectedSourceId)
+                                      .then((saved) => {
+                                        setGenerateMessage(`Saved ${saved.label}.`);
+                                        setGenerateOpen(false);
+                                        setViewingSnapshotId(saved.id);
+                                        setSettingsVersion((value) => value + 1);
+                                      })
+                                      .catch((err: unknown) => {
+                                        setGenerateMessage(
+                                          err instanceof Error ? err.message : 'Could not generate the S-Curve.',
+                                        );
+                                      })
+                                      .finally(() => setGeneratingCurve(false));
+                                  }}
+                                  className="mt-2 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                                >
+                                  {generatingCurve ? 'Generating…' : 'Generate this period'}
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )}
                         {generateMessage && (
                           <p className={`mt-2 text-xs ${generateMessage.startsWith('Saved') ? 'text-text-muted' : 'text-red-600'}`}>
                             {generateMessage}
                           </p>
                         )}
-                        {hasRevisedSchedule && (
+                        {curveType === 'pdm_based' ? (
+                          <p className="mt-2 text-xs text-text-muted">
+                            Original uses the STEWA planned formula on the original schedule. Target uses the same formula on the revised schedule. Actual is the SWA accomplished weight. Slippage is Actual minus Target.
+                          </p>
+                        ) : hasRevisedSchedule ? (
                           <p className="mt-2 text-xs text-text-muted">
                             Revised S-Curve is the monitoring baseline. The SWA/STEWA S-Curve is actual progress.
                           </p>
-                        )}
+                        ) : null}
 
                         {viewingSnapshotLabel && (
                           <p className="mt-2 text-center text-xs text-amber-700 sm:text-left">
@@ -593,14 +885,22 @@ export function SCurvePage() {
                         ) : points.length === 0 ? (
                           <div className="mt-6 rounded-xl border border-dashed border-border px-6 py-16 text-center">
                             <p className="font-semibold text-text">No S-curve points recorded yet</p>
-                            <p className="mt-2 text-sm text-text-muted">Approved progress reports will populate the target and actual curves.</p>
+                            <p className="mt-2 text-sm text-text-muted">The target curve comes from the original plan. Approved progress reports add the actual curve.</p>
                           </div>
                         ) : (
                           <div>
                             <div className="mt-4 h-80 w-full">
                               {chartReady ? (
                               <ResponsiveContainer width="100%" height="100%">
-                                <LineChart data={points} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                                <LineChart
+                                  data={points}
+                                  margin={{
+                                    top: showPercentLabels ? 28 : 10,
+                                    right: showPercentLabels ? 28 : 20,
+                                    left: 0,
+                                    bottom: showPercentLabels ? 8 : 0,
+                                  }}
+                                >
                                   <CartesianGrid stroke="#e0dfd8" strokeDasharray="3 3" />
                                   <XAxis
                                     dataKey="date"
@@ -619,16 +919,26 @@ export function SCurvePage() {
                                     content={({ active, payload, label }) => {
                                       if (!active || !payload?.length) return null;
                                       const row = payload[0]?.payload as SCurvePoint | undefined;
-                                      const target = row?.originalPlan;
+                                      const original = row?.originalPlan;
+                                      const target = curveType === 'pdm_based' ? row?.currentPlan : row?.originalPlan;
                                       const actual = row?.actual;
+                                      const slip =
+                                        actual != null && target != null
+                                          ? Math.round((actual - target) * 100) / 100
+                                          : null;
                                       return (
                                         <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs shadow-md">
                                           <p className="font-semibold text-text">{label}</p>
                                           {row?.periodLabel && (
                                             <p className="text-text-muted">{row.periodLabel}</p>
                                           )}
+                                          {curveType === 'pdm_based' && original != null && (
+                                            <p className="text-[#2563eb]">Original: {original}%</p>
+                                          )}
                                           {target != null && (
-                                            <p className="text-[#2563eb]">Target Plan: {target}%</p>
+                                            <p className={curveType === 'pdm_based' ? 'text-[#7c3aed]' : 'text-[#2563eb]'}>
+                                              {curveType === 'pdm_based' ? 'Target' : 'Target Plan'}: {target}%
+                                            </p>
                                           )}
                                           {row?.targetAccomplishmentPct != null && (
                                             <p className="text-text-muted">
@@ -639,17 +949,16 @@ export function SCurvePage() {
                                             </p>
                                           )}
                                           {actual != null && (
-                                            <p className="text-[#f97316]">Actual Plan: {actual}%</p>
+                                            <p className="text-[#f97316]">
+                                              {curveType === 'pdm_based' ? 'Actual' : 'Actual Plan'}: {actual}%
+                                            </p>
                                           )}
-                                          {target != null && actual != null && (
+                                          {slip != null && (
                                             <p className="mt-1 text-text-muted">
-                                              {actual > target
-                                                ? 'Ahead'
-                                                : actual < target
-                                                  ? 'Behind'
-                                                  : 'On Track'}
-                                              {' · '}
-                                              {Math.abs(actual - target).toFixed(1)}% variance
+                                              {slip < 0 ? 'Behind' : slip > 0 ? 'Ahead' : 'On Track'}
+                                              {' · Slippage '}
+                                              {slip > 0 ? '+' : ''}
+                                              {slip.toFixed(2)}%
                                             </p>
                                           )}
                                           {row?.label && (
@@ -660,20 +969,18 @@ export function SCurvePage() {
                                     }}
                                   />
                                   <Legend />
-                                  <Line
-                                    type="monotone"
+                                  <PlanLine
                                     dataKey="originalPlan"
-                                    name={hasRevisedSchedule ? 'Original S-Curve' : 'Target Plan %'}
+                                    name={curveType === 'pdm_based' ? 'Original' : hasRevisedSchedule ? 'Original S-Curve' : 'Target Plan %'}
                                     stroke="#2563eb"
-                                    strokeWidth={2}
-                                    dot={{ r: 4, fill: '#2563eb' }}
-                                    connectNulls
+                                    series="target"
+                                    showDot
                                   />
                                   {hasRevisedSchedule && (
                                     <Line
                                       type="monotone"
                                       dataKey="currentPlan"
-                                      name="Revised S-Curve"
+                                      name={curveType === 'pdm_based' ? 'Target' : 'Revised S-Curve'}
                                       stroke="#7c3aed"
                                       strokeWidth={2}
                                       strokeDasharray="6 4"
@@ -682,14 +989,13 @@ export function SCurvePage() {
                                     />
                                   )}
                                   {hasActualProgress && (
-                                    <Line
-                                      type="monotone"
+                                    <PlanLine
                                       dataKey="actual"
-                                    name={hasRevisedSchedule ? 'SWA/STEWA S-Curve' : 'Actual Plan %'}
-                                    stroke="#f97316"
+                                      name={curveType === 'pdm_based' ? 'Actual' : hasRevisedSchedule ? 'SWA/STEWA S-Curve' : 'Actual Plan %'}
+                                      stroke="#f97316"
                                       strokeWidth={2.5}
-                                      dot={{ r: 4, fill: '#f97316' }}
-                                      connectNulls
+                                      series="actual"
+                                      showDot
                                     />
                                   )}
                                   {hasActualProgress &&
@@ -702,6 +1008,7 @@ export function SCurvePage() {
                                         strokeOpacity={0.35}
                                       />
                                     )}
+                                  <PercentLabels points={points} show={showPercentLabels} />
                                 </LineChart>
                               </ResponsiveContainer>
                               ) : (
@@ -730,13 +1037,15 @@ export function SCurvePage() {
                                 </thead>
                                 <tbody>
                                   <tr className="border-b border-border">
-                                    <td className="p-2 text-left font-semibold text-[#2563eb]">{hasRevisedSchedule ? 'Original S-Curve %' : 'Cumulative target %'}</td>
+                                    <td className="p-2 text-left font-semibold text-[#2563eb]">{curveType === 'pdm_based' ? 'Original %' : hasRevisedSchedule ? 'Original S-Curve %' : 'Cumulative target %'}</td>
                                     {points.map((p) => (
                                       <td key={p.pointDate ?? p.date} className="border-l border-border p-2">
                                         {p.originalPlan != null ? `${p.originalPlan}%` : ''}
                                       </td>
                                     ))}
                                   </tr>
+                                  {curveType !== 'pdm_based' && (
+                                  <>
                                   <tr className="border-b border-border">
                                     <td className="p-2 text-left font-semibold text-text-muted">Target this period %</td>
                                     {points.map((p) => (
@@ -753,9 +1062,11 @@ export function SCurvePage() {
                                       </td>
                                     ))}
                                   </tr>
+                                  </>
+                                  )}
                                   {hasRevisedSchedule && (
                                     <tr className="border-b border-border">
-                                      <td className="p-2 text-left font-semibold text-[#7c3aed]">Revised S-Curve %</td>
+                                      <td className="p-2 text-left font-semibold text-[#7c3aed]">{curveType === 'pdm_based' ? 'Target %' : 'Revised S-Curve %'}</td>
                                       {points.map((p) => (
                                         <td key={p.pointDate ?? p.date} className="border-l border-border p-2">
                                           {p.currentPlan != null ? `${p.currentPlan}%` : ''}
@@ -765,7 +1076,7 @@ export function SCurvePage() {
                                   )}
                                   {hasActualProgress && (
                                     <tr className="border-b border-border">
-                                      <td className="p-2 text-left font-semibold text-[#f97316]">{hasRevisedSchedule ? 'SWA/STEWA %' : 'Actual %'}</td>
+                                      <td className="p-2 text-left font-semibold text-[#f97316]">{curveType === 'pdm_based' ? 'Actual %' : hasRevisedSchedule ? 'SWA/STEWA %' : 'Actual %'}</td>
                                       {points.map((p) => (
                                         <td key={p.pointDate ?? p.date} className="border-l border-border p-2">
                                           {p.actual != null ? `${p.actual}%` : ''}
@@ -778,22 +1089,20 @@ export function SCurvePage() {
                                       <td className="p-2 text-left font-semibold text-text-muted">Gap (Actual - Target)</td>
                                       {points.map((p) => (
                                         <td key={p.pointDate ?? p.date} className="border-l border-border p-2">
-                                          {p.variance != null ? (
-                                            <span
-                                              className={
-                                                p.variance < 0
-                                                  ? 'text-red-700'
-                                                  : p.variance > 0
-                                                    ? 'text-emerald-700'
-                                                    : ''
-                                              }
-                                            >
-                                              {p.variance > 0 ? '+' : ''}
-                                              {p.variance}%
-                                            </span>
-                                          ) : (
-                                            ''
-                                          )}
+                                          {(() => {
+                                            const basis = curveType === 'pdm_based' ? p.currentPlan : p.originalPlan;
+                                            const slip =
+                                              p.actual != null && basis != null
+                                                ? Math.round((p.actual - basis) * 100) / 100
+                                                : p.variance ?? null;
+                                            if (slip == null) return '';
+                                            return (
+                                              <span className={slip < 0 ? 'text-red-700' : slip > 0 ? 'text-emerald-700' : ''}>
+                                                {slip > 0 ? '+' : ''}
+                                                {slip}%
+                                              </span>
+                                            );
+                                          })()}
                                         </td>
                                       ))}
                                     </tr>
@@ -844,9 +1153,12 @@ export function SCurvePage() {
                             </h2>
                             <p className="mt-1 text-sm text-text-muted">
                               {reportingInterval === '10_day'
-                                ? 'Each period uses a 10-day baseline. Target accomplishment comes from the WT% of PDM items scheduled within that period, and cumulative target builds sequentially.'
-                                : 'Each month uses a 30-day baseline. Target accomplishment comes from the WT% of PDM items scheduled within that period, and cumulative target builds sequentially.'}
+                                ? 'Each period uses a 10-day baseline. Target this period can be edited. Cumulative target stays on the original S-curve.'
+                                : 'Each month uses a 30-day baseline. Target this period can be edited. Cumulative target stays on the original S-curve.'}
                             </p>
+                            {periodSaveError && (
+                              <p className="mt-2 text-sm text-red-600">{periodSaveError}</p>
+                            )}
                             <div className="mt-4 overflow-x-auto">
                               <table className="w-full text-left text-sm">
                                 <thead>
@@ -867,7 +1179,26 @@ export function SCurvePage() {
                                         {period.startDate} to {period.endDate}
                                       </td>
                                       <td className="py-2 pr-3 font-semibold text-[#2563eb]">
-                                        {period.targetAccomplishmentPct.toFixed(2)}%
+                                        {canEditPeriods && !viewingSnapshotId ? (
+                                          <input
+                                            type="number"
+                                            min={0}
+                                            step="0.01"
+                                            aria-label={`${period.label} target percent`}
+                                            defaultValue={period.targetAccomplishmentPct.toFixed(2)}
+                                            key={`${period.periodIndex}-${period.targetAccomplishmentPct}`}
+                                            disabled={settingsSaving}
+                                            onBlur={(e) => {
+                              const next = Number(e.currentTarget.value);
+                              if (!Number.isFinite(next)) return;
+                              if (Math.abs(next - period.targetAccomplishmentPct) < 0.001) return;
+                              void persistPeriodTarget(period.periodIndex, e.currentTarget.value);
+                            }}
+                                            className="w-20 rounded-md border border-border bg-surface px-2 py-1 text-xs font-semibold text-[#2563eb] outline-none focus:border-primary"
+                                          />
+                                        ) : (
+                                          `${period.targetAccomplishmentPct.toFixed(2)}%`
+                                        )}
                                       </td>
                                       <td className="py-2 pr-3">P {formatMoney(period.targetAccomplishmentPhp)}</td>
                                       <td className="py-2 pr-3 font-semibold text-primary">
@@ -959,8 +1290,7 @@ export function SCurvePage() {
                           <div>
                             <h3 className="font-semibold text-text">PDM-based target S-Curve items</h3>
                           <p className="mt-1 text-sm text-text-muted">
-                            Item No. and Description stay synchronized with the PDM. Enter Qty and Unit Cost here
-                            to calculate Amount, Total Contract Amount, and WT%.
+                            Item No. and Description start from the PDM and can be corrected here. Those edits stay on this S-Curve. Qty and Unit Cost calculate Amount and WT%.
                           </p>
                         </div>
                         <div className="text-right">
@@ -1004,8 +1334,34 @@ export function SCurvePage() {
                             ) : (
                               costPaging.pageItems.map((item) => (
                                 <tr key={item.activityId} className="border-b border-border/50">
-                                  <td className="py-2 pr-3 font-medium">{item.itemNo || '—'}</td>
-                                  <td className="py-2 pr-3">{item.description || '—'}</td>
+                                  <td className="py-2 pr-3 font-medium">
+                                    {canEditCostItems && !viewingSnapshotId ? (
+                                      <input
+                                        type="text"
+                                        value={item.itemNo}
+                                        onChange={(e) =>
+                                          updateCostItem(item.activityId, { itemNo: e.target.value })
+                                        }
+                                        className="w-28 rounded border border-border px-2 py-1"
+                                      />
+                                    ) : (
+                                      item.itemNo || '—'
+                                    )}
+                                  </td>
+                                  <td className="py-2 pr-3">
+                                    {canEditCostItems && !viewingSnapshotId ? (
+                                      <input
+                                        type="text"
+                                        value={item.description}
+                                        onChange={(e) =>
+                                          updateCostItem(item.activityId, { description: e.target.value })
+                                        }
+                                        className="w-full min-w-[12rem] rounded border border-border px-2 py-1"
+                                      />
+                                    ) : (
+                                      item.description || '—'
+                                    )}
+                                  </td>
                                   <td className="py-2 pr-3">
                                     {canEditCostItems && !viewingSnapshotId ? (
                                       <input
@@ -1148,15 +1504,15 @@ export function SCurvePage() {
                       <div>
                         <h3 className="font-semibold text-text">S-Curve version history</h3>
                         <p className="mt-1 text-sm text-text-muted">
-                          Snapshots are saved when the schedule is revised or when approved progress reports are
-                          finalized.
+                          Each SWA or STEWA reporting period keeps one S-Curve. Generating that period again updates
+                          the same version.
                         </p>
                         <div className="mt-4 overflow-x-auto">
                           <table className="w-full text-left text-sm">
                             <thead>
                               <tr className="border-b border-border text-xs uppercase text-text-muted">
-                                <th className="py-2 pr-3">Date</th>
-                                <th className="py-2 pr-3">Trigger</th>
+                                <th className="py-2 pr-3">Reporting period</th>
+                                <th className="py-2 pr-3">Version</th>
                                 <th className="py-2 pr-3">Status</th>
                                 <th className="py-2 pr-3">Target %</th>
                                 <th className="py-2 pr-3">Actual %</th>
@@ -1166,8 +1522,12 @@ export function SCurvePage() {
                             <tbody>
                               {versions.map((v) => (
                                 <tr key={v.id} className="border-b border-border/50">
-                                  <td className="py-2 pr-3">{new Date(v.captured_at).toLocaleString()}</td>
-                                  <td className="py-2 pr-3">{v.trigger_label ?? v.trigger_type}</td>
+                                  <td className="py-2 pr-3">
+                                    {v.as_of_label ||
+                                      v.as_of_date ||
+                                      (v.captured_at ? new Date(v.captured_at).toLocaleString() : '—')}
+                                  </td>
+                                  <td className="py-2 pr-3">{formatSnapshotLabel(v)}</td>
                                   <td className="py-2 pr-3 capitalize">
                                     {(v.schedule_status ?? '—').replace(/_/g, ' ')}
                                   </td>
@@ -1215,10 +1575,44 @@ export function SCurvePage() {
               {scheduleStatus ? ` · ${scheduleStatus.label}` : ''}
             </p>
           </div>
+          {curveType !== 'pdm_based' && periods.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-border text-[10px] uppercase text-text-muted">
+                    <th className="py-1 pr-2">Period</th>
+                    <th className="py-1 pr-2">Date range</th>
+                    <th className="py-1 pr-2">Target %</th>
+                    <th className="py-1 pr-2">Cumulative target %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {periods.map((period) => (
+                    <tr key={period.periodIndex} className="border-b border-border/50">
+                      <td className="py-1 pr-2">{period.label}</td>
+                      <td className="py-1 pr-2">
+                        {period.startDate} to {period.endDate}
+                      </td>
+                      <td className="py-1 pr-2">{period.targetAccomplishmentPct.toFixed(2)}%</td>
+                      <td className="py-1 pr-2">{period.cumulativePct.toFixed(2)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
           <div className="h-96 w-full">
             {chartReady ? (
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={points} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                <LineChart
+                  data={points}
+                  margin={{
+                    top: showPercentLabels ? 28 : 10,
+                    right: showPercentLabels ? 28 : 20,
+                    left: 0,
+                    bottom: showPercentLabels ? 8 : 0,
+                  }}
+                >
                   <CartesianGrid stroke="#e0dfd8" strokeDasharray="3 3" />
                   <XAxis dataKey="date" tick={{ fill: '#000000', fontSize: 10 }} angle={-35} textAnchor="end" height={60} />
                   <YAxis
@@ -1229,11 +1623,24 @@ export function SCurvePage() {
                   />
                   <Tooltip />
                   <Legend />
-                  <Line type="monotone" dataKey="originalPlan" name={hasRevisedSchedule ? 'Original S-Curve' : 'Target Plan'} stroke="#2563eb" strokeWidth={2} dot={false} connectNulls />
+                  <PlanLine
+                    dataKey="originalPlan"
+                    name={curveType === 'pdm_based' ? 'Original' : hasRevisedSchedule ? 'Original S-Curve' : 'Target Plan'}
+                    stroke="#2563eb"
+                    series="target"
+                    showDot={showPercentLabels}
+                  />
                   {hasRevisedSchedule && (
-                    <Line type="monotone" dataKey="currentPlan" name="Revised S-Curve" stroke="#7c3aed" strokeWidth={2} strokeDasharray="6 4" dot={false} connectNulls />
+                    <Line type="monotone" dataKey="currentPlan" name={curveType === 'pdm_based' ? 'Target' : 'Revised S-Curve'} stroke="#7c3aed" strokeWidth={2} strokeDasharray="6 4" dot={false} connectNulls />
                   )}
-                  <Line type="monotone" dataKey="actual" name={hasRevisedSchedule ? 'SWA/STEWA S-Curve' : 'Actual Plan'} stroke="#f97316" strokeWidth={2} dot={false} connectNulls />
+                  <PlanLine
+                    dataKey="actual"
+                    name={curveType === 'pdm_based' ? 'Actual' : hasRevisedSchedule ? 'SWA/STEWA S-Curve' : 'Actual Plan'}
+                    stroke="#f97316"
+                    series="actual"
+                    showDot={showPercentLabels}
+                  />
+                  <PercentLabels points={points} show={showPercentLabels} />
                 </LineChart>
               </ResponsiveContainer>
             ) : (

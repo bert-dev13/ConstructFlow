@@ -27,6 +27,20 @@ import type {
 
 type LifecycleState = 'active' | 'pending_delete_approval' | 'archived';
 
+function readSignatories(value: unknown): Record<string, { name: string; initials: string }> {
+  if (!value || typeof value !== 'object') return {};
+  const out: Record<string, { name: string; initials: string }> = {};
+  for (const [id, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const row = entry as Record<string, unknown>;
+    const name = String(row.name ?? '').trim();
+    const initials = String(row.initials ?? '').trim();
+    if (!name && !initials) continue;
+    out[id] = { name, initials };
+  }
+  return out;
+}
+
 function lifecycleStateOf(data: Record<string, unknown>): LifecycleState {
   const state = String(data.lifecycleState ?? 'active');
   if (state === 'pending_delete_approval' || state === 'archived') return state;
@@ -113,6 +127,7 @@ function mapProject(id: string, data: Record<string, unknown>): ProjectRow {
     contract_amount: data.contractAmount != null ? Number(data.contractAmount) : null,
     assigned_user_ids: access.assignedUserIds,
     involved_user_ids: access.involvedUserIds,
+    signatories: readSignatories(data.signatories),
     created_at: (data.createdAt as string | null) ?? null,
     updated_at: (data.updatedAt as string | null) ?? null,
   };
@@ -495,6 +510,7 @@ export async function createProjectFs(input: ProjectInput, actorName?: string) {
     involvedUserIds: projectAccess.involvedUserIds,
     accessUserIds: projectAccess.accessUserIds,
     contractAmount: input.contract_amount ?? null,
+    signatories: readSignatories(input.signatories),
     createdAt: nowIso(),
     updatedAt: nowIso(),
   });
@@ -593,6 +609,8 @@ export async function updateProjectFs(id: string | number, input: ProjectInput, 
     accessUserIds: projectAccess.accessUserIds,
     contractAmount:
       input.contract_amount !== undefined ? input.contract_amount ?? null : prev.contractAmount,
+    signatories:
+      input.signatories !== undefined ? readSignatories(input.signatories) : readSignatories(prev.signatories),
     updatedAt: nowIso(),
   });
 

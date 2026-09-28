@@ -1,45 +1,20 @@
-# ConstructFlow Accounts
+constructflow.contractor.1@gmail.com
+pass: fortesting01
 
-These are the official ConstructFlow accounts. Sign in at `/login` and ConstructFlow will load the role from Firestore automatically.
+constructflow.engineerr1@gmail.com
+pass: fortesting01
 
-## Contractors
+constructflow.engineerii@gmail.com
+Pass: EngineerII
 
-Password: `contractor123`
+constructflow.engineerIII@gmail.com 
 
-- `constructflow.contractor.1@gmail.com`
-- `constructflow.contractor.2@gmail.com`
-- `constructflow.contractor.3@gmail.com`
+Pass: Engineer 3
 
-## Engineer I
+constructflow.engineer4@gmail.com
 
-Password: `engineer123`
-
-- `constructflow.engineer1.1@gmail.com`
-- `constructflow.engineer1.2@gmail.com`
-- `constructflow.engineer1.3@gmail.com`
-
-## Engineer II
-
-Password: `engineer123`
-
-- `constructflow.engineer2.1@gmail.com`
-- `constructflow.engineer2.2@gmail.com`
-- `constructflow.engineer2.3@gmail.com`
-
-## Engineer III
-
-Password: `engineer123`
-
-- `constructflow.engineer3.1@gmail.com`
-
-## Engineer IV
-
-Password: `engineer123`
-
-- `constructflow.engineer4.1@gmail.com`
-
-## Reseed
-
+Pass: Engineer 4
 ```bash
 npm run seed:firebase
 ```
+npm run clear:records -- --yes

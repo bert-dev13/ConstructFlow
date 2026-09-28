@@ -45,7 +45,9 @@ body {
 .row-table { display: table; width: 100%; border-collapse: collapse; }
 .row-table > div { display: table-row; }
 .lbl, .colon, .val { display: table-cell; vertical-align: bottom; padding-bottom: 1px; }
-.lbl { white-space: nowrap; padding-right: 4px; }
+.lbl { white-space: normal; overflow-wrap: anywhere; word-wrap: break-word; padding-right: 4px; }
+.val, .val-line { white-space: normal; overflow-wrap: anywhere; word-wrap: break-word; height: auto; }
+.row-table > div, .section { break-inside: avoid; page-break-inside: avoid; }
 .colon { width: 8px; padding-right: 4px; }
 .val { width: 100%; }
 .val-line {
