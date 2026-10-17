@@ -11,7 +11,17 @@ import type { NextConfig } from 'next';
 const onVercel = Boolean(process.env.VERCEL);
 const isProdBuild = process.env.NODE_ENV === 'production';
 const configured = (process.env.NEXT_PUBLIC_BASE_PATH ?? '').replace(/\/$/, '');
-const basePath = process.env.NODE_ENV === 'development' ? '' : configured;
+// Candidate C (Vercel) builds do not use NEXT_PUBLIC_BASE_PATH.
+// To ensure local `main` reproduces the Candidate C deployment by default,
+// prefer no basePath for production unless an explicit FORCE_BASE_PATH env var is set.
+const basePath =
+  process.env.FORCE_BASE_PATH
+    ? (process.env.FORCE_BASE_PATH.replace(/\/$/, ''))
+    : onVercel
+    ? ''
+    : process.env.NODE_ENV === 'development'
+    ? ''
+    : configured;
 
 // Static export only for production Apache builds — never during `next dev`,
 // otherwise dynamic URLs like /projects/{id}/boq fail with generateStaticParams errors.
