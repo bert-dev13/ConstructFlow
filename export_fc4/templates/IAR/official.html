@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+@page { size: 8.5in 13in; margin: 0.35in 0.4in 0.4in 0.4in; }
+body {
+  font-family: "DejaVu Sans", Arial, sans-serif;
+  font-size: 7.5pt;
+  color: #000;
+  line-height: 1.12;
+  margin: 0;
+}
+.qr-fixed { position: fixed; bottom: 4px; right: 6px; width: 36px; height: 36px; }
+.report-no { font-size: 6.5pt; color: #666; text-align: right; margin: 0 0 2px; }
+.header { width: 100%; border-collapse: collapse; margin-bottom: 4px; }
+.header td { border: none; vertical-align: middle; padding: 0; }
+.doc-title { text-align: center; font-weight: bold; font-size: 11pt; margin: 0; }
+.office-name { text-align: center; font-weight: bold; font-size: 8pt; margin: 1px 0 0; }
+.meta { width: 100%; border-collapse: collapse; margin-bottom: 4px; font-size: 7.5pt; }
+.meta td { padding: 1px 3px; vertical-align: top; }
+.meta .lbl { font-weight: bold; white-space: normal; overflow-wrap: anywhere; width: 1%; padding-right: 4px; }
+.meta .val { white-space: normal; overflow-wrap: anywhere; word-wrap: break-word; height: auto; }
+.meta .val { border-bottom: 1px solid #000; }
+table.grid { width: 100%; border-collapse: collapse; font-size: 7pt; }
+table.grid th, table.grid td { border: 1px solid #000; padding: 3px 4px; vertical-align: top; white-space: normal; overflow-wrap: anywhere; word-wrap: break-word; height: auto; line-height: 1.3; }
+table.grid th { font-weight: bold; text-align: center; background: #fff; }
+tr { break-inside: avoid; page-break-inside: avoid; }
+thead { display: table-header-group; }
+.right { text-align: right; }
+.center { text-align: center; }
+.section-lbl { font-weight: bold; font-size: 7pt; margin: 4px 0 1px; text-transform: uppercase; }
+.two-col { width: 100%; border-collapse: collapse; margin-top: 2px; }
+.two-col > tbody > tr > td { width: 50%; vertical-align: top; padding: 0 3px 0 0; }
+.two-col > tbody > tr > td + td { padding: 0 0 0 3px; }
+.lined-box { border: 1px solid #000; min-height: 36px; padding: 2px 4px; font-size: 7pt; }
+.lined-box p { margin: 0 0 6px; border-bottom: 1px solid #ccc; min-height: 10px; }
+.problems-box { border: 1px solid #000; min-height: 48px; padding: 2px 4px; font-size: 7pt; }
+.resource-title { font-weight: bold; text-align: center; font-size: 7pt; margin: 0 0 1px; }
+.signatures { width: 100%; margin-top: 8px; border-collapse: collapse; }
+.signatures td { width: 25%; text-align: center; vertical-align: top; padding: 0 4px; font-size: 7pt; }
+.sig-line { border-bottom: 1px solid #000; min-height: 16px; margin: 10px 0 2px; }
+.sig-name { font-weight: bold; text-transform: uppercase; }
+.sig-title { font-size: 6.5pt; }
+</style>
+</head>
+<body>
+<img class="qr-fixed" src="{{qr_code_img}}" alt="QR" />
+<div class="report-no">{{report_number}}</div>
+
+<table class="header">
+  <tr>
+    <td>
+      <div class="doc-title">INSPECTION ACCOMPLISHMENT REPORT</div>
+      <div class="office-name">PROVINCIAL ENGINEER'S OFFICE</div>
+    </td>
+    <td style="width:64px;text-align:right">{{iar_seal_block}}</td>
+  </tr>
+</table>
+
+<table class="meta">
+  <tr>
+    <td class="lbl">Contract No.:</td>
+    <td class="val" style="width:38%">{{contract_number}}</td>
+    <td class="lbl">Municipality:</td>
+    <td class="val">{{municipality}}</td>
+  </tr>
+  <tr>
+    <td class="lbl">Project Title:</td>
+    <td class="val" colspan="3">{{project_title}}</td>
+  </tr>
+  <tr>
+    <td class="lbl">Contractor:</td>
+    <td class="val">{{contractor}}</td>
+    <td class="lbl">Week Covered:</td>
+    <td class="val">{{week_covered}}</td>
+  </tr>
+</table>
+
+<table class="grid">
+  <thead>
+    <tr>
+      <th rowspan="2" style="width:10%">Item No.</th>
+      <th rowspan="2" style="width:34%">Description</th>
+      <th rowspan="2" style="width:16%">Location / Station</th>
+      <th colspan="2">Quantity for the week</th>
+      <th rowspan="2" style="width:10%">Unit</th>
+    </tr>
+    <tr>
+      <th style="width:10%">Physical</th>
+      <th style="width:10%">Billable</th>
+    </tr>
+  </thead>
+  <tbody>{{accomplishment_rows}}</tbody>
+</table>
+
+<div class="section-lbl">For variation order</div>
+<table class="grid">
+  <thead>
+    <tr>
+      <th style="width:10%">Item No.</th>
+      <th style="width:32%">Description</th>
+      <th style="width:10%">Quantity</th>
+      <th style="width:10%">Unit</th>
+      <th style="width:12%">Additive</th>
+      <th style="width:12%">Deductive</th>
+      <th style="width:14%">New Item</th>
+    </tr>
+  </thead>
+  <tbody>{{variation_rows}}</tbody>
+</table>
+
+<table class="two-col">
+  <tr>
+    <td>
+      <div class="section-lbl">Activities for the week:</div>
+      <div class="lined-box">{{activities_list}}</div>
+    </td>
+    <td>
+      <div class="section-lbl">Field instructions:</div>
+      <div class="lined-box">{{field_instructions_list}}</div>
+    </td>
+  </tr>
+</table>
+
+<table class="two-col" style="margin-top:3px">
+  <tr>
+    <td>
+      <div class="section-lbl">Problems encountered / remarks:</div>
+      <div class="problems-box">{{problems_remarks}}</div>
+    </td>
+    <td>
+      <div class="resource-title">MANPOWER</div>
+      <table class="grid">
+        <thead><tr><th>Description</th><th style="width:22%">Quantity</th></tr></thead>
+        <tbody>{{manpower_rows}}</tbody>
+      </table>
+      <div class="resource-title" style="margin-top:4px">EQUIPMENT</div>
+      <table class="grid">
+        <thead><tr><th>Description</th><th style="width:22%">Quantity</th></tr></thead>
+        <tbody>{{equipment_rows}}</tbody>
+      </table>
+    </td>
+  </tr>
+</table>
+
+<div class="section-lbl">Weekly physical accomplishment percentage (cumulative):</div>
+<table class="grid">
+  <thead>
+    <tr>
+      <th>Orig. Target</th>
+      <th>Rev. Target</th>
+      <th>Actual</th>
+      <th>Variance</th>
+      <th>Remarks</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="center">{{orig_target}}</td>
+      <td class="center">{{rev_target}}</td>
+      <td class="center">{{actual_progress}}</td>
+      <td class="center">{{variance}}</td>
+      <td>{{progress_remarks}}</td>
+    </tr>
+  </tbody>
+</table>
+
+<table class="signatures">
+  <tr>
+    <td>
+      <div>Prepared by:</div>
+      <div class="sig-line"></div>
+      <div class="sig-name">{{prepared_by_name}}</div>
+      <div class="sig-title">PEO Engineer I</div>
+    </td>
+    <td>
+      <div>Checked by:</div>
+      <div class="sig-line"></div>
+      <div class="sig-name">{{checked_by_name}}</div>
+      <div class="sig-title">PEO Engineer II</div>
+    </td>
+    <td>
+      <div>Noted by:</div>
+      <div class="sig-line"></div>
+      <div class="sig-name">{{noted_by_name}}</div>
+      <div class="sig-title">PEO Engineer III</div>
+    </td>
+    <td>
+      <div>Conforme:</div>
+      <div class="sig-line"></div>
+      <div class="sig-name">{{contractor_representative}}</div>
+      <div class="sig-title">Contractor's Representative</div>
+    </td>
+  </tr>
+</table>
+</body>
+</html>

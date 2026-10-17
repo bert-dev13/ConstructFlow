@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+@page { size: 13in 8.5in; margin: 25px 30px 60px 30px; }
+body { font-family: DejaVu Sans, Arial, sans-serif; font-size: 7pt; }
+.qr-fixed { position: fixed; bottom: 10px; right: 15px; width: 55px; height: 55px; }
+.letterhead-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+.header { text-align: center; font-size: 8pt; }
+.header .small { font-size: 7pt; }
+.header .bold { font-weight: bold; font-size: 9pt; }
+.header .underline { text-decoration: underline; font-weight: bold; }
+h3 { text-align: center; margin: 0 0 8px; font-size: 9pt; }
+.meta { margin-bottom: 10px; font-size: 8pt; }
+table { width: 100%; border-collapse: collapse; }
+th, td { border: 1px solid #000; padding: 3px 4px; text-align: center; vertical-align: top; white-space: normal; overflow-wrap: anywhere; word-wrap: break-word; height: auto; line-height: 1.3; }
+tr { break-inside: avoid; page-break-inside: avoid; }
+thead { display: table-header-group; }
+th { background: #f0f0f0; font-size: 6.5pt; }
+td.left { text-align: left; }
+td.right { text-align: right; }
+.total-row { font-weight: bold; }
+.summary { margin-top: 12px; float: right; width: 280px; font-size: 8pt; }
+.summary td { border: none; padding: 2px 6px; }
+.summary .label { text-align: left; }
+.summary .val { text-align: right; font-weight: bold; }
+.signatures { clear: both; margin-top: 30px; width: 100%; font-size: 7pt; }
+.sig { width: 24%; display: inline-block; text-align: center; vertical-align: top; }
+.sig-name { font-weight: bold; text-decoration: underline; margin-top: 30px; }
+.report-no { font-size: 7pt; color: #444; text-align: right; margin: 0 0 6px 0; }
+</style>
+</head>
+<body>
+<div class="report-no">{{report_number}}</div>
+<img class="qr-fixed" src="{{qr_code_img}}" alt="" />
+
+{{swa_letterhead}}
+
+<h3>STATEMENT OF WORK ACCOMPLISHMENT</h3>
+<div class="meta">
+  As of <u>{{report_date}}</u><br>
+  <strong>{{project_name}}</strong><br>
+  {{location}}
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th rowspan="2">ITEM NO.</th>
+      <th rowspan="2">DESCRIPTION OF WORK</th>
+      <th rowspan="2">PROGRAMMED QUANTITY</th>
+      <th rowspan="2">UNIT PRICE</th>
+      <th rowspan="2">UNIT</th>
+      <th rowspan="2">CONTRACT AMOUNT</th>
+      <th rowspan="2">WEIGHT %</th>
+      {{revised_header_group}}
+      <th colspan="3">ACCOMPLISHMENT</th>
+      <th rowspan="2">WEIGHT %</th>
+      <th rowspan="2">REMARKS/STATUS</th>
+    </tr>
+    <tr>
+      {{revised_subheader}}
+      <th>PREVIOUS</th>
+      <th>THIS PERIOD</th>
+      <th>TO DATE</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{line_items_rows}}
+    <tr class="total-row">
+      <td colspan="5">TOTAL</td>
+      <td class="right">{{total_contract_amount}}</td>
+      <td class="right">{{total_weight_pct}}</td>
+      {{revised_total_cells}}
+      <td colspan="3"></td>
+      <td class="right">{{total_accomplishment_weight}}</td>
+      <td></td>
+    </tr>
+  </tbody>
+</table>
+
+<table class="summary">
+  <tr><td class="label">% THIS ACCOMPLISHMENT</td><td class="val">{{pct_this_accomplishment}}%</td></tr>
+  <tr><td class="label">TOTAL PROJECT COST</td><td class="val">P {{total_project_cost}}</td></tr>
+  <tr><td class="label">TOTAL THIS ACCOMPLISHMENT</td><td class="val">P {{total_this_accomplishment}}</td></tr>
+  <tr><td class="label">LESS: {{less_reason}}</td><td class="val">P {{less_amount}}</td></tr>
+  <tr><td class="label">TOTAL VOUCHER</td><td class="val">P {{total_voucher}}</td></tr>
+</table>
+
+<div class="signatures">
+  <div class="sig">
+    <div>Prepared by:</div>
+    <div class="sig-name">{{prepared_by_name}}</div>
+    <div>{{prepared_by_title}}</div>
+  </div>
+  <div class="sig">
+    <div>Checked by:</div>
+    <div class="sig-name">{{checked_by_name}}</div>
+    <div>{{checked_by_title}}</div>
+  </div>
+  <div class="sig">
+    <div>Recommending Approval:</div>
+    <div class="sig-name">{{recommending_name}}</div>
+    <div>{{recommending_title}}</div>
+  </div>
+  <div class="sig">
+    <div>Approved:</div>
+    <div class="sig-name">{{approved_by_name}}</div>
+    <div>{{approved_by_title}}</div>
+  </div>
+</div>
+</body>
+</html>

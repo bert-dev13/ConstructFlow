@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>STEWA — {{project_name}}</title>
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 12pt; margin: 40px; }
+    h1 { font-size: 16pt; text-align: center; }
+    table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+    td, th { border: 1px solid #ccc; padding: 8px; }
+    th { background: #e8ede9; }
+    .section { margin-top: 20px; }
+    .qr { margin-top: 32px; text-align: right; font-size: 9pt; color: #666; }
+  </style>
+</head>
+<body>
+  <h1>SUMMARY OF TARGET/EARNED WORK ANALYSIS (STEWA)</h1>
+  <p style="text-align:center">Provincial Engineer's Office — Cagayan</p>
+
+  <table>
+    <tr><th>Project</th><td>{{project_name}}</td></tr>
+    <tr><th>Contractor</th><td>{{contractor}}</td></tr>
+    <tr><th>Period</th><td>{{period}}</td></tr>
+    <tr><th>Prepared By</th><td>{{prepared_by}}</td></tr>
+    <tr><th>Date</th><td>{{generated_date}}</td></tr>
+  </table>
+
+  <div class="section">
+    <h3>Target Work (Planned)</h3>
+    <p>{{target_work}}</p>
+  </div>
+  <div class="section">
+    <h3>Earned Work (Actual)</h3>
+    <p>{{earned_work}}</p>
+  </div>
+  <div class="section">
+    <h3>Variance / Slippage</h3>
+    <p>{{variance}}</p>
+  </div>
+
+  <table>
+    <tr><th>Planned Progress</th><th>Actual Progress</th><th>Variance</th></tr>
+    <tr>
+      <td>{{percent_planned}}%</td>
+      <td>{{percent_actual}}%</td>
+      <td>{{variance_pct}}%</td>
+    </tr>
+  </table>
+
+  <div class="qr">
+    <p>QR Code: {{qr_code}} | {{verify_url}}</p>
+  </div>
+</body>
+</html>

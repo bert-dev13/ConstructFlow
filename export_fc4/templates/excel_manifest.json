@@ -1,0 +1,85 @@
+{
+  "STEWA": {
+    "description": "Statement of Time Elapsed and Work Accomplished",
+    "template_file": "excel/STEWA.xlsx",
+    "placeholders": {
+      "report_date": "As of date line",
+      "project_name": "Project Name field",
+      "location": "Location field",
+      "contract_amount": "Contract Amount",
+      "contractor": "Contractor",
+      "period_covered": "1. Period Covered",
+      "contract_duration": "2. Contract Duration",
+      "notice_to_proceed": "3. Notice to Proceed",
+      "expiry_date": "4. Expiry Date",
+      "approved_time_extension": "5. Approved Time Extension",
+      "approved_time_suspension": "6. Approved Time Suspension",
+      "total_time_extension": "7. Total Time Extension",
+      "revised_contract_duration": "8. Revised Contract Duration",
+      "revised_expiry_date": "9. Revised Expiry Date",
+      "calendar_days_elapsed": "10. Calendar days Elapsed",
+      "percent_actual": "11. Percent Actual",
+      "percent_planned": "12. Percent Planned",
+      "slippage": "13. Slippage (auto-computed)",
+      "remarks": "14. Remarks",
+      "submitted_by_name": "Submitted by signature",
+      "submitted_by_title": "Submitted by title",
+      "noted_by_name": "Noted by signature",
+      "noted_by_title": "Noted by title",
+      "report_number": "Auto-generated report number"
+    }
+  },
+  "IAR": {
+    "description": "Inspection and Acceptance Report",
+    "template_file": "excel/IAR.xlsx",
+    "placeholders": {
+      "report_date": "As of date line",
+      "project_name": "Project Name field",
+      "location": "Location field",
+      "contract_amount": "Contract Amount",
+      "contractor": "Contractor",
+      "contract_number": "Contract Number",
+      "contractor_representative": "Contractor Representative",
+      "period_covered": "1. Period Covered",
+      "scope_of_inspection": "2. Scope of Inspection",
+      "items_inspected": "3. Items / Works Inspected",
+      "materials_tested": "4. Materials Tested",
+      "findings": "5. Findings",
+      "percent_complete": "6. Percent Complete",
+      "acceptance_status": "7. Acceptance Status",
+      "defects_noted": "8. Defects Noted",
+      "recommendations": "9. Recommendations",
+      "remarks": "10. Remarks",
+      "inspected_by_name": "Inspected by signature",
+      "inspected_by_title": "Inspected by title",
+      "noted_by_name": "Noted by signature",
+      "noted_by_title": "Noted by title",
+      "report_number": "Auto-generated report number"
+    }
+  },
+  "SWA": {
+    "description": "Statement of Work Accomplished table",
+    "template_file": "excel/SWA.xlsx",
+    "item_row_placeholders": [
+      "item_no",
+      "item_description",
+      "unit",
+      "unit_price",
+      "programmed_qty",
+      "contract_amount",
+      "weight_pct",
+      "previous",
+      "this_period",
+      "to_date",
+      "accomplishment_weight_pct",
+      "remarks"
+    ],
+    "summary_placeholders": {
+      "total_contract_amount": "TOTAL row",
+      "pct_this_accomplishment": "% THIS ACCOMPLISHMENT",
+      "total_this_accomplishment": "TOTAL THIS ACCOMPLISHMENT",
+      "advance_payment": "LESS ADVANCE PAYMENT",
+      "total_voucher": "TOTAL THIS VOUCHER"
+    }
+  }
+}

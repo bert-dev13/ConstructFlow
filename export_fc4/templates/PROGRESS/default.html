@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Progress Report — {{project_name}}</title>
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 12pt; margin: 40px; }
+    h1 { font-size: 16pt; text-align: center; }
+    table.meta { width: 100%; border-collapse: collapse; margin: 20px 0; }
+    table.meta td { border: 1px solid #ccc; padding: 8px; }
+    table.meta td:first-child { width: 30%; background: #f5f5f0; font-weight: bold; }
+    .section { margin-top: 18px; }
+    .status { display: inline-block; padding: 4px 12px; background: #e8ede9; border-radius: 4px; }
+    .qr { margin-top: 32px; border-top: 1px solid #ccc; padding-top: 12px; font-size: 9pt; }
+  </style>
+</head>
+<body>
+  <h1>WEEKLY PROGRESS REPORT</h1>
+  <p style="text-align:center">Provincial Engineer's Office — Cagayan Provincial Capitol</p>
+
+  <table class="meta">
+    <tr><td>Project Name</td><td>{{project_name}}</td></tr>
+    <tr><td>Contractor</td><td>{{contractor}}</td></tr>
+    <tr><td>Reporting Period</td><td>{{period}}</td></tr>
+    <tr><td>Prepared By</td><td>{{prepared_by}}</td></tr>
+    <tr><td>Schedule Status</td><td><span class="status">{{schedule_status}}</span></td></tr>
+    <tr><td>Overall % Complete</td><td>{{percent_complete}}%</td></tr>
+    <tr><td>Date Generated</td><td>{{generated_date}}</td></tr>
+  </table>
+
+  <div class="section"><h3>Activities Completed</h3><p>{{activities_completed}}</p></div>
+  <div class="section"><h3>Activities Ongoing</h3><p>{{activities_ongoing}}</p></div>
+  <div class="section"><h3>Delay Causes</h3><p>{{delay_causes}}</p></div>
+  <div class="section"><h3>Recommendations</h3><p>{{recommendations}}</p></div>
+
+  <div class="qr">
+    <strong>Document verification</strong><br />
+    QR: {{qr_code}}<br />
+    {{verify_url}}
+  </div>
+</body>
+</html>

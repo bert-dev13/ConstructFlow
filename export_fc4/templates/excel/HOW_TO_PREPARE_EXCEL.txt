@@ -1,0 +1,65 @@
+EXCEL TEMPLATE GUIDE — SWA & STEWA (Province of Cagayan)
+=========================================================
+
+Send your official .xlsx files. Place them here OR upload via the system:
+
+  templates/excel/STEWA.xlsx
+  templates/excel/SWA.xlsx
+
+STEP 1 — PREPARE YOUR EXCEL FILE
+--------------------------------
+Open your official Word/Excel template in Microsoft Excel.
+
+Wherever the system should insert data, type a placeholder in double curly braces:
+
+  STEWA examples:
+    {{project_name}}
+    {{location}}
+    {{contract_amount}}
+    {{contractor}}
+    {{period_covered}}
+    {{contract_duration}}
+    {{notice_to_proceed}}
+    {{expiry_date}}
+    {{percent_actual}}
+    {{percent_planned}}
+    {{slippage}}
+    {{remarks}}
+    {{report_date}}
+    {{submitted_by_name}}
+    {{noted_by_name}}
+
+  SWA examples (header fields):
+    {{project_name}}
+    {{location}}
+    {{report_date}}
+    {{advance_payment}}
+    {{total_contract_amount}}
+    {{total_voucher}}
+
+STEP 2 — SWA WORK ITEM TABLE (one template row)
+-----------------------------------------------
+In the accomplishment table, use ONE sample row with these placeholders:
+
+  {{item_no}} | {{item_description}} | {{unit}} | {{unit_price}}
+  {{programmed_qty}} | {{contract_amount}} | {{weight_pct}}
+  {{previous}} | {{this_period}} | {{to_date}}
+  {{accomplishment_weight_pct}} | {{remarks}}
+
+The system finds the row containing {{item_no}} and duplicates it for each item.
+
+STEP 3 — UPLOAD
+---------------
+Option A: Copy files to templates/excel/STEWA.xlsx and SWA.xlsx
+Option B: Log in as Engineer IV → SWA/STEWA → Manage templates → Upload .xlsx
+
+STEP 4 — GENERATE
+-----------------
+When a report is approved, the system:
+  1. Opens your Excel template
+  2. Fills all {{placeholders}}
+  3. Expands SWA item rows
+  4. Adds QR code on every sheet
+  5. Saves filled .xlsx + PDF (if PDF export works; otherwise HTML PDF backup)
+
+You can email your .xlsx files to the developer to map any special cells.
