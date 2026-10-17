@@ -1,0 +1,69 @@
+{
+  "SWA": {
+    "label": "Summary of Work Accomplished (SWA)",
+    "template_file": "SWA/default.html",
+    "description": "Weekly summary of field work accomplished per project.",
+    "fields": [
+      { "key": "project_name", "label": "Project name", "type": "text", "required": true },
+      { "key": "contractor", "label": "Contractor", "type": "text", "required": true },
+      { "key": "period", "label": "Reporting period", "type": "text", "required": true, "placeholder": "2026-W30" },
+      { "key": "location", "label": "Project location", "type": "text" },
+      { "key": "prepared_by", "label": "Prepared by (Engineer I)", "type": "text", "required": true },
+      { "key": "work_accomplished", "label": "Work accomplished this period", "type": "textarea", "required": true },
+      { "key": "materials_used", "label": "Materials / equipment used", "type": "textarea" },
+      { "key": "percent_complete", "label": "Cumulative percent complete (%)", "type": "number", "required": true },
+      { "key": "remarks", "label": "Remarks / constraints", "type": "textarea" }
+    ]
+  },
+  "STEWA": {
+    "label": "Summary of Target/Earned Work Analysis (STEWA)",
+    "template_file": "STEWA/default.html",
+    "description": "Compares target vs earned work for the reporting period.",
+    "fields": [
+      { "key": "project_name", "label": "Project name", "type": "text", "required": true },
+      { "key": "contractor", "label": "Contractor", "type": "text", "required": true },
+      { "key": "period", "label": "Reporting period", "type": "text", "required": true },
+      { "key": "prepared_by", "label": "Prepared by (Engineer I)", "type": "text", "required": true },
+      { "key": "target_work", "label": "Target work (planned)", "type": "textarea", "required": true },
+      { "key": "earned_work", "label": "Earned work (actual)", "type": "textarea", "required": true },
+      { "key": "variance", "label": "Variance / slippage notes", "type": "textarea" },
+      { "key": "percent_planned", "label": "Planned progress (%)", "type": "number", "required": true },
+      { "key": "percent_actual", "label": "Actual progress (%)", "type": "number", "required": true }
+    ]
+  },
+  "IAR": {
+    "label": "Inspection and Acceptance Report (IAR)",
+    "template_file": "IAR/default.html",
+    "description": "Documents field inspection results and acceptance status for completed or ongoing work.",
+    "fields": [
+      { "key": "project_name", "label": "Project name", "type": "text", "required": true },
+      { "key": "contractor", "label": "Contractor", "type": "text", "required": true },
+      { "key": "period", "label": "Inspection period", "type": "text", "required": true },
+      { "key": "contract_number", "label": "Contract number", "type": "text" },
+      { "key": "prepared_by", "label": "Inspected by (Engineer I)", "type": "text", "required": true },
+      { "key": "scope_of_inspection", "label": "Scope of inspection", "type": "textarea", "required": true },
+      { "key": "items_inspected", "label": "Items / works inspected", "type": "textarea", "required": true },
+      { "key": "findings", "label": "Findings", "type": "textarea", "required": true },
+      { "key": "acceptance_status", "label": "Acceptance status", "type": "select", "options": ["Accepted", "Accepted with conditions", "Not accepted"], "required": true },
+      { "key": "percent_complete", "label": "Percent complete (%)", "type": "number", "required": true },
+      { "key": "remarks", "label": "Remarks", "type": "textarea" }
+    ]
+  },
+  "PROGRESS": {
+    "label": "Weekly Progress Report",
+    "template_file": "PROGRESS/default.html",
+    "description": "Official weekly construction progress report for approval workflow.",
+    "fields": [
+      { "key": "project_name", "label": "Project name", "type": "text", "required": true },
+      { "key": "contractor", "label": "Contractor", "type": "text", "required": true },
+      { "key": "period", "label": "Reporting period", "type": "text", "required": true },
+      { "key": "prepared_by", "label": "Prepared by (Engineer I)", "type": "text", "required": true },
+      { "key": "schedule_status", "label": "Schedule status", "type": "select", "options": ["On schedule", "Behind schedule", "Ahead of schedule"], "required": true },
+      { "key": "activities_completed", "label": "Activities completed", "type": "textarea", "required": true },
+      { "key": "activities_ongoing", "label": "Activities ongoing", "type": "textarea" },
+      { "key": "delay_causes", "label": "Delay causes (if any)", "type": "textarea" },
+      { "key": "percent_complete", "label": "Overall percent complete (%)", "type": "number", "required": true },
+      { "key": "recommendations", "label": "Recommendations", "type": "textarea" }
+    ]
+  }
+}

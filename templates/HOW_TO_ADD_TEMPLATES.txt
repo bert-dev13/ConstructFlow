@@ -1,0 +1,47 @@
+HOW TO ADD YOUR CLIENT TEMPLATE FILES
+=====================================
+
+The system uses HTML templates with placeholders like {{project_name}}.
+Your client's Word/Excel/PDF layouts can be added in two ways:
+
+OPTION A — HTML template (recommended, easiest)
+-----------------------------------------------
+1. Open your client's SWA / STEWA / Progress Report in Word.
+2. Save As → "Web Page (.html)" OR recreate the layout in an HTML file.
+3. Replace blank areas with placeholders from templates/manifest.json, e.g.:
+     {{project_name}}
+     {{contractor}}
+     {{period}}
+     {{work_accomplished}}
+4. Save the file as:
+     templates/SWA/default.html
+     templates/STEWA/default.html
+     templates/PROGRESS/default.html
+5. Update templates/manifest.json if you add new fields.
+
+OPTION B — Upload via the system (Engineer IV)
+----------------------------------------------
+1. Log in as Engineer IV.
+2. Go to Reports → Manage Templates.
+3. Upload .html file for SWA, STEWA, or PROGRESS.
+4. File is saved to templates/uploads/ and used for PDF generation.
+
+PLACEHOLDER RULES
+-----------------
+- Use double curly braces: {{field_key}}
+- field_key must match a key in manifest.json "fields" array
+- System auto-fills: {{generated_date}}, {{qr_code}}, {{verify_url}}
+- For STEWA, {{variance_pct}} is auto-calculated (planned - actual)
+
+WORD (.docx) TEMPLATES
+----------------------
+If you must keep .docx format:
+1. Place file in templates/uploads/SWA.docx (etc.)
+2. Install PHPWord via Composer (future step)
+3. Use ${field_name} placeholders in Word instead of {{field_name}}
+
+EXCEL (.xlsx) TEMPLATES
+-----------------------
+Place in templates/uploads/ and use PhpSpreadsheet (future step).
+
+After adding templates, run a test report from Reports → Generate.

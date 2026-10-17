@@ -1,0 +1,1654 @@
+'use client';
+
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  CartesianGrid,
+  DefaultZIndexes,
+  Legend,
+  Line,
+  LineChart,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  usePlotArea,
+  useXAxisScale,
+  useYAxisScale,
+  XAxis,
+  YAxis,
+  ZIndexLayer,
+} from 'recharts';
+import { ProjectSelect } from '../components/ProjectSelect';
+import { DocumentsBackLink } from '../components/DocumentsBackLink';
+import { ReportProgressFeed, type ReportProgressEntry } from '../components/ReportProgressFeed';
+import { useAuth } from '../context/AuthContext';
+import { useSelectedProject } from '../context/SelectedProjectContext';
+import { generateSwaStewaSCurve,
+  getSCurve,
+  saveSCurveCostItems,
+  saveSCurvePeriods,
+  saveSCurveSettings,
+  type SCurveActivity,
+  type SCurveCostItem,
+  type SCurveComparison,
+  type SCurvePeriodEdit,
+  type SCurvePeriodRow,
+  type SCurveReportingInterval,
+  type ScheduleStatus,
+  type SCurveSnapshotSummary,
+  type SCurveType,
+} from '../lib/sCurveApi';
+import { computeSCurveCostSummary } from '../lib/sCurveItems';
+import type { SCurvePoint } from '../types';
+import { exportSCurvePdf, formatChartPercent, placePercentLabels } from '../lib/chartPdfExport';
+import { NavIcon, type NavIconName } from '../components/NavIcon';
+import { Pagination } from '../components/ui/Pagination';
+import { PreviewModal } from '../components/ui/PreviewModal';
+import { usePagination } from '../hooks/usePagination';
+import { canEditProjectCharts, canEditSCurvePeriods } from '../lib/chartPermissions';
+
+const STATUS_STYLES: Record<string, { badge: string; label: string }> = {
+  target_only: { badge: 'bg-blue-50 text-blue-800', label: 'Target Plan only' },
+  on_schedule: { badge: 'bg-primary-light text-primary', label: 'On Track' },
+  ahead: { badge: 'bg-emerald-50 text-emerald-800', label: 'Ahead' },
+  behind: { badge: 'bg-red-50 text-red-800', label: 'Behind' },
+  unknown: { badge: 'bg-surface-muted text-text-muted', label: 'Status unknown' },
+};
+
+function formatSnapshotLabel(version: SCurveSnapshotSummary): string {
+  const label = version.trigger_label?.trim() ?? '';
+  if (label) return label;
+  const when = version.captured_at ? new Date(version.captured_at).toLocaleString() : 'Saved';
+  return `${when} — ${version.trigger_type.replace(/_/g, ' ')}`;
+}
+
+function sourceOptionLabel(entry: ReportProgressEntry): string {
+  const type = entry.reportType === 'STEWA' ? 'STEWA' : 'SWA';
+  const period = entry.asOfLabel?.trim() || entry.date;
+  return `${type} – As of ${period}`;
+}
+
+function SeriesDot({
+  cx,
+  cy,
+  payload,
+  series,
+  showDot,
+}: {
+  cx?: number;
+  cy?: number;
+  payload?: SCurvePoint;
+  series: 'target' | 'actual';
+  showDot: boolean;
+}) {
+  if (cx == null || cy == null || !Number.isFinite(cx) || !Number.isFinite(cy)) return <g />;
+  const target = payload?.originalPlan;
+  const actual = payload?.actual;
+  const close =
+    target != null &&
+    actual != null &&
+    Number.isFinite(target) &&
+    Number.isFinite(actual) &&
+    Math.abs(target - actual) <= 2;
+  if (!showDot && !close) return <g />;
+  if (close && series === 'target') {
+    return <circle cx={cx} cy={cy} r={7} fill="#2563eb" />;
+  }
+  if (close && series === 'actual') {
+    return <circle cx={cx} cy={cy} r={3.5} fill="#f97316" stroke="#ffffff" strokeWidth={1.5} />;
+  }
+  return <circle cx={cx} cy={cy} r={4} fill={series === 'target' ? '#2563eb' : '#f97316'} />;
+}
+
+function PlanLine({
+  dataKey,
+  name,
+  stroke,
+  strokeWidth = 2,
+  series,
+  showDot,
+}: {
+  dataKey: 'originalPlan' | 'actual';
+  name: string;
+  stroke: string;
+  strokeWidth?: number;
+  series: 'target' | 'actual';
+  showDot: boolean;
+}) {
+  return (
+    <Line
+      type="monotone"
+      dataKey={dataKey}
+      name={name}
+      stroke={stroke}
+      strokeWidth={strokeWidth}
+      dot={(props) => (
+        <SeriesDot
+          cx={props.cx}
+          cy={props.cy}
+          payload={props.payload as SCurvePoint | undefined}
+          series={series}
+          showDot={showDot}
+        />
+      )}
+      activeDot={(props) => (
+        <SeriesDot
+          cx={props.cx}
+          cy={props.cy}
+          payload={props.payload as SCurvePoint | undefined}
+          series={series}
+          showDot
+        />
+      )}
+      connectNulls
+    />
+  );
+}
+
+function PercentLabels({ points, show }: { points: SCurvePoint[]; show: boolean }) {
+  const xScale = useXAxisScale();
+  const yScale = useYAxisScale();
+  const plot = usePlotArea();
+  if (!show || !xScale || !yScale) return null;
+  const fontSize = 10;
+  const seeds = points.flatMap((point) =>
+    (['original', 'revised', 'actual'] as const).flatMap((series) => {
+      const value =
+        series === 'original' ? point.originalPlan : series === 'revised' ? point.currentPlan : point.actual;
+      if (value == null || !Number.isFinite(value)) return [];
+      if (
+        series === 'revised' &&
+        point.originalPlan != null &&
+        Math.abs(value - point.originalPlan) < 0.05
+      ) {
+        return [];
+      }
+      const x = xScale(point.date, { position: 'middle' });
+      const y = yScale(value);
+      if (x == null || y == null || !Number.isFinite(x) || !Number.isFinite(y)) return [];
+      const text = formatChartPercent(value);
+      return [{ x, y, value, series, width: Math.max(fontSize, text.length * fontSize * 0.72) }];
+    }),
+  );
+  const placed = placePercentLabels(seeds, {
+    fontSize,
+    plotTop: plot?.y,
+    plotBottom: plot ? plot.y + plot.height : undefined,
+  });
+  return (
+    <ZIndexLayer zIndex={DefaultZIndexes.label}>
+      <g>
+        {placed.map((label) => (
+          <text
+            key={`${label.series}-${label.x}-${label.value}`}
+            x={label.labelX}
+            y={label.labelY}
+            textAnchor="middle"
+            fill={
+              label.series === 'actual' ? '#f97316' : label.series === 'revised' ? '#7c3aed' : '#2563eb'
+            }
+            stroke="#ffffff"
+            strokeWidth={3}
+            fontSize={fontSize}
+            fontWeight={600}
+            style={{ paintOrder: 'stroke' }}
+          >
+            {label.text}
+          </text>
+        ))}
+      </g>
+    </ZIndexLayer>
+  );
+}
+
+type SCurveTab = 'curve' | 'baseline' | 'cost' | 'activities' | 'history';
+
+function formatMoney(value: number): string {
+  return value.toLocaleString('en-PH', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+export function SCurvePage() {
+  const { user } = useAuth();
+  const { projectId, setProjectId } = useSelectedProject();
+  const [curveType, setCurveType] = useState<SCurveType>('pdm_based');
+  const [reportingInterval, setReportingInterval] = useState<SCurveReportingInterval>('30_day');
+  const [theoreticalTotalPeriods, setTheoreticalTotalPeriods] = useState(1);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [periodSaveError, setPeriodSaveError] = useState('');
+  const [generatingCurve, setGeneratingCurve] = useState(false);
+  const [generateOpen, setGenerateOpen] = useState(false);
+  const [selectedSourceId, setSelectedSourceId] = useState('');
+  const [generateMessage, setGenerateMessage] = useState('');
+  const [settingsVersion, setSettingsVersion] = useState(0);
+  const [points, setPoints] = useState<SCurvePoint[]>([]);
+  const [activities, setActivities] = useState<SCurveActivity[]>([]);
+  const [costItems, setCostItems] = useState<SCurveCostItem[]>([]);
+  const [periods, setPeriods] = useState<SCurvePeriodRow[]>([]);
+  const [periodEdits, setPeriodEdits] = useState<Record<string, SCurvePeriodEdit>>({});
+  const [criticalPath, setCriticalPath] = useState<string[]>([]);
+  const [syncedFromPdm, setSyncedFromPdm] = useState(false);
+  const [hasActualProgress, setHasActualProgress] = useState(false);
+  const [hasRevisedSchedule, setHasRevisedSchedule] = useState(false);
+  const [scheduleStatus, setScheduleStatus] = useState<ScheduleStatus | null>(null);
+  const [comparisons, setComparisons] = useState<SCurveComparison[]>([]);
+  const [reportFeed, setReportFeed] = useState<ReportProgressEntry[]>([]);
+  const [latestReportPercent, setLatestReportPercent] = useState<number | null>(null);
+  const [latestReportDate, setLatestReportDate] = useState<string | null>(null);
+  const [versions, setVersions] = useState<SCurveSnapshotSummary[]>([]);
+  const [viewingSnapshotId, setViewingSnapshotId] = useState<string | null>(null);
+  const [viewingSnapshotLabel, setViewingSnapshotLabel] = useState<string | null>(null);
+  const [projectStartDate, setProjectStartDate] = useState<string | null>(null);
+  const [projectEndDate, setProjectEndDate] = useState<string | null>(null);
+  const [targetPlanPercent, setTargetPlanPercent] = useState<number | null>(null);
+  const [targetPlanPhp, setTargetPlanPhp] = useState<number | null>(null);
+  const [actualPlanPercent, setActualPlanPercent] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
+  const [chartReady, setChartReady] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [showPercentLabels, setShowPercentLabels] = useState(false);
+  const [costSaving, setCostSaving] = useState(false);
+  const [costDirty, setCostDirty] = useState(false);
+  const [costMessage, setCostMessage] = useState('');
+  const savedPeriodCountRef = useRef(1);
+  const canEditCharts = canEditProjectCharts(user?.role);
+  const canEditPeriods = canEditSCurvePeriods(user?.role);
+  const canEditCostItems = canEditCharts;
+  const costSummary = useMemo(() => computeSCurveCostSummary(costItems), [costItems]);
+  const [activeTab, setActiveTab] = useState<SCurveTab>('curve');
+  const costPaging = usePagination(costSummary.items, { resetKey: `${projectId}-${viewingSnapshotId ?? 'live'}` });
+  const activityPaging = usePagination(activities, { resetKey: projectId });
+  const periodPaging = usePagination(periods, { resetKey: `${projectId}-${reportingInterval}` });
+  const comparisonPaging = usePagination(comparisons, { resetKey: projectId });
+
+  const sourceReports = useMemo(
+    () =>
+      reportFeed.filter(
+        (entry) => (entry.reportType === 'SWA' || entry.reportType === 'STEWA') && entry.id,
+      ),
+    [reportFeed],
+  );
+
+  useEffect(() => {
+    setViewingSnapshotId(null);
+    setGenerateOpen(false);
+    setSelectedSourceId('');
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!generateOpen) return;
+    setSelectedSourceId((current) =>
+      sourceReports.some((entry) => entry.id === current) ? current : sourceReports[0]?.id ?? '',
+    );
+  }, [generateOpen, sourceReports]);
+
+  useEffect(() => {
+    setChartReady(true);
+  }, []);
+
+  const sCurvePdfInput = () => ({
+    projectLabel: `Project ${projectId}`,
+    points,
+    comparisons,
+    periods: curveType === 'pdm_based' ? [] : periods,
+    status: scheduleStatus,
+    targetPlanPercent,
+    targetPlanPhp,
+    actualPlanPercent,
+    showPercentLabels,
+  });
+
+  const updateCostItem = (
+    activityId: string,
+    patch: Partial<Pick<SCurveCostItem, 'itemNo' | 'description' | 'quantity' | 'unitCost'>>,
+  ) => {
+    setCostItems((current) =>
+      current.map((item) => (item.activityId === activityId ? { ...item, ...patch } : item)),
+    );
+    setCostDirty(true);
+    setCostMessage('');
+  };
+
+  const persistScheduleSettings = async (next: {
+    curveType?: SCurveType;
+    reportingInterval?: SCurveReportingInterval;
+    theoreticalTotalPeriods?: number;
+  }) => {
+    if (viewingSnapshotId || !canEditCharts) return;
+    const nextCurveType = next.curveType ?? curveType;
+    const nextReportingInterval = next.reportingInterval ?? reportingInterval;
+    const nextTheoreticalTotalPeriods = Math.max(
+      1,
+      next.theoreticalTotalPeriods ?? theoreticalTotalPeriods,
+    );
+
+    setSettingsSaving(true);
+    try {
+      const saved = await saveSCurveSettings({
+        project_id: projectId,
+        curve_type: nextCurveType,
+        reporting_interval: nextReportingInterval,
+        theoretical_total_periods: nextTheoreticalTotalPeriods,
+      });
+      setCurveType(saved.curve_type);
+      setReportingInterval(saved.reporting_interval);
+      setTheoreticalTotalPeriods(saved.theoretical_total_periods);
+      setSettingsVersion((value) => value + 1);
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
+  const persistPeriodCount = async (count: number) => {
+    if (viewingSnapshotId || !canEditPeriods) return;
+    const next = Math.max(1, Math.floor(count) || 1);
+    if (next === savedPeriodCountRef.current) return;
+    setTheoreticalTotalPeriods(next);
+    setPeriodSaveError('');
+    setSettingsSaving(true);
+    try {
+      await saveSCurvePeriods({
+        project_id: projectId,
+        theoretical_total_periods: next,
+        period_edits: periodEdits,
+      });
+      setSettingsVersion((value) => value + 1);
+    } catch (err) {
+      setPeriodSaveError(err instanceof Error ? err.message : 'Could not save S-Curve periods.');
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
+  const persistPeriodTarget = async (periodIndex: number, raw: string) => {
+    if (viewingSnapshotId || !canEditPeriods) return;
+    const pct = Number(raw);
+    if (!Number.isFinite(pct)) return;
+    const nextEdits = {
+      ...periodEdits,
+      [String(periodIndex)]: { targetAccomplishmentPct: Math.max(0, pct) },
+    };
+    setPeriodEdits(nextEdits);
+    setPeriodSaveError('');
+    setSettingsSaving(true);
+    try {
+      await saveSCurvePeriods({
+        project_id: projectId,
+        period_edits: nextEdits,
+      });
+      setSettingsVersion((value) => value + 1);
+    } catch (err) {
+      setPeriodSaveError(err instanceof Error ? err.message : 'Could not save S-Curve periods.');
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    setLoading(true);
+    getSCurve(projectId, viewingSnapshotId)
+      .then((res) => {
+        setPoints(res.points);
+        setActivities(res.activities);
+        setCostItems(res.cost_items ?? []);
+        setPeriods(res.periods ?? []);
+        setPeriodEdits(res.period_edits ?? {});
+        setCriticalPath(res.critical_path);
+        setSyncedFromPdm(res.synced_from_pdm);
+        setHasActualProgress(res.has_actual_progress);
+        setHasRevisedSchedule(res.has_revised_schedule);
+        setScheduleStatus(res.schedule_status);
+        setComparisons(res.comparisons ?? []);
+        setReportFeed(res.report_feed ?? []);
+        setLatestReportPercent(res.latest_report_percent);
+        setLatestReportDate(res.latest_report_date);
+        setVersions(res.versions ?? []);
+        setViewingSnapshotLabel(res.viewing_snapshot_label);
+        setProjectStartDate(res.project_start_date ?? null);
+        setProjectEndDate(res.project_end_date ?? null);
+        setCurveType(res.curve_type);
+        setReportingInterval(res.reporting_interval);
+        setTheoreticalTotalPeriods(res.theoretical_total_periods);
+        savedPeriodCountRef.current = res.theoretical_total_periods;
+        setTargetPlanPercent(res.target_plan_percent ?? null);
+        setTargetPlanPhp(res.target_plan_php ?? null);
+        setActualPlanPercent(res.actual_plan_percent ?? null);
+        setCostDirty(false);
+        setCostMessage('');
+      })
+      .catch(() => {
+        setPoints([]);
+        setActivities([]);
+        setCostItems([]);
+        setPeriods([]);
+        setPeriodEdits({});
+        setCriticalPath([]);
+        setSyncedFromPdm(false);
+        setHasActualProgress(false);
+        setHasRevisedSchedule(false);
+        setScheduleStatus(null);
+        setComparisons([]);
+        setReportFeed([]);
+        setLatestReportPercent(null);
+        setLatestReportDate(null);
+        setVersions([]);
+        setViewingSnapshotLabel(null);
+        setProjectStartDate(null);
+        setProjectEndDate(null);
+        setCurveType('pdm_based');
+        setReportingInterval('30_day');
+        setTheoreticalTotalPeriods(1);
+        setTargetPlanPercent(null);
+        setTargetPlanPhp(null);
+        setActualPlanPercent(null);
+        setCostDirty(false);
+        setCostMessage('');
+      })
+      .finally(() => setLoading(false));
+  }, [projectId, viewingSnapshotId, settingsVersion]);
+
+  useEffect(() => {
+    if (!canEditCostItems || !costDirty || viewingSnapshotId) return;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        setCostSaving(true);
+        try {
+          const res = await saveSCurveCostItems({
+            project_id: projectId,
+            items: costItems.map((item) => ({
+              activityId: item.activityId,
+              itemNo: item.itemNo,
+              description: item.description,
+              quantity: item.quantity,
+              unitCost: item.unitCost,
+            })),
+          });
+          setCostItems(res.cost_items);
+          setCostDirty(false);
+          setCostMessage('Cost items auto-saved.');
+        } catch {
+          setCostMessage('Could not save S-Curve cost items.');
+        } finally {
+          setCostSaving(false);
+        }
+      })();
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [canEditCostItems, costDirty, costItems, projectId, viewingSnapshotId]);
+
+  const statusStyle = STATUS_STYLES[scheduleStatus?.status ?? 'unknown'] ?? STATUS_STYLES.unknown;
+  const variance =
+    targetPlanPercent != null && actualPlanPercent != null
+      ? Math.round((actualPlanPercent - targetPlanPercent) * 100) / 100
+      : null;
+
+  return (
+    <main className="flex-1 overflow-y-auto">
+      <DocumentsBackLink />
+      <div className="space-y-5 px-8 pb-10 pt-6">
+      <header className="page-header-in relative z-20 overflow-visible rounded-xl border border-border/80 bg-card/90 px-4 py-3 shadow-sm sm:px-5">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 h-0.5 overflow-hidden rounded-t-xl"
+        >
+          <div className="page-accent-sweep h-full bg-gradient-to-r from-primary via-accent to-transparent" />
+        </div>
+
+        <div className="page-toolbar-in flex flex-wrap items-center justify-between gap-x-4 gap-y-2.5">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-text-muted">
+              Schedule
+            </p>
+            <h1 className="font-[family-name:var(--font-display)] text-xl font-semibold leading-tight tracking-tight text-text sm:text-2xl">
+              S-Curve
+            </h1>
+            {(projectStartDate || projectEndDate) && (
+              <p className="mt-0.5 truncate text-[11px] text-text-muted">
+                {projectStartDate
+                  ? new Date(`${projectStartDate}T00:00:00`).toLocaleDateString(undefined, {
+                      year: 'numeric',
+                      month: 'short',
+                      day: 'numeric',
+                    })
+                  : '—'}
+                {' → '}
+                {projectEndDate
+                  ? new Date(`${projectEndDate}T00:00:00`).toLocaleDateString(undefined, {
+                      year: 'numeric',
+                      month: 'short',
+                      day: 'numeric',
+                    })
+                  : '—'}
+              </p>
+            )}
+          </div>
+
+          <div className="relative z-30 flex flex-wrap items-center justify-end gap-2">
+            {scheduleStatus && (
+              <div
+                className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyle.badge}`}
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80" />
+                {statusStyle.label}
+                {scheduleStatus.planned_pct != null && (
+                  <span className="font-medium opacity-70">
+                    {scheduleStatus.planned_pct}%
+                    {scheduleStatus.actual_pct != null ? ` · ${scheduleStatus.actual_pct}%` : ''}
+                  </span>
+                )}
+              </div>
+            )}
+
+            {canEditCharts ? (
+              <>
+                <div
+                  role="group"
+                  aria-label="Schedule basis"
+                  className="flex shrink-0 rounded-lg bg-surface-muted p-0.5"
+                >
+                  <button
+                    type="button"
+                    onClick={() => void persistScheduleSettings({ curveType: 'pdm_based' })}
+                    disabled={settingsSaving || !!viewingSnapshotId}
+                    className={`rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors duration-200 ${
+                      curveType === 'pdm_based'
+                        ? 'bg-primary text-white shadow-sm'
+                        : 'text-text-muted hover:text-text'
+                    }`}
+                  >
+                    PDM target
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void persistScheduleSettings({ curveType: 'ideal_theoretical' })}
+                    disabled={settingsSaving || !!viewingSnapshotId}
+                    className={`rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors duration-200 ${
+                      curveType === 'ideal_theoretical'
+                        ? 'bg-primary text-white shadow-sm'
+                        : 'text-text-muted hover:text-text'
+                    }`}
+                  >
+                    Theoretical
+                  </button>
+                </div>
+
+                <label className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs transition focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/20">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                    Interval
+                  </span>
+                  <select
+                    value={reportingInterval}
+                    disabled={settingsSaving || !!viewingSnapshotId}
+                    onChange={(e) =>
+                      void persistScheduleSettings({
+                        reportingInterval: e.target.value as SCurveReportingInterval,
+                      })
+                    }
+                    className="bg-transparent text-xs font-semibold text-text outline-none"
+                  >
+                    <option value="10_day">10-day</option>
+                    <option value="30_day">30-day</option>
+                  </select>
+                </label>
+
+              </>
+            ) : (
+              <div className="flex shrink-0 flex-wrap items-center gap-1.5 text-xs">
+                <span className="rounded-md bg-primary px-2.5 py-1.5 font-semibold text-white shadow-sm">
+                  {curveType === 'ideal_theoretical' ? 'Theoretical' : 'PDM target'}
+                </span>
+                <span className="rounded-lg border border-border bg-surface px-2.5 py-1.5 font-semibold text-text">
+                  {reportingInterval === '10_day' ? '10-day' : '30-day'} interval
+                </span>
+                <span className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 font-semibold text-amber-900">
+                  View only
+                </span>
+              </div>
+            )}
+
+            {curveType === 'ideal_theoretical' && canEditPeriods && !viewingSnapshotId && (
+              <label className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs transition focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/20">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                  Periods
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  value={theoreticalTotalPeriods}
+                  disabled={settingsSaving}
+                  aria-label="S-Curve periods"
+                  onChange={(e) => setTheoreticalTotalPeriods(Math.max(1, Number(e.target.value || 1)))}
+                  onBlur={(e) => void persistPeriodCount(Number(e.currentTarget.value || 1))}
+                  className="w-12 bg-transparent text-xs font-semibold text-text outline-none"
+                />
+              </label>
+            )}
+
+            <div className="relative z-30 min-w-[180px] sm:w-[220px]">
+              <ProjectSelect value={projectId} onChange={setProjectId} />
+            </div>
+
+            <button
+              type="button"
+              disabled={points.length === 0}
+              onClick={() => setPreviewOpen(true)}
+              className="shrink-0 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-text transition hover:border-primary/30 hover:bg-primary-light/40 disabled:opacity-50"
+            >
+              Preview
+            </button>
+            <button
+              type="button"
+              disabled={exporting || points.length === 0}
+              onClick={() => {
+                setExporting(true);
+                try {
+                  exportSCurvePdf(sCurvePdfInput());
+                } finally {
+                  setExporting(false);
+                }
+              }}
+              className="shrink-0 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-semibold text-text transition hover:border-primary/30 hover:bg-primary-light/40 disabled:opacity-50"
+            >
+              {exporting ? 'Exporting…' : 'Export PDF'}
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div className="space-y-3">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {([
+            ['Target plan', targetPlanPercent != null ? `${targetPlanPercent}%` : '—', curveType === 'pdm_based' ? 'STEWA planned % on the revised schedule. Accomplishment does not change it.' : 'Original baseline cumulative for this period. Accomplishment does not change it.', 'planned'],
+            ['Target plan (PHP)', targetPlanPhp != null ? `P ${formatMoney(targetPlanPhp)}` : '—', 'Current cumulative target amount', 'reports'],
+            ['Actual progress', actualPlanPercent != null ? `${actualPlanPercent}%` : '—', latestReportDate ? `Latest report ${latestReportDate}` : 'No approved report yet', 'actual'],
+            ['Schedule variance', variance != null ? `${variance > 0 ? '+' : ''}${variance}%` : '—', variance == null ? 'Waiting for actual progress' : variance < 0 ? 'Behind target plan' : variance > 0 ? 'Ahead of target plan' : 'Matching target plan', 's-curve'],
+          ] as [string, string | number, string, NavIconName][]).map(([label, value, caption, icon]) => (
+            <div key={label} className="rounded-2xl border border-border bg-card p-4 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-text-muted">{label}</p>
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary-light text-primary">
+                  <NavIcon name={icon} className="h-5 w-5" />
+                </span>
+              </div>
+              <p className={`mt-3 text-2xl font-semibold ${label === 'Schedule variance' && variance != null ? (variance < 0 ? 'text-red-600' : 'text-emerald-700') : 'text-text'}`}>{value}</p>
+              <p className="mt-1 truncate text-xs text-text-muted" title={caption}>{caption}</p>
+            </div>
+          ))}
+        </div>
+        <div className="grid gap-3 sm:grid-cols-3">
+          {([
+            ['Critical path', criticalPath.length, syncedFromPdm ? 'Synced from PDM schedule' : 'Not synced from PDM', 'approval'],
+            ['Total contract amount', `P ${formatMoney(costSummary.totalContractAmount)}`, 'Sum of all PDM-based item amounts', 'reports'],
+            ['Total WT%', `${costSummary.totalWeightPct.toFixed(2)}%`, 'Should total 100% when items have amounts', 'projects'],
+          ] as [string, string | number, string, NavIconName][]).map(([label, value, caption, icon]) => (
+            <div key={label} className="rounded-2xl border border-border bg-card p-4 shadow-sm">
+              <div className="flex items-start justify-between gap-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-text-muted">{label}</p>
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-surface-muted text-text-muted">
+                  <NavIcon name={icon} className="h-5 w-5" />
+                </span>
+              </div>
+              <p className="mt-3 text-xl font-semibold text-text">{value}</p>
+              <p className="mt-1 truncate text-xs text-text-muted" title={caption}>{caption}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+
+      <section className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+        <div className="border-b border-border bg-surface-muted/40 px-4 pt-3">
+          <div className="flex flex-wrap gap-1" role="tablist" aria-label="S-Curve sections">
+            {(
+              [
+                { id: 'curve' as const, label: 'Progress curve', count: points.length },
+                { id: 'baseline' as const, label: 'Baseline', count: periods.length + comparisons.length },
+                { id: 'cost' as const, label: 'Cost items', count: costSummary.items.length },
+                { id: 'activities' as const, label: 'Activities', count: activities.length },
+                { id: 'history' as const, label: 'History', count: versions.length },
+              ] as const
+            ).map((tab) => {
+              const active = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`-mb-px inline-flex items-center gap-2 rounded-t-xl px-4 py-2.5 text-sm font-semibold transition ${
+                    active
+                      ? 'border border-b-0 border-border bg-card text-primary'
+                      : 'text-text-muted hover:bg-card/60 hover:text-text'
+                  }`}
+                >
+                  {tab.label}
+                  <span
+                    className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
+                      active ? 'bg-primary text-white' : 'bg-surface-muted text-text-muted'
+                    }`}
+                  >
+                    {loading ? '…' : tab.count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="p-4 sm:p-5" role="tabpanel">
+          {activeTab === 'curve' && (
+            <div className="space-y-5">
+                      <div>
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <h2 className="text-lg font-semibold text-text">Progress curve</h2>
+                            <p className="mt-1 text-sm text-text-muted">Cumulative progress against the approved baseline and latest reports.</p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <label className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-text">
+                              <input
+                                type="checkbox"
+                                checked={showPercentLabels}
+                                onChange={(event) => setShowPercentLabels(event.target.checked)}
+                              />
+                              Show percentage labels
+                            </label>
+                            {canEditCharts && (
+                              <button
+                                type="button"
+                                disabled={generatingCurve}
+                                onClick={() => {
+                                  setGenerateMessage('');
+                                  setGenerateOpen((open) => {
+                                    const next = !open;
+                                    if (next) {
+                                      setSelectedSourceId((current) =>
+                                        sourceReports.some((entry) => entry.id === current)
+                                          ? current
+                                          : sourceReports[0]?.id ?? '',
+                                      );
+                                    }
+                                    return next;
+                                  });
+                                }}
+                                className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                              >
+                                {generatingCurve ? 'Generating…' : 'Generate S-Curve from SWA/STEWA'}
+                              </button>
+                            )}
+                          {versions.length > 0 && (
+                            <div className="flex flex-wrap items-center gap-2">
+                              <label htmlFor="scurve-version" className="text-xs font-medium text-text-muted">
+                                Version history
+                              </label>
+                              <select
+                                id="scurve-version"
+                                value={viewingSnapshotId ?? ''}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setViewingSnapshotId(val === '' ? null : val);
+                                }}
+                                className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm"
+                              >
+                                <option value="">Current (latest)</option>
+                                {versions.map((v) => (
+                                  <option key={v.id} value={v.id}>
+                                    {formatSnapshotLabel(v)}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                          </div>
+                        </div>
+                        {generateOpen && canEditCharts && (
+                          <div className="mt-3 rounded-xl border border-border bg-surface-muted/40 p-3">
+                            <p className="text-sm font-medium text-text">Choose the SWA or STEWA reporting period</p>
+                            <p className="mt-1 text-xs text-text-muted">
+                              The S-Curve date comes from the selected report. Target Plan stays on the original baseline.
+                            </p>
+                            {sourceReports.length === 0 ? (
+                              <p className="mt-2 text-xs text-red-600">
+                                Save an approved SWA or STEWA for this project before generating an S-Curve.
+                              </p>
+                            ) : (
+                              <div className="mt-2 space-y-1">
+                                {sourceReports.map((entry) => (
+                                  <label
+                                    key={entry.id}
+                                    className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-card"
+                                  >
+                                    <input
+                                      type="radio"
+                                      name="scurve-source-report"
+                                      checked={selectedSourceId === entry.id}
+                                      onChange={() => setSelectedSourceId(entry.id ?? '')}
+                                    />
+                                    <span className="font-medium">{sourceOptionLabel(entry)}</span>
+                                    <span className="text-xs text-text-muted">{entry.percent}%</span>
+                                  </label>
+                                ))}
+                                <button
+                                  type="button"
+                                  disabled={generatingCurve || !selectedSourceId}
+                                  onClick={() => {
+                                    setGeneratingCurve(true);
+                                    setGenerateMessage('');
+                                    void generateSwaStewaSCurve(projectId, selectedSourceId)
+                                      .then((saved) => {
+                                        setGenerateMessage(`Saved ${saved.label}.`);
+                                        setGenerateOpen(false);
+                                        setViewingSnapshotId(saved.id);
+                                        setSettingsVersion((value) => value + 1);
+                                      })
+                                      .catch((err: unknown) => {
+                                        setGenerateMessage(
+                                          err instanceof Error ? err.message : 'Could not generate the S-Curve.',
+                                        );
+                                      })
+                                      .finally(() => setGeneratingCurve(false));
+                                  }}
+                                  className="mt-2 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                                >
+                                  {generatingCurve ? 'Generating…' : 'Generate this period'}
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {generateMessage && (
+                          <p className={`mt-2 text-xs ${generateMessage.startsWith('Saved') ? 'text-text-muted' : 'text-red-600'}`}>
+                            {generateMessage}
+                          </p>
+                        )}
+                        {curveType === 'pdm_based' ? (
+                          <p className="mt-2 text-xs text-text-muted">
+                            Original uses the STEWA planned formula on the original schedule. Target uses the same formula on the revised schedule. Actual is the SWA accomplished weight. Slippage is Actual minus Target.
+                          </p>
+                        ) : hasRevisedSchedule ? (
+                          <p className="mt-2 text-xs text-text-muted">
+                            Revised S-Curve is the monitoring baseline. The SWA/STEWA S-Curve is actual progress.
+                          </p>
+                        ) : null}
+
+                        {viewingSnapshotLabel && (
+                          <p className="mt-2 text-center text-xs text-amber-700 sm:text-left">
+                            Viewing archived snapshot: <strong>{viewingSnapshotLabel}</strong>
+                          </p>
+                        )}
+
+                        {loading ? (
+                          <div className="mt-6 h-80 animate-pulse rounded-xl bg-surface-muted" />
+                        ) : points.length === 0 ? (
+                          <div className="mt-6 rounded-xl border border-dashed border-border px-6 py-16 text-center">
+                            <p className="font-semibold text-text">No S-curve points recorded yet</p>
+                            <p className="mt-2 text-sm text-text-muted">The target curve comes from the original plan. Approved progress reports add the actual curve.</p>
+                          </div>
+                        ) : (
+                          <div>
+                            <div className="mt-4 h-80 w-full">
+                              {chartReady ? (
+                              <ResponsiveContainer width="100%" height="100%">
+                                <LineChart
+                                  data={points}
+                                  margin={{
+                                    top: showPercentLabels ? 28 : 10,
+                                    right: showPercentLabels ? 28 : 20,
+                                    left: 0,
+                                    bottom: showPercentLabels ? 8 : 0,
+                                  }}
+                                >
+                                  <CartesianGrid stroke="#e0dfd8" strokeDasharray="3 3" />
+                                  <XAxis
+                                    dataKey="date"
+                                    tick={{ fill: '#000000', fontSize: 10 }}
+                                    angle={-35}
+                                    textAnchor="end"
+                                    height={60}
+                                  />
+                                  <YAxis
+                                    domain={[0, 100]}
+                                    ticks={[0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]}
+                                    tick={{ fill: '#000000', fontSize: 11 }}
+                                    tickFormatter={(v) => `${v}%`}
+                                  />
+                                  <Tooltip
+                                    content={({ active, payload, label }) => {
+                                      if (!active || !payload?.length) return null;
+                                      const row = payload[0]?.payload as SCurvePoint | undefined;
+                                      const original = row?.originalPlan;
+                                      const target = curveType === 'pdm_based' ? row?.currentPlan : row?.originalPlan;
+                                      const actual = row?.actual;
+                                      const slip =
+                                        actual != null && target != null
+                                          ? Math.round((actual - target) * 100) / 100
+                                          : null;
+                                      return (
+                                        <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs shadow-md">
+                                          <p className="font-semibold text-text">{label}</p>
+                                          {row?.periodLabel && (
+                                            <p className="text-text-muted">{row.periodLabel}</p>
+                                          )}
+                                          {curveType === 'pdm_based' && original != null && (
+                                            <p className="text-[#2563eb]">Original: {original}%</p>
+                                          )}
+                                          {target != null && (
+                                            <p className={curveType === 'pdm_based' ? 'text-[#7c3aed]' : 'text-[#2563eb]'}>
+                                              {curveType === 'pdm_based' ? 'Target' : 'Target Plan'}: {target}%
+                                            </p>
+                                          )}
+                                          {row?.targetAccomplishmentPct != null && (
+                                            <p className="text-text-muted">
+                                              Target this period: {row.targetAccomplishmentPct.toFixed(2)}%
+                                              {row.targetAccomplishmentPhp != null
+                                                ? ` · P ${formatMoney(row.targetAccomplishmentPhp)}`
+                                                : ''}
+                                            </p>
+                                          )}
+                                          {actual != null && (
+                                            <p className="text-[#f97316]">
+                                              {curveType === 'pdm_based' ? 'Actual' : 'Actual Plan'}: {actual}%
+                                            </p>
+                                          )}
+                                          {slip != null && (
+                                            <p className="mt-1 text-text-muted">
+                                              {slip < 0 ? 'Behind' : slip > 0 ? 'Ahead' : 'On Track'}
+                                              {' · Slippage '}
+                                              {slip > 0 ? '+' : ''}
+                                              {slip.toFixed(2)}%
+                                            </p>
+                                          )}
+                                          {row?.label && (
+                                            <p className="mt-1 text-text-muted">{row.label}</p>
+                                          )}
+                                        </div>
+                                      );
+                                    }}
+                                  />
+                                  <Legend />
+                                  <PlanLine
+                                    dataKey="originalPlan"
+                                    name={curveType === 'pdm_based' ? 'Original' : hasRevisedSchedule ? 'Original S-Curve' : 'Target Plan %'}
+                                    stroke="#2563eb"
+                                    series="target"
+                                    showDot
+                                  />
+                                  {hasRevisedSchedule && (
+                                    <Line
+                                      type="monotone"
+                                      dataKey="currentPlan"
+                                      name={curveType === 'pdm_based' ? 'Target' : 'Revised S-Curve'}
+                                      stroke="#7c3aed"
+                                      strokeWidth={2}
+                                      strokeDasharray="6 4"
+                                      dot={{ r: 3, fill: '#7c3aed' }}
+                                      connectNulls
+                                    />
+                                  )}
+                                  {hasActualProgress && (
+                                    <PlanLine
+                                      dataKey="actual"
+                                      name={curveType === 'pdm_based' ? 'Actual' : hasRevisedSchedule ? 'SWA/STEWA S-Curve' : 'Actual Plan %'}
+                                      stroke="#f97316"
+                                      strokeWidth={2.5}
+                                      series="actual"
+                                      showDot
+                                    />
+                                  )}
+                                  {hasActualProgress &&
+                                    scheduleStatus?.planned_pct != null &&
+                                    scheduleStatus.actual_pct != null && (
+                                      <ReferenceLine
+                                        y={scheduleStatus.planned_pct}
+                                        stroke={hasRevisedSchedule ? '#7c3aed' : '#2563eb'}
+                                        strokeDasharray="2 6"
+                                        strokeOpacity={0.35}
+                                      />
+                                    )}
+                                  <PercentLabels points={points} show={showPercentLabels} />
+                                </LineChart>
+                              </ResponsiveContainer>
+                              ) : (
+                                <div className="flex h-full items-center justify-center text-sm text-text-muted">
+                                  Loading chart…
+                                </div>
+                              )}
+                            </div>
+
+                            <details className="mt-6 rounded-xl border border-border bg-surface-muted/30">
+                              <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-text">
+                                Point values table
+                                <span className="ml-2 font-normal text-text-muted">({points.length} periods)</span>
+                              </summary>
+                              <div className="overflow-x-auto border-t border-border px-2 pb-3">
+                              <table className="w-full border-collapse text-center text-xs">
+                                <thead>
+                                  <tr className="border-b-2 border-text bg-surface-muted">
+                                    <th className="p-2 text-left font-bold">Curve</th>
+                                    {points.map((p) => (
+                                      <th key={p.pointDate ?? p.date} className="border-l border-border p-2 font-normal">
+                                        {p.date}
+                                      </th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  <tr className="border-b border-border">
+                                    <td className="p-2 text-left font-semibold text-[#2563eb]">{curveType === 'pdm_based' ? 'Original %' : hasRevisedSchedule ? 'Original S-Curve %' : 'Cumulative target %'}</td>
+                                    {points.map((p) => (
+                                      <td key={p.pointDate ?? p.date} className="border-l border-border p-2">
+                                        {p.originalPlan != null ? `${p.originalPlan}%` : ''}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                  {curveType !== 'pdm_based' && (
+                                  <>
+                                  <tr className="border-b border-border">
+                                    <td className="p-2 text-left font-semibold text-text-muted">Target this period %</td>
+                                    {points.map((p) => (
+                                      <td key={p.pointDate ?? p.date} className="border-l border-border p-2">
+                                        {p.targetAccomplishmentPct != null ? `${p.targetAccomplishmentPct.toFixed(2)}%` : ''}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                  <tr className="border-b border-border">
+                                    <td className="p-2 text-left font-semibold text-text-muted">Target this period (PHP)</td>
+                                    {points.map((p) => (
+                                      <td key={p.pointDate ?? p.date} className="border-l border-border p-2">
+                                        {p.targetAccomplishmentPhp != null ? `P ${formatMoney(p.targetAccomplishmentPhp)}` : ''}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                  </>
+                                  )}
+                                  {hasRevisedSchedule && (
+                                    <tr className="border-b border-border">
+                                      <td className="p-2 text-left font-semibold text-[#7c3aed]">{curveType === 'pdm_based' ? 'Target %' : 'Revised S-Curve %'}</td>
+                                      {points.map((p) => (
+                                        <td key={p.pointDate ?? p.date} className="border-l border-border p-2">
+                                          {p.currentPlan != null ? `${p.currentPlan}%` : ''}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  )}
+                                  {hasActualProgress && (
+                                    <tr className="border-b border-border">
+                                      <td className="p-2 text-left font-semibold text-[#f97316]">{curveType === 'pdm_based' ? 'Actual %' : hasRevisedSchedule ? 'SWA/STEWA %' : 'Actual %'}</td>
+                                      {points.map((p) => (
+                                        <td key={p.pointDate ?? p.date} className="border-l border-border p-2">
+                                          {p.actual != null ? `${p.actual}%` : ''}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  )}
+                                  {hasActualProgress && (
+                                    <tr className="border-t border-border">
+                                      <td className="p-2 text-left font-semibold text-text-muted">Gap (Actual - Target)</td>
+                                      {points.map((p) => (
+                                        <td key={p.pointDate ?? p.date} className="border-l border-border p-2">
+                                          {(() => {
+                                            const basis = curveType === 'pdm_based' ? p.currentPlan : p.originalPlan;
+                                            const slip =
+                                              p.actual != null && basis != null
+                                                ? Math.round((p.actual - basis) * 100) / 100
+                                                : p.variance ?? null;
+                                            if (slip == null) return '';
+                                            return (
+                                              <span className={slip < 0 ? 'text-red-700' : slip > 0 ? 'text-emerald-700' : ''}>
+                                                {slip > 0 ? '+' : ''}
+                                                {slip}%
+                                              </span>
+                                            );
+                                          })()}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                              </div>
+                            </details>
+                          </div>
+                        )}
+
+                        <p className="mt-4 text-xs text-text-muted">
+                          {hasActualProgress
+                            ? 'Compare Actual against the Target Plan to see on-schedule, ahead, or delayed progress. Slippage triggers revised schedule updates when the PDM is changed.'
+                            : 'Target Plan is the baseline. The Actual curve appears once approved progress reports are recorded.'}
+                          {syncedFromPdm && criticalPath.length > 0 && (
+                            <> Critical path: <strong>{criticalPath.join(' → ')}</strong>.</>
+                          )}
+                        </p>
+                      </div>
+
+                      <ReportProgressFeed
+                        reports={reportFeed}
+                        latestPercent={latestReportPercent}
+                        latestDate={latestReportDate}
+                        emptyMessage="No approved SWA or STEWA reports yet — Target Plan appears after the first approved progress."
+                      />
+            </div>
+          )}
+
+          {activeTab === 'baseline' && (
+            <div className="space-y-5">
+              {periods.length === 0 && comparisons.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-border px-6 py-14 text-center">
+                  <p className="font-semibold text-text">No baseline periods yet</p>
+                  <p className="mt-1 text-sm text-text-muted">
+                    Sync a PDM schedule and cost weights to build the target baseline.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {periods.length > 0 && (
+                          <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+                            <h2 className="text-lg font-semibold text-text">
+                              {reportingInterval === '10_day'
+                                ? '10-day target accomplishment baseline'
+                                : 'Monthly target accomplishment baseline'}
+                            </h2>
+                            <p className="mt-1 text-sm text-text-muted">
+                              {reportingInterval === '10_day'
+                                ? 'Each period uses a 10-day baseline. Target this period can be edited. Cumulative target stays on the original S-curve.'
+                                : 'Each month uses a 30-day baseline. Target this period can be edited. Cumulative target stays on the original S-curve.'}
+                            </p>
+                            {periodSaveError && (
+                              <p className="mt-2 text-sm text-red-600">{periodSaveError}</p>
+                            )}
+                            <div className="mt-4 overflow-x-auto">
+                              <table className="w-full text-left text-sm">
+                                <thead>
+                                  <tr className="border-b border-border text-xs uppercase text-text-muted">
+                                    <th className="py-2 pr-3">Period</th>
+                                    <th className="py-2 pr-3">Date range</th>
+                                    <th className="py-2 pr-3">Target %</th>
+                                    <th className="py-2 pr-3">Target (PHP)</th>
+                                    <th className="py-2 pr-3">Cumulative %</th>
+                                    <th className="py-2">Cumulative (PHP)</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {periodPaging.pageItems.map((period) => (
+                                    <tr key={period.periodIndex} className="border-b border-border/50">
+                                      <td className="py-2 pr-3 font-medium">{period.label}</td>
+                                      <td className="py-2 pr-3">
+                                        {period.startDate} to {period.endDate}
+                                      </td>
+                                      <td className="py-2 pr-3 font-semibold text-[#2563eb]">
+                                        {canEditPeriods && !viewingSnapshotId ? (
+                                          <input
+                                            type="number"
+                                            min={0}
+                                            step="0.01"
+                                            aria-label={`${period.label} target percent`}
+                                            defaultValue={period.targetAccomplishmentPct.toFixed(2)}
+                                            key={`${period.periodIndex}-${period.targetAccomplishmentPct}`}
+                                            disabled={settingsSaving}
+                                            onBlur={(e) => {
+                              const next = Number(e.currentTarget.value);
+                              if (!Number.isFinite(next)) return;
+                              if (Math.abs(next - period.targetAccomplishmentPct) < 0.001) return;
+                              void persistPeriodTarget(period.periodIndex, e.currentTarget.value);
+                            }}
+                                            className="w-20 rounded-md border border-border bg-surface px-2 py-1 text-xs font-semibold text-[#2563eb] outline-none focus:border-primary"
+                                          />
+                                        ) : (
+                                          `${period.targetAccomplishmentPct.toFixed(2)}%`
+                                        )}
+                                      </td>
+                                      <td className="py-2 pr-3">P {formatMoney(period.targetAccomplishmentPhp)}</td>
+                                      <td className="py-2 pr-3 font-semibold text-primary">
+                                        {period.cumulativePct.toFixed(2)}%
+                                      </td>
+                                      <td className="py-2">P {formatMoney(period.cumulativePhp)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                                  <Pagination
+                              page={periodPaging.page}
+                              totalPages={periodPaging.totalPages}
+                              total={periodPaging.total}
+                              from={periodPaging.from}
+                              to={periodPaging.to}
+                              pageSize={periodPaging.pageSize}
+                              onPageChange={periodPaging.setPage}
+                            />
+                          </div>
+                  )}
+                  {comparisons.length > 0 && (
+                          <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+                            <h2 className="text-lg font-semibold text-text">Target plan vs. actual</h2>
+                            <p className="mt-1 text-sm text-text-muted">
+                              At each reporting date, compare what the baseline schedule expected versus what was
+                              actually accomplished.
+                            </p>
+                            <div className="mt-4 overflow-x-auto">
+                              <table className="w-full text-left text-sm">
+                                <thead>
+                                  <tr className="border-b border-border text-xs uppercase text-text-muted">
+                                    <th className="py-2 pr-3">Date</th>
+                                    <th className="py-2 pr-3 text-[#2563eb]">Target Plan %</th>
+                                    <th className="py-2 pr-3">Target Plan (PHP)</th>
+                                    <th className="py-2 pr-3 text-[#f97316]">Actual %</th>
+                                    <th className="py-2 pr-3">Difference</th>
+                                    <th className="py-2">Status</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {comparisonPaging.pageItems.map((row) => (
+                                    <tr key={row.date} className="border-b border-border/50">
+                                      <td className="py-2 pr-3 font-medium">{row.date_label}</td>
+                                      <td className="py-2 pr-3 font-semibold text-[#2563eb]">{row.target_pct}%</td>
+                                      <td className="py-2 pr-3">P {formatMoney(row.target_php)}</td>
+                                      <td className="py-2 pr-3 font-semibold text-[#f97316]">{row.actual_pct}%</td>
+                                      <td className="py-2 pr-3">
+                                        {row.variance_pct > 0 ? '+' : ''}
+                                        {row.variance_pct}%
+                                      </td>
+                                      <td
+                                        className={`py-2 capitalize ${
+                                          row.status === 'behind'
+                                            ? 'text-red-700'
+                                            : row.status === 'ahead'
+                                              ? 'text-emerald-700'
+                                              : 'text-text-muted'
+                                        }`}
+                                      >
+                                        {row.status_label}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                                  <Pagination
+                              page={comparisonPaging.page}
+                              totalPages={comparisonPaging.totalPages}
+                              total={comparisonPaging.total}
+                              from={comparisonPaging.from}
+                              to={comparisonPaging.to}
+                              pageSize={comparisonPaging.pageSize}
+                              onPageChange={comparisonPaging.setPage}
+                            />
+                          </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'cost' && (
+            <div>
+                      <div>
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <h3 className="font-semibold text-text">PDM-based target S-Curve items</h3>
+                          <p className="mt-1 text-sm text-text-muted">
+                            Item No. and Description start from the PDM and can be corrected here. Those edits stay on this S-Curve. Qty and Unit Cost calculate Amount and WT%.
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs uppercase tracking-wide text-text-muted">Total contract amount</p>
+                          <p className="text-lg font-semibold text-text">P {formatMoney(costSummary.totalContractAmount)}</p>
+                          <p className="text-xs text-text-muted">Total WT% {costSummary.totalWeightPct.toFixed(2)}%</p>
+                        </div>
+                      </div>
+
+                      {costMessage && (
+                        <p className={`mt-3 text-xs ${costMessage.includes('Could not') ? 'text-red-600' : 'text-text-muted'}`}>
+                          {costMessage}
+                        </p>
+                      )}
+                      {costSaving && <p className="mt-2 text-xs text-text-muted">Saving S-Curve cost items…</p>}
+                      {viewingSnapshotId && (
+                        <p className="mt-2 text-xs text-amber-700">
+                          Cost items are read-only while viewing an archived snapshot.
+                        </p>
+                      )}
+
+                      <div className="mt-4 overflow-x-auto">
+                        <table className="w-full min-w-[860px] text-left text-sm">
+                          <thead>
+                            <tr className="border-b border-border text-xs uppercase text-text-muted">
+                              <th className="py-2 pr-3">Item No.</th>
+                              <th className="py-2 pr-3">Description</th>
+                              <th className="py-2 pr-3">Qty</th>
+                              <th className="py-2 pr-3">Unit Cost (PHP)</th>
+                              <th className="py-2 pr-3">Amount (PHP)</th>
+                              <th className="py-2">WT%</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {costSummary.items.length === 0 ? (
+                              <tr>
+                                <td colSpan={6} className="py-6 text-center text-text-muted">
+                                  Add activities in the PDM schedule to populate the S-Curve item table.
+                                </td>
+                              </tr>
+                            ) : (
+                              costPaging.pageItems.map((item) => (
+                                <tr key={item.activityId} className="border-b border-border/50">
+                                  <td className="py-2 pr-3 font-medium">
+                                    {canEditCostItems && !viewingSnapshotId ? (
+                                      <input
+                                        type="text"
+                                        value={item.itemNo}
+                                        onChange={(e) =>
+                                          updateCostItem(item.activityId, { itemNo: e.target.value })
+                                        }
+                                        className="w-28 rounded border border-border px-2 py-1"
+                                      />
+                                    ) : (
+                                      item.itemNo || '—'
+                                    )}
+                                  </td>
+                                  <td className="py-2 pr-3">
+                                    {canEditCostItems && !viewingSnapshotId ? (
+                                      <input
+                                        type="text"
+                                        value={item.description}
+                                        onChange={(e) =>
+                                          updateCostItem(item.activityId, { description: e.target.value })
+                                        }
+                                        className="w-full min-w-[12rem] rounded border border-border px-2 py-1"
+                                      />
+                                    ) : (
+                                      item.description || '—'
+                                    )}
+                                  </td>
+                                  <td className="py-2 pr-3">
+                                    {canEditCostItems && !viewingSnapshotId ? (
+                                      <input
+                                        type="number"
+                                        step="0.01"
+                                        min="0"
+                                        value={item.quantity || ''}
+                                        onChange={(e) =>
+                                          updateCostItem(item.activityId, {
+                                            quantity: parseFloat(e.target.value) || 0,
+                                          })
+                                        }
+                                        className="w-28 rounded border border-border px-2 py-1 text-right"
+                                      />
+                                    ) : (
+                                      item.quantity
+                                    )}
+                                  </td>
+                                  <td className="py-2 pr-3">
+                                    {canEditCostItems && !viewingSnapshotId ? (
+                                      <input
+                                        type="number"
+                                        step="0.01"
+                                        min="0"
+                                        value={item.unitCost || ''}
+                                        onChange={(e) =>
+                                          updateCostItem(item.activityId, {
+                                            unitCost: parseFloat(e.target.value) || 0,
+                                          })
+                                        }
+                                        className="w-32 rounded border border-border px-2 py-1 text-right"
+                                      />
+                                    ) : (
+                                      `P ${formatMoney(item.unitCost)}`
+                                    )}
+                                  </td>
+                                  <td className="py-2 pr-3 font-medium">P {formatMoney(item.amount)}</td>
+                                  <td className="py-2">{item.weightPct.toFixed(2)}%</td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                          {costSummary.items.length > 0 && (
+                            <tfoot>
+                              <tr className="bg-surface-muted font-semibold text-text">
+                                <td colSpan={4} className="py-2 pr-3 text-right">
+                                  Total Contract Amount
+                                </td>
+                                <td className="py-2 pr-3">P {formatMoney(costSummary.totalContractAmount)}</td>
+                                <td className="py-2">{costSummary.totalWeightPct.toFixed(2)}%</td>
+                              </tr>
+                            </tfoot>
+                          )}
+                        </table>
+                      </div>
+                            <Pagination
+                        page={costPaging.page}
+                        totalPages={costPaging.totalPages}
+                        total={costPaging.total}
+                        from={costPaging.from}
+                        to={costPaging.to}
+                        pageSize={costPaging.pageSize}
+                        onPageChange={costPaging.setPage}
+                      />
+                    </div>
+            </div>
+          )}
+
+          {activeTab === 'activities' && (
+            <div>
+              {activities.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-border px-6 py-14 text-center">
+                  <p className="font-semibold text-text">No PDM activities on this S-curve</p>
+                  <p className="mt-1 text-sm text-text-muted">
+                    Build the schedule in PDM first, then return here to review planned targets.
+                  </p>
+                </div>
+              ) : (
+                      <div>
+                        <h3 className="font-semibold text-text">PDM activities on this S-curve</h3>
+                        <p className="mt-1 text-sm text-text-muted">
+                          Each row is one PDM activity. Planned % is the cumulative target at the end of the
+                          selected reporting period where that activity is scheduled to finish. PDM start, end,
+                          and duration stay unchanged.
+                        </p>
+                        <div className="mt-4 overflow-x-auto">
+                          <table className="w-full text-left text-sm">
+                            <thead>
+                              <tr className="border-b border-border text-xs uppercase text-text-muted">
+                                <th className="py-2 pr-3">No.</th>
+                                <th className="py-2 pr-3">Activity</th>
+                                <th className="py-2 pr-3">Duration</th>
+                                <th className="py-2 pr-3">ES</th>
+                                <th className="py-2 pr-3">EF</th>
+                                <th className="py-2 pr-3">Finish date</th>
+                                <th className="py-2 pr-3">Cumulative target %</th>
+                                <th className="py-2">Critical</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {activityPaging.pageItems.map((a, index) => (
+                                <tr key={a.id || `${a.number}-${a.name}-${index}`} className="border-b border-border/50">
+                                  <td className="py-2 pr-3 font-medium">{a.number}</td>
+                                  <td className="py-2 pr-3">{a.name}</td>
+                                  <td className="py-2 pr-3">{a.duration}d</td>
+                                  <td className="py-2 pr-3">{a.es}</td>
+                                  <td className="py-2 pr-3">{a.ef}</td>
+                                  <td className="py-2 pr-3">{a.finish_date}</td>
+                                  <td className="py-2 pr-3 font-medium text-primary">{a.planned_pct}%</td>
+                                  <td className="py-2">{a.is_critical ? 'Yes' : '—'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                              <Pagination
+                          page={activityPaging.page}
+                          totalPages={activityPaging.totalPages}
+                          total={activityPaging.total}
+                          from={activityPaging.from}
+                          to={activityPaging.to}
+                          pageSize={activityPaging.pageSize}
+                          onPageChange={activityPaging.setPage}
+                        />
+                      </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'history' && (
+            <div>
+              {versions.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-border px-6 py-14 text-center">
+                  <p className="font-semibold text-text">No snapshots yet</p>
+                  <p className="mt-1 text-sm text-text-muted">
+                    Snapshots are saved when the schedule is revised or when approved progress reports are finalized.
+                  </p>
+                </div>
+              ) : (
+                      <div>
+                        <h3 className="font-semibold text-text">S-Curve version history</h3>
+                        <p className="mt-1 text-sm text-text-muted">
+                          Each SWA or STEWA reporting period keeps one S-Curve. Generating that period again updates
+                          the same version.
+                        </p>
+                        <div className="mt-4 overflow-x-auto">
+                          <table className="w-full text-left text-sm">
+                            <thead>
+                              <tr className="border-b border-border text-xs uppercase text-text-muted">
+                                <th className="py-2 pr-3">Reporting period</th>
+                                <th className="py-2 pr-3">Version</th>
+                                <th className="py-2 pr-3">Status</th>
+                                <th className="py-2 pr-3">Target %</th>
+                                <th className="py-2 pr-3">Actual %</th>
+                                <th className="py-2">Slippage</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {versions.map((v) => (
+                                <tr key={v.id} className="border-b border-border/50">
+                                  <td className="py-2 pr-3">
+                                    {v.as_of_label ||
+                                      v.as_of_date ||
+                                      (v.captured_at ? new Date(v.captured_at).toLocaleString() : '—')}
+                                  </td>
+                                  <td className="py-2 pr-3">{formatSnapshotLabel(v)}</td>
+                                  <td className="py-2 pr-3 capitalize">
+                                    {(v.schedule_status ?? '—').replace(/_/g, ' ')}
+                                  </td>
+                                  <td className="py-2 pr-3">{v.planned_pct != null ? `${v.planned_pct}%` : '—'}</td>
+                                  <td className="py-2 pr-3">{v.actual_pct != null ? `${v.actual_pct}%` : '—'}</td>
+                                  <td className="py-2">
+                                    {v.slippage_pct != null ? `${v.slippage_pct}%` : '—'}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+              )}
+            </div>
+          )}
+        </div>
+      </section>
+
+      </div>
+
+      <PreviewModal
+        title="S-Curve preview"
+        open={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        wide
+        downloading={exporting}
+        onDownload={() => {
+          setExporting(true);
+          try {
+            exportSCurvePdf(sCurvePdfInput());
+          } finally {
+            setExporting(false);
+          }
+        }}
+      >
+        <div id="s-curve-preview-print" className="space-y-4">
+          <div>
+            <p className="text-sm font-semibold text-text">Project {projectId}</p>
+            <p className="text-xs text-text-muted">
+              Target {targetPlanPercent != null ? `${targetPlanPercent}%` : '—'}
+              {' · '}
+              Actual {actualPlanPercent != null ? `${actualPlanPercent}%` : '—'}
+              {scheduleStatus ? ` · ${scheduleStatus.label}` : ''}
+            </p>
+          </div>
+          {curveType !== 'pdm_based' && periods.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-border text-[10px] uppercase text-text-muted">
+                    <th className="py-1 pr-2">Period</th>
+                    <th className="py-1 pr-2">Date range</th>
+                    <th className="py-1 pr-2">Target %</th>
+                    <th className="py-1 pr-2">Cumulative target %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {periods.map((period) => (
+                    <tr key={period.periodIndex} className="border-b border-border/50">
+                      <td className="py-1 pr-2">{period.label}</td>
+                      <td className="py-1 pr-2">
+                        {period.startDate} to {period.endDate}
+                      </td>
+                      <td className="py-1 pr-2">{period.targetAccomplishmentPct.toFixed(2)}%</td>
+                      <td className="py-1 pr-2">{period.cumulativePct.toFixed(2)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div className="h-96 w-full">
+            {chartReady ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart
+                  data={points}
+                  margin={{
+                    top: showPercentLabels ? 28 : 10,
+                    right: showPercentLabels ? 28 : 20,
+                    left: 0,
+                    bottom: showPercentLabels ? 8 : 0,
+                  }}
+                >
+                  <CartesianGrid stroke="#e0dfd8" strokeDasharray="3 3" />
+                  <XAxis dataKey="date" tick={{ fill: '#000000', fontSize: 10 }} angle={-35} textAnchor="end" height={60} />
+                  <YAxis
+                    domain={[0, 100]}
+                    ticks={[0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]}
+                    tick={{ fill: '#000000', fontSize: 11 }}
+                    tickFormatter={(v) => `${v}%`}
+                  />
+                  <Tooltip />
+                  <Legend />
+                  <PlanLine
+                    dataKey="originalPlan"
+                    name={curveType === 'pdm_based' ? 'Original' : hasRevisedSchedule ? 'Original S-Curve' : 'Target Plan'}
+                    stroke="#2563eb"
+                    series="target"
+                    showDot={showPercentLabels}
+                  />
+                  {hasRevisedSchedule && (
+                    <Line type="monotone" dataKey="currentPlan" name={curveType === 'pdm_based' ? 'Target' : 'Revised S-Curve'} stroke="#7c3aed" strokeWidth={2} strokeDasharray="6 4" dot={false} connectNulls />
+                  )}
+                  <PlanLine
+                    dataKey="actual"
+                    name={curveType === 'pdm_based' ? 'Actual' : hasRevisedSchedule ? 'SWA/STEWA S-Curve' : 'Actual Plan'}
+                    stroke="#f97316"
+                    series="actual"
+                    showDot={showPercentLabels}
+                  />
+                  <PercentLabels points={points} show={showPercentLabels} />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <p className="text-sm text-text-muted">Loading chart…</p>
+            )}
+          </div>
+        </div>
+      </PreviewModal>
+    </main>
+  );
+}

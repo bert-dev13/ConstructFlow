@@ -1,0 +1,8 @@
+Excel G34 total=2987425.2641999996
+App totalContract=2987425.2641999996
+delta total=0
+row 12 B.7 | toDate app=7780.5 excel=7780.5 ok=true | thisPeriod app=7780.5 excel=7780.5 ok=true | wt% app=0.2604416616957122 excel=0.26 ok=true | remarks app="On going" excel="On going" ok=true | check 7780.5 / 7780.5
+row 13 B.9 | toDate app=14744.1 excel=14744.1 ok=true | thisPeriod app=14744.1 excel=14744.1 ok=true | wt% app=0.49353870627951296 excel=0.494 ok=true | remarks app="On going" excel="On going" ok=true | check 14744.1 / 14744.1
+row 15 101(3)b1 | toDate app=25754.428750000003 excel=25754.428750000003 ok=true | thisPeriod app=25754.428750000003 excel=25754.428750000003 ok=true | wt% app=0.8620944951704679 excel=0.8619999999999999 ok=true | remarks app="On going" excel="On going" ok=true | check 25754.428750000003 / 25754.428750000003
+row 18 105(1) | toDate app=11841.85575 excel=11841.85575 ok=true | thisPeriod app=11841.85575 excel=11841.85575 ok=true | wt% app=0.39639002494581643 excel=0.396 ok=true | remarks app="On going" excel="On going" ok=true | check 11841.85575 / 11841.85575
+SWA_EXCEL_OK

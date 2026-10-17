@@ -1,0 +1,24 @@
+---
+description: PDM scheduling formulas (forward/backward pass, lag/lead, float)
+globs: "**/{pdm.ts,pdmLayout.ts,PdmPage.tsx,PdmNode.tsx,PdmSchedule.php,scheduleSync.ts,ScheduleEditorPage.tsx}"
+alwaysApply: false
+---
+
+# PDM scheduling rules
+
+Keep `src/lib/pdm.ts` and `api/lib/PdmSchedule.php` in lockstep.
+
+- Project baseline is **Day 0**. First activity (no predecessor): **ES = 0**. **EF = ES + Duration**.
+- Lag defaults to **0**. A **lead is negative lag**.
+- Forward pass: take the **latest** required date from every predecessor.
+  - FS: successor ES ≥ predecessor EF + lag
+  - SS: successor ES ≥ predecessor ES + lag
+  - FF: successor EF ≥ predecessor EF + lag, then ES = EF − Duration
+  - SF: successor EF ≥ predecessor ES + lag, then ES = EF − Duration
+- Backward pass: last activity **LF = project finish**, **LS = LF − Duration**. With several successors, take the **earliest** required date.
+  - FS: predecessor LF = successor LS − lag
+  - SS: predecessor LS = successor LS − lag
+  - FF: predecessor LF = successor LF − lag
+  - SF: predecessor LS = successor LF − lag
+- **Total float** = LS − ES = LF − EF. **Float = 0** is critical.
+- Do not clamp predecessor-driven ES to 0. Do not treat SS like FS on the backward pass.

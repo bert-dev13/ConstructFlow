@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>SWA — {{project_name}}</title>
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 12pt; margin: 40px; color: #222; }
+    h1 { font-size: 16pt; text-align: center; margin-bottom: 4px; }
+    h2 { font-size: 12pt; text-align: center; font-weight: normal; color: #555; }
+    table.meta { width: 100%; border-collapse: collapse; margin: 24px 0; }
+    table.meta td { padding: 6px 8px; border: 1px solid #ccc; }
+    table.meta td:first-child { width: 35%; background: #f5f5f0; font-weight: bold; }
+    .section { margin-top: 20px; }
+    .section h3 { font-size: 11pt; border-bottom: 1px solid #4a6353; padding-bottom: 4px; color: #4a6353; }
+    .qr { margin-top: 32px; text-align: right; font-size: 9pt; color: #666; }
+  </style>
+</head>
+<body>
+  <h1>SUMMARY OF WORK ACCOMPLISHED (SWA)</h1>
+  <h2>Provincial Engineer's Office — Cagayan</h2>
+
+  <table class="meta">
+    <tr><td>Project</td><td>{{project_name}}</td></tr>
+    <tr><td>Contractor</td><td>{{contractor}}</td></tr>
+    <tr><td>Location</td><td>{{location}}</td></tr>
+    <tr><td>Reporting Period</td><td>{{period}}</td></tr>
+    <tr><td>Prepared By</td><td>{{prepared_by}}</td></tr>
+    <tr><td>Date Generated</td><td>{{generated_date}}</td></tr>
+    <tr><td>Cumulative % Complete</td><td>{{percent_complete}}%</td></tr>
+  </table>
+
+  <div class="section">
+    <h3>I. Work Accomplished This Period</h3>
+    <p>{{work_accomplished}}</p>
+  </div>
+
+  <div class="section">
+    <h3>II. Materials / Equipment Used</h3>
+    <p>{{materials_used}}</p>
+  </div>
+
+  <div class="section">
+    <h3>III. Remarks</h3>
+    <p>{{remarks}}</p>
+  </div>
+
+  <div class="qr">
+    <p>System-generated document</p>
+    <p>QR Code: {{qr_code}}</p>
+    <p>Verify at: {{verify_url}}</p>
+  </div>
+</body>
+</html>
